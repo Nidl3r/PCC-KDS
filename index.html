@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PCC KDS</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="topbar">
+    <select id="viewSelect">
+      <option value="guest-count">Guest Count</option>
+      <option value="aloha">Aloha</option>
+      <option value="ohana">Ohana</option>
+      <option value="gateway">Gateway</option>
+      <option value="concession">Concession</option>
+      <option value="main-kitchen">Main Kitchen</option>
+      <option value="stations">Stations</option>
+    </select>
+  </div>
+
+<div class="screen" id="guest-count">
+  <h2>Guest Count</h2>
+  <p>This is working!</p>
+</div>
+
+  </div>
+
+  <div class="screen" id="aloha">
+    <h2>Aloha</h2>
+    <!-- Add-ons, Starting Par, Waste, Returns -->
+  </div>
+
+  <div class="screen" id="ohana">
+    <h2>Ohana</h2>
+    <!-- Add-ons, Starting Par, Waste, Returns -->
+  </div>
+
+  <div class="screen" id="gateway">
+    <h2>Gateway</h2>
+    <!-- Add-ons, Starting Par, Waste, Returns -->
+  </div>
+
+  <div class="screen" id="concession">
+    <h2>Concession</h2>
+    <!-- Add-ons, Starting Par only -->
+  </div>
+
+  <div class="screen" id="main-kitchen">
+    <h2>Main Kitchen</h2>
+    <div id="kitchen-orders"></div>
+    <div id="orders"></div>
+
+
+  </div>
+
+  <div class="screen" id="stations">
+    <h2>Stations</h2>
+    <!-- Wok, Fryer, Grill, Ovens, Pantry, Pastry -->
+  </div>
+
+  <!-- Chat Box -->
+  <div id="chat-box">
+    <div id="chat-messages"></div>
+    <input type="text" id="chat-input" placeholder="Type a message..." />
+    <button id="chat-send">Send</button>
+  </div>
+
+<script type="module" src="firebaseConfig.js"></script>
+<script type="module" src="script.js"></script>
+
+
+</body>
+</html>
