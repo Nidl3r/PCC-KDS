@@ -1,11 +1,11 @@
-// ✅ Import your Firestore (keep this)
+// ✅ Import Firestore
 import { db } from './firebaseConfig.js';
 import {
   collection,
   onSnapshot
 } from "https://www.gstatic.com/firebasejs/11.9.1/firebase-firestore.js";
 
-// ✅ Show screen based on dropdown
+// ✅ Handle screen switching
 document.addEventListener("DOMContentLoaded", () => {
   const viewSelect = document.getElementById("viewSelect");
   const screens = document.querySelectorAll(".screen");
@@ -16,16 +16,21 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  showScreen(viewSelect.value); // show default screen
+  // Initial view
+  showScreen(viewSelect.value);
 
+  // Change screen on dropdown change
   viewSelect.addEventListener("change", () => {
     showScreen(viewSelect.value);
   });
 
-  console.log("✅ KDS App Loaded");
+  console.log("✅ PCC KDS App Loaded");
+
+  // ✅ Start listening for kitchen orders (if orders div exists)
+  listenToOrders();
 });
 
-// 🔁 Optional Firebase logic (will activate later)
+// ✅ Render kitchen orders (optional Firestore integration)
 function renderKitchen(orders) {
   const container = document.getElementById("orders");
   if (!container) return;
@@ -47,24 +52,40 @@ function listenToOrders() {
     renderKitchen(orders);
   });
 }
+import {
+  doc,
+  setDoc,
+  serverTimestamp
+} from "https://www.gstatic.com/firebasejs/11.9.1/firebase-firestore.js";
 
-listenToOrders(); // this is safe even if "orders" screen isn't built yet
-// --- Show screen based on dropdown selection ---
-document.getElementById("viewSelect").addEventListener("change", function () {
-  const selectedId = this.value;
-  const screens = document.querySelectorAll(".screen");
+// 🗓️ Utility: format date to YYYY-MM-DD
+function getTodayDate() {
+  return new Date().toISOString().split('T')[0];
+}
 
-  screens.forEach(screen => {
-    screen.style.display = screen.id === selectedId ? "block" : "none";
+const guestForm = document.getElementById("guest-count-form");
+const statusDiv = document.getElementById("guest-count-status");
+
+if (guestForm) {
+  guestForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const data = Object.fromEntries(new FormData(guestForm).entries());
+    const today = getTodayDate();
+
+    try {
+      await setDoc(doc(db, "guestCounts", today), {
+        ...Object.fromEntries(
+          Object.entries(data).map(([k, v]) => [k, parseInt(v)])
+        ),
+        timestamp: serverTimestamp()
+      });
+
+      statusDiv.textContent = "✅ Guest count saved!";
+      statusDiv.style.color = "lightgreen";
+    } catch (err) {
+      console.error("Error saving guest count", err);
+      statusDiv.textContent = "❌ Error saving guest count";
+      statusDiv.style.color = "red";
+    }
   });
-});
-
-// --- Show default screen on load ---
-window.addEventListener("DOMContentLoaded", () => {
-  const defaultView = document.getElementById("viewSelect").value;
-  document.querySelectorAll(".screen").forEach(screen => {
-    screen.style.display = screen.id === defaultView ? "block" : "none";
-  });
-
-  console.log("✅ PCC KDS App Loaded");
-});
+}
