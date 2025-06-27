@@ -89,3 +89,27 @@ if (guestForm) {
     }
   });
 }
+import {
+  setDoc,
+  doc
+} from "https://www.gstatic.com/firebasejs/11.9.1/firebase-firestore.js";
+
+// 🔄 Save guest counts to Firestore
+document.getElementById("guest-count-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+
+  const counts = {
+    Aloha: parseInt(document.getElementById("count-Aloha").value),
+    Ohana: parseInt(document.getElementById("count-Ohana").value),
+    Gateway: parseInt(document.getElementById("count-Gateway").value),
+    timestamp: new Date().toISOString()
+  };
+
+  try {
+    await setDoc(doc(db, "guestCounts", new Date().toISOString().split("T")[0]), counts);
+    document.getElementById("guest-count-status").textContent = "✅ Guest counts saved!";
+  } catch (error) {
+    console.error("❌ Error saving guest counts:", error);
+    document.getElementById("guest-count-status").textContent = "⚠️ Failed to save counts.";
+  }
+});
