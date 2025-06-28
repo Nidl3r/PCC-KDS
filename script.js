@@ -150,24 +150,22 @@ async function applyCategoryFilter(area) {
     snapshot.forEach(doc => {
       const recipe = doc.data();
       const recipeNo = recipe.recipeNo || "(no recipeNo)";
+      const recipeCategory = recipe.category || "(no category)";
       const station = recipe.station || "(no station)";
 
-      console.log(`🔍 Checking: ${recipeNo} | station: ${station}`);
-if (!category || recipe.station?.toLowerCase() === category.toLowerCase())
-
-      // Only include recipes that have Aloha field (venue-specific filter)
-      if (!recipe.Aloha) {
-        console.log(`❌ Skipped ${recipeNo} - missing Aloha field`);
+      // ✅ Check for Aloha data inside recipe.pars
+      if (!recipe.pars || !recipe.pars.Aloha) {
+        console.log(`❌ Skipped ${recipeNo} - no pars.Aloha`);
         return;
       }
 
-      // Category filter based on station
+      // ✅ Category match (by station)
       if (category && station.toLowerCase() !== category.toLowerCase()) {
         console.log(`❌ Skipped ${recipeNo} - station mismatch (${station} !== ${category})`);
         return;
       }
 
-      // ✅ Add recipe to dropdown
+      // ✅ Add matching recipe
       console.log(`✅ Included: ${recipeNo}`);
       const option = document.createElement("option");
       option.value = recipe.recipeNo;
