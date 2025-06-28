@@ -74,11 +74,45 @@
 
 
   </div>
+<div class="screen" id="aloha">
+  <h2>Aloha</h2>
 
-  <div class="screen" id="aloha">
-    <h2>Aloha</h2>
-    <!-- Add-ons, Starting Par, Waste, Returns -->
-  </div>
+  <!-- Add-ons -->
+  <h3>Add-ons</h3>
+  <form id="aloha-addons-form">
+    <input type="text" id="aloha-addon-item" placeholder="Item" required />
+    <input type="number" id="aloha-addon-quantity" placeholder="Quantity" required />
+    <input type="text" id="aloha-addon-station" placeholder="Station" required />
+    <button type="submit">Send Add-on</button>
+  </form>
+
+  <!-- Starting Par -->
+  <h3>Starting Par</h3>
+  <form id="aloha-par-form">
+    <input type="text" id="aloha-par-item" placeholder="Item" required />
+    <input type="number" id="aloha-par-quantity" placeholder="Quantity" required />
+    <input type="text" id="aloha-par-unit" placeholder="Unit" required />
+    <button type="submit">Save Starting Par</button>
+  </form>
+
+  <!-- Waste -->
+  <h3>Waste</h3>
+  <form id="aloha-waste-form">
+    <input type="text" id="aloha-waste-item" placeholder="Item" required />
+    <input type="number" id="aloha-waste-quantity" placeholder="Quantity" required />
+    <input type="text" id="aloha-waste-reason" placeholder="Reason" required />
+    <button type="submit">Record Waste</button>
+  </form>
+
+  <!-- Returns -->
+  <h3>Returns</h3>
+  <form id="aloha-return-form">
+    <input type="text" id="aloha-return-item" placeholder="Item" required />
+    <input type="number" id="aloha-return-quantity" placeholder="Quantity" required />
+    <button type="submit">Return Item</button>
+  </form>
+</div>
+
 
   <div class="screen" id="ohana">
     <h2>Ohana</h2>

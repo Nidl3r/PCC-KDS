@@ -101,3 +101,99 @@ async function loadGuestCounts() {
     if (data.Gateway) document.getElementById("count-Gateway").value = data.Gateway;
   }
 }
+// In your script.js file
+
+import { db } from './firebaseConfig.js';
+import { collection, addDoc, query, where, getDocs, Timestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
+
+const placeholderUser = "testUser";
+
+// Utility to get current area name from visible screen
+function getCurrentArea() {
+  const select = document.getElementById("viewSelect");
+  return select.value.charAt(0).toUpperCase() + select.value.slice(1); // e.g., "aloha" -> "Aloha"
+}
+
+// === ALOHA: Add-ons ===
+const addonsForm = document.getElementById("aloha-addons-form");
+addonsForm?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const item = document.getElementById("aloha-addon-item").value;
+  const quantity = Number(document.getElementById("aloha-addon-quantity").value);
+  const station = document.getElementById("aloha-addon-station").value;
+
+  await addDoc(collection(db, "orders"), {
+    area: "Aloha",
+    item,
+    quantity,
+    station,
+    status: "sent",
+    timestamp: Timestamp.now(),
+    sentBy: placeholderUser
+  });
+
+  alert("Add-on sent to kitchen!");
+  addonsForm.reset();
+});
+
+// === ALOHA: Starting Pars ===
+const parForm = document.getElementById("aloha-par-form");
+parForm?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const item = document.getElementById("aloha-par-item").value;
+  const quantity = Number(document.getElementById("aloha-par-quantity").value);
+  const unit = document.getElementById("aloha-par-unit").value;
+
+  await addDoc(collection(db, "startingPars"), {
+    area: "Aloha",
+    item,
+    quantity,
+    unit,
+    timestamp: Timestamp.now(),
+    recordedBy: placeholderUser
+  });
+
+  alert("Starting par saved!");
+  parForm.reset();
+});
+
+// === ALOHA: Waste ===
+const wasteForm = document.getElementById("aloha-waste-form");
+wasteForm?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const item = document.getElementById("aloha-waste-item").value;
+  const quantity = Number(document.getElementById("aloha-waste-quantity").value);
+  const reason = document.getElementById("aloha-waste-reason").value;
+
+  await addDoc(collection(db, "waste"), {
+    area: "Aloha",
+    item,
+    quantity,
+    reason,
+    timestamp: Timestamp.now(),
+    recordedBy: placeholderUser
+  });
+
+  alert("Waste recorded.");
+  wasteForm.reset();
+});
+
+// === ALOHA: Returns ===
+const returnForm = document.getElementById("aloha-return-form");
+returnForm?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const item = document.getElementById("aloha-return-item").value;
+  const quantity = Number(document.getElementById("aloha-return-quantity").value);
+
+  await addDoc(collection(db, "returns"), {
+    area: "Aloha",
+    item,
+    quantity,
+    status: "pending",
+    timestamp: Timestamp.now(),
+    returnedBy: placeholderUser
+  });
+
+  alert("Return submitted.");
+  returnForm.reset();
+});
