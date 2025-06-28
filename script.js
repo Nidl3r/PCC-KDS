@@ -153,6 +153,7 @@ async function applyCategoryFilter(area) {
       const station = recipe.station || "(no station)";
 
       console.log(`🔍 Checking: ${recipeNo} | station: ${station}`);
+if (!category || recipe.station?.toLowerCase() === category.toLowerCase())
 
       // Only include recipes that have Aloha field (venue-specific filter)
       if (!recipe.Aloha) {
