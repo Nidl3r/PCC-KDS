@@ -148,3 +148,4 @@ async function applyCategoryFilter(area) {
     itemSelect.innerHTML += `<option value="${item.recipeNo}">${item.description}</option>`;
   });
 }
+window.applyCategoryFilter = applyCategoryFilter;
