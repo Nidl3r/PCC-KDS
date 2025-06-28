@@ -116,7 +116,9 @@ const placeholderUser = "testUser";
 
 // 🌐 New tab switcher for area pages like Aloha
 window.showAreaSection = function(area, sectionId) {
+  area = area.toLowerCase(); // ensure consistency
   const allSections = document.querySelectorAll(`.${area}-section`);
+
   allSections.forEach(sec => {
     sec.style.display = sec.dataset.sec === sectionId ? "block" : "none";
   });
