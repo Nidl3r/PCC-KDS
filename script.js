@@ -141,28 +141,40 @@ async function applyCategoryFilter(area) {
   const select = document.getElementById(`${area.toLowerCase()}Item`);
   select.innerHTML = "<option value=''>-- Select Item --</option>";
 
-  const recipesRef = collection(db, "recipes");
-  const snapshot = await getDocs(recipesRef);
+  try {
+    const snapshot = await getDocs(collection(db, "recipes"));
+    console.log(`📦 Loaded ${snapshot.size} recipes`);
 
-  snapshot.forEach(doc => {
-    const recipe = doc.data();
+    snapshot.forEach(doc => {
+      const recipe = doc.data();
 
-    // ✅ Only show recipes that have the "Aloha" field
-    if (!recipe.Aloha || typeof recipe.Aloha !== "object") return;
+      // Check if it has Aloha map (to confirm it's for b001)
+      if (!recipe.Aloha) {
+        console.log(`⛔ Skipping ${doc.id}: No Aloha data`);
+        return;
+      }
 
-    // ✅ Only show recipes matching the selected category (if one is chosen)
-    if (category && recipe.category?.toLowerCase() !== category.toLowerCase()) return;
+      // If a category is selected, filter it
+      if (category && recipe.category?.toLowerCase() !== category.toLowerCase()) {
+        console.log(`⛔ Skipping ${doc.id}: category mismatch (${recipe.category})`);
+        return;
+      }
 
-    // ✅ Add to dropdown
-    const option = document.createElement("option");
-    option.value = recipe.recipeNo;
-    option.textContent = `${recipe.recipeNo} - ${recipe.description}`;
-    select.appendChild(option);
-  });
+      // Passed filters — add to dropdown
+      const option = document.createElement("option");
+      option.value = recipe.recipeNo;
+      option.textContent = `${recipe.recipeNo} - ${recipe.description}`;
+      select.appendChild(option);
+      console.log(`✅ Added: ${recipe.recipeNo} - ${recipe.description}`);
+    });
 
-  if (select.children.length === 1) {
-    console.warn("⚠️ No matching recipes found for Aloha and selected category.");
+    if (select.children.length === 1) {
+      console.warn("⚠️ No recipes matched the filters.");
+    }
+  } catch (err) {
+    console.error("❌ Failed to load recipes:", err);
   }
 }
+
 
 window.applyCategoryFilter = applyCategoryFilter;
