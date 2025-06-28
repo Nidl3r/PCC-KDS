@@ -143,22 +143,26 @@ async function applyCategoryFilter(area) {
 
   const recipesRef = collection(db, "recipes");
   const snapshot = await getDocs(recipesRef);
-  console.log(`📦 Loaded ${snapshot.size} recipes`);
 
   snapshot.forEach(doc => {
     const recipe = doc.data();
 
-    // Must have the Aloha field (venue b001)
-    if (!recipe.Aloha) return;
+    // ✅ Only show recipes that have the "Aloha" field
+    if (!recipe.Aloha || typeof recipe.Aloha !== "object") return;
 
-    // If a category is selected, check the station
-    if (category && recipe.station?.toLowerCase() !== category.toLowerCase()) return;
+    // ✅ Only show recipes matching the selected category (if one is chosen)
+    if (category && recipe.category?.toLowerCase() !== category.toLowerCase()) return;
 
+    // ✅ Add to dropdown
     const option = document.createElement("option");
     option.value = recipe.recipeNo;
     option.textContent = `${recipe.recipeNo} - ${recipe.description}`;
     select.appendChild(option);
   });
+
+  if (select.children.length === 1) {
+    console.warn("⚠️ No matching recipes found for Aloha and selected category.");
+  }
 }
 
 window.applyCategoryFilter = applyCategoryFilter;
