@@ -92,12 +92,13 @@
     <div class="order-controls">
       <label>
         Section:
-        <select id="alohaCategory">
-          <option value="">All</option>
-          <option value="Hotfoods">Hotfoods</option>
-          <option value="Pantry">Pantry</option>
-          <option value="Bakery">Bakery</option>
-        </select>
+        <select id="alohaCategory" onchange="applyCategoryFilter('aloha')">
+  <option value="">All</option>
+  <option value="PANTRY">PANTRY</option>
+  <option value="HOTFOODS">HOTFOODS</option>
+  <option value="BAKERY">BAKERY</option>
+</select>
+
       </label>
 
       <select id="alohaItem">

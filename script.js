@@ -37,6 +37,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // ✅ Start listening for kitchen orders (if orders div exists)
   listenToOrders();
   loadGuestCounts();
+  applyCategoryFilter("aloha");
 });
 
 // ✅ Render kitchen orders (optional Firestore integration)
@@ -52,7 +53,6 @@ function renderKitchen(orders) {
     container.appendChild(div);
   });
 }
-applyCategoryFilter("aloha");
 
 
 function listenToOrders() {
@@ -150,24 +150,17 @@ async function applyCategoryFilter(area) {
     snapshot.forEach(doc => {
       const recipe = doc.data();
 
-      // Check if it has Aloha map (to confirm it's for b001)
-      if (!recipe.Aloha) {
-        console.log(`⛔ Skipping ${doc.id}: No Aloha data`);
-        return;
-      }
+      // Filter: only include recipes with Aloha key (b001)
+      if (!recipe.Aloha) return;
 
-      // If a category is selected, filter it
-      if (category && recipe.category?.toLowerCase() !== category.toLowerCase()) {
-        console.log(`⛔ Skipping ${doc.id}: category mismatch (${recipe.category})`);
-        return;
-      }
+      // Filter by category if selected
+      if (category && recipe.category !== category) return;
 
-      // Passed filters — add to dropdown
+      // Add to dropdown
       const option = document.createElement("option");
       option.value = recipe.recipeNo;
       option.textContent = `${recipe.recipeNo} - ${recipe.description}`;
       select.appendChild(option);
-      console.log(`✅ Added: ${recipe.recipeNo} - ${recipe.description}`);
     });
 
     if (select.children.length === 1) {
@@ -178,5 +171,5 @@ async function applyCategoryFilter(area) {
   }
 }
 
-
 window.applyCategoryFilter = applyCategoryFilter;
+
