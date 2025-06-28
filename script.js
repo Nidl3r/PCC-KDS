@@ -161,10 +161,11 @@ async function applyCategoryFilter(area) {
       }
 
       // Category filter (case-insensitive match)
-      if (category && recipeCategory.toLowerCase() !== category.toLowerCase()) {
-        console.log(`❌ Skipped ${recipeNo} - category mismatch (${recipeCategory} !== ${category})`);
-        return;
-      }
+     if (category && recipe.category?.toLowerCase() !== category.toLowerCase()) {
+  console.log(`❌ Skipped ${recipeNo} - category mismatch (${recipe.category} !== ${category})`);
+  return;
+}
+
 
       // ✅ Add matching recipe to dropdown
       console.log(`✅ Included: ${recipeNo}`);
