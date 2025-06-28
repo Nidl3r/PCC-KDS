@@ -74,32 +74,20 @@
 
 
   </div>
-<div class="screen" id="aloha">
-  <h2>Aloha</h2>
-
-  <!-- Section buttons -->
-  <div class="button-group">
-    <button onclick="showAlohaSection('addons')">Add-ons</button>
-    <button onclick="showAlohaSection('par')">Starting Par</button>
-    <button onclick="showAlohaSection('waste')">Waste</button>
-    <button onclick="showAlohaSection('returns')">Returns</button>
-  </div>
-
-  <!-- Forms (only one visible at a time) -->
- <!-- Aloha Screen -->
-<div id="Aloha" class="screen">
+<!-- Aloha Screen -->
+<div class="screen" id="Aloha">
   <div class="header-container">
     <h2>Aloha Orders</h2>
     <div class="area-tabs">
-      <button data-sec="order" onclick="showAreaSection('Aloha','order')">Add-Ons</button>
-      <button data-sec="starting" onclick="showAreaSection('Aloha','starting')">Starting Par</button>
-      <button data-sec="waste" onclick="showAreaSection('Aloha','waste')">Waste</button>
-      <button data-sec="returns" onclick="showAreaSection('Aloha','returns')">Returns</button>
+      <button onclick="showAreaSection('Aloha','order')">Add-Ons</button>
+      <button onclick="showAreaSection('Aloha','starting')">Starting Par</button>
+      <button onclick="showAreaSection('Aloha','waste')">Waste</button>
+      <button onclick="showAreaSection('Aloha','returns')">Returns</button>
     </div>
   </div>
 
   <!-- ➊ Add-Ons -->
-  <div class="order-section Aloha-section" data-sec="order">
+  <div class="Aloha-section" data-sec="order">
     <div class="order-controls">
       <label>
         Section:
@@ -136,7 +124,7 @@
   </div>
 
   <!-- ➋ Starting Par -->
-  <div class="starting-section Aloha-section" data-sec="starting" style="display:none">
+  <div class="Aloha-section" data-sec="starting" style="display:none">
     <h3>Starting Par</h3>
     <div class="order-controls">
       <label>
@@ -163,7 +151,7 @@
   </div>
 
   <!-- ➌ Waste -->
-  <div class="waste-section Aloha-section" data-sec="waste" style="display:none">
+  <div class="Aloha-section" data-sec="waste" style="display:none">
     <h3>Aloha Waste</h3>
     <table class="waste-table">
       <thead>
@@ -180,7 +168,7 @@
   </div>
 
   <!-- ➍ Returns -->
-  <div class="returns-section Aloha-section" data-sec="returns" style="display:none">
+  <div class="Aloha-section" data-sec="returns" style="display:none">
     <h3>Returns</h3>
     <table id="alohaReturnsTable">
       <thead>
@@ -195,6 +183,7 @@
     </table>
   </div>
 </div>
+
 
 
 
