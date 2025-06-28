@@ -197,3 +197,10 @@ returnForm?.addEventListener("submit", async (e) => {
   alert("Return submitted.");
   returnForm.reset();
 });
+// Tab switcher for Aloha screen
+window.showAlohaSection = function(sectionId) {
+  const sections = ["addons", "par", "waste", "returns"];
+  sections.forEach(id => {
+    document.getElementById(`aloha-${id}`).style.display = (id === sectionId) ? "block" : "none";
+  });
+};
