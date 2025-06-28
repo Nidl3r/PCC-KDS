@@ -86,45 +86,116 @@
   </div>
 
   <!-- Forms (only one visible at a time) -->
-  <div id="aloha-addons" class="aloha-section">
-    <h3>Add-ons</h3>
-    <form id="aloha-addons-form">
-      <input type="text" id="aloha-addon-item" placeholder="Item" required />
-      <input type="number" id="aloha-addon-quantity" placeholder="Quantity" required />
-      <input type="text" id="aloha-addon-station" placeholder="Station" required />
-      <button type="submit">Send Add-on</button>
-    </form>
+ <!-- Aloha Screen -->
+<div id="Aloha" class="screen">
+  <div class="header-container">
+    <h2>Aloha Orders</h2>
+    <div class="area-tabs">
+      <button data-sec="order" onclick="showAreaSection('Aloha','order')">Add-Ons</button>
+      <button data-sec="starting" onclick="showAreaSection('Aloha','starting')">Starting Par</button>
+      <button data-sec="waste" onclick="showAreaSection('Aloha','waste')">Waste</button>
+      <button data-sec="returns" onclick="showAreaSection('Aloha','returns')">Returns</button>
+    </div>
   </div>
 
-  <div id="aloha-par" class="aloha-section" style="display: none;">
+  <!-- ➊ Add-Ons -->
+  <div class="order-section Aloha-section" data-sec="order">
+    <div class="order-controls">
+      <label>
+        Section:
+        <select id="alohaCategory" onchange="applyCategoryFilter('Aloha')">
+          <option value="">All</option>
+          <option value="Hotfoods">Hotfoods</option>
+          <option value="Pantry">Pantry</option>
+          <option value="Bakery">Bakery</option>
+        </select>
+      </label>
+
+      <select id="alohaItem">
+        <option value="">-- Select Item --</option>
+      </select>
+
+      <input id="alohaQty" type="number" min="1" value="1" />
+      <button onclick="sendAlohaOrder(this)">Send</button>
+    </div>
+
+    <h3>Open Orders</h3>
+    <table id="alohaTable">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Item</th>
+          <th>Qty</th>
+          <th>Due</th>
+          <th>Status</th>
+          <th>Receive</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <!-- ➋ Starting Par -->
+  <div class="starting-section Aloha-section" data-sec="starting" style="display:none">
     <h3>Starting Par</h3>
-    <form id="aloha-par-form">
-      <input type="text" id="aloha-par-item" placeholder="Item" required />
-      <input type="number" id="aloha-par-quantity" placeholder="Quantity" required />
-      <input type="text" id="aloha-par-unit" placeholder="Unit" required />
-      <button type="submit">Save Starting Par</button>
-    </form>
+    <div class="order-controls">
+      <label>
+        Section:
+        <select id="aloha-starting-category" onchange="renderStartingStatus('Aloha', startingCache['Aloha'])">
+          <option value="">All</option>
+          <option>Hotfoods</option>
+          <option>Bakery</option>
+          <option>Pantry</option>
+        </select>
+      </label>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Item</th>
+          <th>Par Qty</th>
+          <th>Sent Qty</th>
+          <th>Receive</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
   </div>
 
-  <div id="aloha-waste" class="aloha-section" style="display: none;">
-    <h3>Waste</h3>
-    <form id="aloha-waste-form">
-      <input type="text" id="aloha-waste-item" placeholder="Item" required />
-      <input type="number" id="aloha-waste-quantity" placeholder="Quantity" required />
-      <input type="text" id="aloha-waste-reason" placeholder="Reason" required />
-      <button type="submit">Record Waste</button>
-    </form>
+  <!-- ➌ Waste -->
+  <div class="waste-section Aloha-section" data-sec="waste" style="display:none">
+    <h3>Aloha Waste</h3>
+    <table class="waste-table">
+      <thead>
+        <tr>
+          <th>Item</th>
+          <th>UOM</th>
+          <th>Qty</th>
+          <th>Add</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
   </div>
 
-  <div id="aloha-returns" class="aloha-section" style="display: none;">
+  <!-- ➍ Returns -->
+  <div class="returns-section Aloha-section" data-sec="returns" style="display:none">
     <h3>Returns</h3>
-    <form id="aloha-return-form">
-      <input type="text" id="aloha-return-item" placeholder="Item" required />
-      <input type="number" id="aloha-return-quantity" placeholder="Quantity" required />
-      <button type="submit">Return Item</button>
-    </form>
+    <table id="alohaReturnsTable">
+      <thead>
+        <tr>
+          <th>Item</th>
+          <th>Current</th>
+          <th>Add</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
   </div>
 </div>
+
 
 
 
