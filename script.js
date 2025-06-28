@@ -122,31 +122,41 @@ window.showAreaSection = function(area, sectionId) {
   allSections.forEach(sec => {
     sec.style.display = sec.dataset.sec === sectionId ? "block" : "none";
   });
+
+  // Re-apply item filtering when a tab is opened (optional)
+  if (sectionId === "order") {
+    applyCategoryFilter(area);
+  }
 };
+
 const alohaCategorySelect = document.getElementById("alohaCategory");
 const alohaItemSelect = document.getElementById("alohaItem");
 
 alohaCategorySelect?.addEventListener("change", () => {
   applyCategoryFilter("aloha");
 });
+
 async function applyCategoryFilter(area) {
   const category = document.getElementById(`${area.toLowerCase()}Category`).value;
   const select = document.getElementById(`${area.toLowerCase()}Item`);
   select.innerHTML = "<option value=''>-- Select Item --</option>";
 
   const recipesRef = collection(db, "recipes");
-  const q = query(
-    recipesRef,
-    where("venueCode", "==", "b001"),
-    ...(category ? [where("itemCategoryCode", "==", category)] : [])
-  );
+  const snapshot = await getDocs(recipesRef);
+  console.log(`📦 Loaded ${snapshot.size} recipes`);
 
-  const snapshot = await getDocs(q);
   snapshot.forEach(doc => {
     const recipe = doc.data();
+
+    // Must have the Aloha field (venue b001)
+    if (!recipe.Aloha) return;
+
+    // If a category is selected, check the station
+    if (category && recipe.station?.toLowerCase() !== category.toLowerCase()) return;
+
     const option = document.createElement("option");
     option.value = recipe.recipeNo;
-    option.textContent = recipe.recipeDescription;
+    option.textContent = `${recipe.recipeNo} - ${recipe.description}`;
     select.appendChild(option);
   });
 }
