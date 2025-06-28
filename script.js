@@ -13,7 +13,6 @@ import {
   Timestamp
 } from './firebaseConfig.js';
 
-
 // ✅ Handle screen switching
 document.addEventListener("DOMContentLoaded", () => {
   const viewSelect = document.getElementById("viewSelect");
@@ -84,7 +83,13 @@ if (guestForm) {
     };
 
     try {
-      await setDoc(doc(db, "guestCounts", getTodayDate()), counts);
+      const ref = doc(db, "guestCounts", getTodayDate());
+      const existingDoc = await getDoc(ref);
+      if (existingDoc.exists()) {
+        await setDoc(ref, { ...existingDoc.data(), ...counts }, { merge: true });
+      } else {
+        await setDoc(ref, counts);
+      }
       statusDiv.textContent = "✅ Guest counts saved!";
       statusDiv.style.color = "lightgreen";
     } catch (error) {
@@ -109,100 +114,10 @@ async function loadGuestCounts() {
 
 const placeholderUser = "testUser";
 
-// Utility to get current area name from visible screen
-function getCurrentArea() {
-  const select = document.getElementById("viewSelect");
-  return select.value.charAt(0).toUpperCase() + select.value.slice(1); // e.g., "aloha" -> "Aloha"
-}
-
-// === ALOHA: Add-ons ===
-const addonsForm = document.getElementById("aloha-addons-form");
-addonsForm?.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const item = document.getElementById("aloha-addon-item").value;
-  const quantity = Number(document.getElementById("aloha-addon-quantity").value);
-  const station = document.getElementById("aloha-addon-station").value;
-
-  await addDoc(collection(db, "orders"), {
-    area: "Aloha",
-    item,
-    quantity,
-    station,
-    status: "sent",
-    timestamp: Timestamp.now(),
-    sentBy: placeholderUser
-  });
-
-  alert("Add-on sent to kitchen!");
-  addonsForm.reset();
-});
-
-// === ALOHA: Starting Pars ===
-const parForm = document.getElementById("aloha-par-form");
-parForm?.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const item = document.getElementById("aloha-par-item").value;
-  const quantity = Number(document.getElementById("aloha-par-quantity").value);
-  const unit = document.getElementById("aloha-par-unit").value;
-
-  await addDoc(collection(db, "startingPars"), {
-    area: "Aloha",
-    item,
-    quantity,
-    unit,
-    timestamp: Timestamp.now(),
-    recordedBy: placeholderUser
-  });
-
-  alert("Starting par saved!");
-  parForm.reset();
-});
-
-// === ALOHA: Waste ===
-const wasteForm = document.getElementById("aloha-waste-form");
-wasteForm?.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const item = document.getElementById("aloha-waste-item").value;
-  const quantity = Number(document.getElementById("aloha-waste-quantity").value);
-  const reason = document.getElementById("aloha-waste-reason").value;
-
-  await addDoc(collection(db, "waste"), {
-    area: "Aloha",
-    item,
-    quantity,
-    reason,
-    timestamp: Timestamp.now(),
-    recordedBy: placeholderUser
-  });
-
-  alert("Waste recorded.");
-  wasteForm.reset();
-});
-
-// === ALOHA: Returns ===
-const returnForm = document.getElementById("aloha-return-form");
-returnForm?.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const item = document.getElementById("aloha-return-item").value;
-  const quantity = Number(document.getElementById("aloha-return-quantity").value);
-
-  await addDoc(collection(db, "returns"), {
-    area: "Aloha",
-    item,
-    quantity,
-    status: "pending",
-    timestamp: Timestamp.now(),
-    returnedBy: placeholderUser
-  });
-
-  alert("Return submitted.");
-  returnForm.reset();
-});
-
-// Tab switcher for Aloha screen
-window.showAlohaSection = function(sectionId) {
-  const sections = ["addons", "par", "waste", "returns"];
-  sections.forEach(id => {
-    document.getElementById(`aloha-${id}`).style.display = (id === sectionId) ? "block" : "none";
+// 🌐 New tab switcher for area pages like Aloha
+window.showAreaSection = function(area, sectionId) {
+  const allSections = document.querySelectorAll(`.${area}-section`);
+  allSections.forEach(sec => {
+    sec.style.display = sec.dataset.sec === sectionId ? "block" : "none";
   });
 };
