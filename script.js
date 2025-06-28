@@ -148,30 +148,38 @@ async function applyCategoryFilter(area) {
     console.log(`📦 Loaded ${snapshot.size} recipes`);
 
     snapshot.forEach(doc => {
-      const recipe = doc.data();
-      const recipeNo = recipe.recipeNo || "(no recipeNo)";
-      const recipeCategory = recipe.category || "(no category)";
-      const station = recipe.station || "(no station)";
+  const recipe = doc.data();
+  const recipeNo = recipe.recipeNo || "(no recipeNo)";
+  const recipeCategory = recipe.category || "(no category)";
+  const station = recipe.station || "(no station)";
 
-      // ✅ Check for Aloha data inside recipe.pars
-      if (!recipe.pars || !recipe.pars.Aloha) {
-        console.log(`❌ Skipped ${recipeNo} - no pars.Aloha`);
-        return;
-      }
+  console.log(`🔍 Recipe: ${recipeNo}`, recipe);  // 👈 show full structure for debug
 
-      // ✅ Category match (by station)
-      if (category && station.toLowerCase() !== category.toLowerCase()) {
-        console.log(`❌ Skipped ${recipeNo} - station mismatch (${station} !== ${category})`);
-        return;
-      }
+  // Check if pars exists
+  if (!recipe.pars) {
+    console.log(`❌ Skipped ${recipeNo} - no 'pars' field at all`);
+    return;
+  }
 
-      // ✅ Add matching recipe
-      console.log(`✅ Included: ${recipeNo}`);
-      const option = document.createElement("option");
-      option.value = recipe.recipeNo;
-      option.textContent = `${recipe.recipeNo} - ${recipe.description}`;
-      select.appendChild(option);
-    });
+  // Check if pars.Aloha exists
+  if (!recipe.pars.Aloha) {
+    console.log(`❌ Skipped ${recipeNo} - no 'pars.Aloha' field`);
+    return;
+  }
+
+  // Category filter
+  if (category && station.toLowerCase() !== category.toLowerCase()) {
+    console.log(`❌ Skipped ${recipeNo} - station mismatch (${station} !== ${category})`);
+    return;
+  }
+
+  console.log(`✅ Included: ${recipeNo}`);
+  const option = document.createElement("option");
+  option.value = recipe.recipeNo;
+  option.textContent = `${recipe.recipeNo} - ${recipe.description}`;
+  select.appendChild(option);
+});
+
 
     if (select.children.length === 1) {
       console.warn("⚠️ No recipes matched the filters.");
