@@ -123,3 +123,28 @@ window.showAreaSection = function(area, sectionId) {
     sec.style.display = sec.dataset.sec === sectionId ? "block" : "none";
   });
 };
+const alohaCategorySelect = document.getElementById("alohaCategory");
+const alohaItemSelect = document.getElementById("alohaItem");
+
+alohaCategorySelect?.addEventListener("change", () => {
+  applyCategoryFilter("aloha");
+});
+async function applyCategoryFilter(area) {
+  const venueCode = "b001"; // Aloha
+  const section = document.getElementById(`${area}Category`).value;
+
+  const recipesRef = collection(db, "recipes");
+  let q = query(recipesRef, where("venue", "==", venueCode));
+  if (section) {
+    q = query(recipesRef, where("venue", "==", venueCode), where("section", "==", section));
+  }
+
+  const snapshot = await getDocs(q);
+  const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+  const itemSelect = document.getElementById(`${area}Item`);
+  itemSelect.innerHTML = `<option value="">-- Select Item --</option>`;
+  items.forEach(item => {
+    itemSelect.innerHTML += `<option value="${item.recipeNo}">${item.description}</option>`;
+  });
+}
