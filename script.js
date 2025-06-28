@@ -150,24 +150,23 @@ async function applyCategoryFilter(area) {
     snapshot.forEach(doc => {
       const recipe = doc.data();
       const recipeNo = recipe.recipeNo || "(no recipeNo)";
-      const recipeCategory = recipe.category || "(no category)";
+      const station = recipe.station || "(no station)";
 
-      console.log(`🔍 Checking: ${recipeNo} | category: ${recipeCategory}`);
+      console.log(`🔍 Checking: ${recipeNo} | station: ${station}`);
 
-      // Check for Aloha (venue-specific) presence
+      // Only include recipes that have Aloha field (venue-specific filter)
       if (!recipe.Aloha) {
         console.log(`❌ Skipped ${recipeNo} - missing Aloha field`);
         return;
       }
 
-      // Category filter (case-insensitive match)
-     if (category && recipe.category?.toLowerCase() !== category.toLowerCase()) {
-  console.log(`❌ Skipped ${recipeNo} - category mismatch (${recipe.category} !== ${category})`);
-  return;
-}
+      // Category filter based on station
+      if (category && station.toLowerCase() !== category.toLowerCase()) {
+        console.log(`❌ Skipped ${recipeNo} - station mismatch (${station} !== ${category})`);
+        return;
+      }
 
-
-      // ✅ Add matching recipe to dropdown
+      // ✅ Add recipe to dropdown
       console.log(`✅ Included: ${recipeNo}`);
       const option = document.createElement("option");
       option.value = recipe.recipeNo;
@@ -182,6 +181,7 @@ async function applyCategoryFilter(area) {
     console.error("❌ Failed to load recipes:", err);
   }
 }
+
 
 
 window.applyCategoryFilter = applyCategoryFilter;
