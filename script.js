@@ -103,7 +103,6 @@ async function loadGuestCounts() {
 }
 // In your script.js file
 
-import { db } from './firebaseConfig.js';
 import { collection, addDoc, query, where, getDocs, Timestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
 const placeholderUser = "testUser";
