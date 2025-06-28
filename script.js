@@ -52,6 +52,8 @@ function renderKitchen(orders) {
     container.appendChild(div);
   });
 }
+applyCategoryFilter("aloha");
+
 
 function listenToOrders() {
   const ordersRef = collection(db, "orders");
