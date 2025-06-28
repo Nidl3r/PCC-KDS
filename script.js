@@ -6,7 +6,12 @@ import {
   doc,
   setDoc,
   getDoc,
-  serverTimestamp
+  serverTimestamp,
+  addDoc,
+  query,
+  where,
+  getDocs,
+  Timestamp
 } from "https://www.gstatic.com/firebasejs/11.9.1/firebase-firestore.js";
 
 // ✅ Handle screen switching
@@ -101,9 +106,6 @@ async function loadGuestCounts() {
     if (data.Gateway) document.getElementById("count-Gateway").value = data.Gateway;
   }
 }
-// In your script.js file
-
-import { collection, addDoc, query, where, getDocs, Timestamp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js";
 
 const placeholderUser = "testUser";
 
@@ -196,6 +198,7 @@ returnForm?.addEventListener("submit", async (e) => {
   alert("Return submitted.");
   returnForm.reset();
 });
+
 // Tab switcher for Aloha screen
 window.showAlohaSection = function(sectionId) {
   const sections = ["addons", "par", "waste", "returns"];
