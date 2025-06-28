@@ -130,22 +130,25 @@ alohaCategorySelect?.addEventListener("change", () => {
   applyCategoryFilter("aloha");
 });
 async function applyCategoryFilter(area) {
-  const venueCode = "b001"; // Aloha
-  const section = document.getElementById(`${area}Category`).value;
+  const category = document.getElementById(`${area.toLowerCase()}Category`).value;
+  const select = document.getElementById(`${area.toLowerCase()}Item`);
+  select.innerHTML = "<option value=''>-- Select Item --</option>";
 
   const recipesRef = collection(db, "recipes");
-  let q = query(recipesRef, where("venue", "==", venueCode));
-  if (section) {
-    q = query(recipesRef, where("venue", "==", venueCode), where("section", "==", section));
-  }
+  const q = query(
+    recipesRef,
+    where("venueCode", "==", "b001"),
+    ...(category ? [where("itemCategoryCode", "==", category)] : [])
+  );
 
   const snapshot = await getDocs(q);
-  const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-
-  const itemSelect = document.getElementById(`${area}Item`);
-  itemSelect.innerHTML = `<option value="">-- Select Item --</option>`;
-  items.forEach(item => {
-    itemSelect.innerHTML += `<option value="${item.recipeNo}">${item.description}</option>`;
+  snapshot.forEach(doc => {
+    const recipe = doc.data();
+    const option = document.createElement("option");
+    option.value = recipe.recipeNo;
+    option.textContent = recipe.recipeDescription;
+    select.appendChild(option);
   });
 }
+
 window.applyCategoryFilter = applyCategoryFilter;
