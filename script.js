@@ -142,28 +142,6 @@ async function applyCategoryFilter(area) {
   const category = document.getElementById(`${area.toLowerCase()}Category`).value;
   const select = document.getElementById(`${area.toLowerCase()}Item`);
   select.innerHTML = "<option value=''>-- Select Item --</option>";
-snapshot.forEach(doc => {
-  const recipe = doc.data();
-  console.log("🔍 Recipe:", recipe.recipeNo, "| Category:", recipe.category);
-
-  // Filter: only recipes with Aloha section (venue b001)
-  if (!recipe.Aloha) {
-    console.log("❌ Skipped - No Aloha field");
-    return;
-  }
-
-  // Filter by category if selected
-  if (category && recipe.category !== category) {
-    console.log(`❌ Skipped - Category mismatch (${recipe.category} !== ${category})`);
-    return;
-  }
-
-  // ✅ Passed
-  const option = document.createElement("option");
-  option.value = recipe.recipeNo;
-  option.textContent = `${recipe.recipeNo} - ${recipe.description}`;
-  select.appendChild(option);
-});
 
   try {
     const snapshot = await getDocs(collection(db, "recipes"));
@@ -171,14 +149,25 @@ snapshot.forEach(doc => {
 
     snapshot.forEach(doc => {
       const recipe = doc.data();
+      const recipeNo = recipe.recipeNo || "(no recipeNo)";
+      const recipeCategory = recipe.category || "(no category)";
 
-      // Filter: only include recipes with Aloha key (b001)
-      if (!recipe.Aloha) return;
+      console.log(`🔍 Checking: ${recipeNo} | category: ${recipeCategory}`);
 
-      // Filter by category if selected
-      if (category && recipe.category !== category) return;
+      // Check for Aloha (venue-specific) presence
+      if (!recipe.Aloha) {
+        console.log(`❌ Skipped ${recipeNo} - missing Aloha field`);
+        return;
+      }
 
-      // Add to dropdown
+      // Category filter (case-insensitive match)
+      if (category && recipeCategory.toLowerCase() !== category.toLowerCase()) {
+        console.log(`❌ Skipped ${recipeNo} - category mismatch (${recipeCategory} !== ${category})`);
+        return;
+      }
+
+      // ✅ Add matching recipe to dropdown
+      console.log(`✅ Included: ${recipeNo}`);
       const option = document.createElement("option");
       option.value = recipe.recipeNo;
       option.textContent = `${recipe.recipeNo} - ${recipe.description}`;
@@ -192,6 +181,7 @@ snapshot.forEach(doc => {
     console.error("❌ Failed to load recipes:", err);
   }
 }
+
 
 window.applyCategoryFilter = applyCategoryFilter;
 
