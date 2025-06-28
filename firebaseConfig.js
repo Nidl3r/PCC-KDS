@@ -1,6 +1,19 @@
 // firebaseConfig.js
 import { initializeApp } from "https://www.gstatic.com/firebasejs/11.9.1/firebase-app.js";
-import { getFirestore } from "https://www.gstatic.com/firebasejs/11.9.1/firebase-firestore.js";
+import {
+  getFirestore,
+  collection,
+  onSnapshot,
+  doc,
+  setDoc,
+  getDoc,
+  serverTimestamp,
+  addDoc,
+  query,
+  where,
+  getDocs,
+  Timestamp
+} from "https://www.gstatic.com/firebasejs/11.9.1/firebase-firestore.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyCkDeNR98GOSi3D0Co5kGcrdruGaBw31vc",
@@ -12,5 +25,22 @@ const firebaseConfig = {
   measurementId: "G-E49YCBZZEQ"
 };
 
-export const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app);
+// Initialize Firebase
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
+// Export all Firestore tools you need in script.js
+export {
+  db,
+  collection,
+  onSnapshot,
+  doc,
+  setDoc,
+  getDoc,
+  serverTimestamp,
+  addDoc,
+  query,
+  where,
+  getDocs,
+  Timestamp
+};
