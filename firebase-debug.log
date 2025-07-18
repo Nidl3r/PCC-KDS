@@ -1,0 +1,60 @@
+[debug] [2025-07-18T02:23:48.038Z] ----------------------------------------------------------------------
+[debug] [2025-07-18T02:23:48.040Z] Command:       /usr/local/share/nvm/versions/node/v22.16.0/bin/node /home/codespace/nvm/current/bin/firebase login:ci
+[debug] [2025-07-18T02:23:48.040Z] CLI Version:   14.11.0
+[debug] [2025-07-18T02:23:48.040Z] Platform:      linux
+[debug] [2025-07-18T02:23:48.040Z] Node Version:  v22.16.0
+[debug] [2025-07-18T02:23:48.041Z] Time:          Fri Jul 18 2025 02:23:48 GMT+0000 (Coordinated Universal Time)
+[debug] [2025-07-18T02:23:48.041Z] Env Overrides: GITHUB_API_URL, GITHUB_API_URL
+[debug] [2025-07-18T02:23:48.041Z] ----------------------------------------------------------------------
+[debug] 
+[warn] ⚠  Authenticating with a `login:ci` token is deprecated and will be removed in a future major version of `firebase-tools`. Instead, use a service account key with `GOOGLE_APPLICATION_CREDENTIALS`: https://cloud.google.com/docs/authentication/getting-started 
+[info] 
+[info] Visit this URL on this device to log in:
+[info] https://accounts.google.com/o/oauth2/auth?client_id=563584335869-fgrhgmd47bqnekij5i8b5pr03ho849e6.apps.googleusercontent.com&scope=email%20openid%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloudplatformprojects.readonly%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Ffirebase%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloud-platform&response_type=code&state=893282320&redirect_uri=http%3A%2F%2Flocalhost%3A9005
+[info] 
+[info] Waiting for authentication...
+[debug] [2025-07-18T04:15:07.467Z] ----------------------------------------------------------------------
+[debug] [2025-07-18T04:15:07.492Z] Command:       /usr/local/share/nvm/versions/node/v22.16.0/bin/node /home/codespace/nvm/current/bin/firebase login:ci
+[debug] [2025-07-18T04:15:07.492Z] CLI Version:   14.11.0
+[debug] [2025-07-18T04:15:07.493Z] Platform:      linux
+[debug] [2025-07-18T04:15:07.495Z] Node Version:  v22.16.0
+[debug] [2025-07-18T04:15:07.496Z] Time:          Fri Jul 18 2025 04:15:07 GMT+0000 (Coordinated Universal Time)
+[debug] [2025-07-18T04:15:07.496Z] Env Overrides: GITHUB_API_URL, GITHUB_API_URL
+[debug] [2025-07-18T04:15:07.496Z] ----------------------------------------------------------------------
+[debug] 
+[warn] ⚠  Authenticating with a `login:ci` token is deprecated and will be removed in a future major version of `firebase-tools`. Instead, use a service account key with `GOOGLE_APPLICATION_CREDENTIALS`: https://cloud.google.com/docs/authentication/getting-started 
+[info] 
+[info] Visit this URL on this device to log in:
+[info] https://accounts.google.com/o/oauth2/auth?client_id=563584335869-fgrhgmd47bqnekij5i8b5pr03ho849e6.apps.googleusercontent.com&scope=email%20openid%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloudplatformprojects.readonly%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Ffirebase%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloud-platform&response_type=code&state=370661612&redirect_uri=http%3A%2F%2Flocalhost%3A9005
+[info] 
+[info] Waiting for authentication...
+[debug] [2025-07-18T04:15:36.205Z] ----------------------------------------------------------------------
+[debug] [2025-07-18T04:15:36.207Z] Command:       /usr/local/share/nvm/versions/node/v22.16.0/bin/node /home/codespace/nvm/current/bin/firebase login:ci
+[debug] [2025-07-18T04:15:36.207Z] CLI Version:   14.11.0
+[debug] [2025-07-18T04:15:36.208Z] Platform:      linux
+[debug] [2025-07-18T04:15:36.208Z] Node Version:  v22.16.0
+[debug] [2025-07-18T04:15:36.208Z] Time:          Fri Jul 18 2025 04:15:36 GMT+0000 (Coordinated Universal Time)
+[debug] [2025-07-18T04:15:36.208Z] Env Overrides: GITHUB_API_URL, GITHUB_API_URL
+[debug] [2025-07-18T04:15:36.208Z] ----------------------------------------------------------------------
+[debug] 
+[warn] ⚠  Authenticating with a `login:ci` token is deprecated and will be removed in a future major version of `firebase-tools`. Instead, use a service account key with `GOOGLE_APPLICATION_CREDENTIALS`: https://cloud.google.com/docs/authentication/getting-started 
+[info] 
+[info] Visit this URL on this device to log in:
+[info] https://accounts.google.com/o/oauth2/auth?client_id=563584335869-fgrhgmd47bqnekij5i8b5pr03ho849e6.apps.googleusercontent.com&scope=email%20openid%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloudplatformprojects.readonly%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Ffirebase%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloud-platform&response_type=code&state=527389393&redirect_uri=http%3A%2F%2Flocalhost%3A9005
+[info] 
+[info] Waiting for authentication...
+[debug] [2025-07-18T04:17:51.977Z] ----------------------------------------------------------------------
+[debug] [2025-07-18T04:17:51.979Z] Command:       /usr/local/share/nvm/versions/node/v22.16.0/bin/node /home/codespace/nvm/current/bin/firebase login:ci
+[debug] [2025-07-18T04:17:51.980Z] CLI Version:   14.11.0
+[debug] [2025-07-18T04:17:51.980Z] Platform:      linux
+[debug] [2025-07-18T04:17:51.980Z] Node Version:  v22.16.0
+[debug] [2025-07-18T04:17:51.980Z] Time:          Fri Jul 18 2025 04:17:51 GMT+0000 (Coordinated Universal Time)
+[debug] [2025-07-18T04:17:51.980Z] Env Overrides: GITHUB_API_URL, GITHUB_API_URL
+[debug] [2025-07-18T04:17:51.980Z] ----------------------------------------------------------------------
+[debug] 
+[warn] ⚠  Authenticating with a `login:ci` token is deprecated and will be removed in a future major version of `firebase-tools`. Instead, use a service account key with `GOOGLE_APPLICATION_CREDENTIALS`: https://cloud.google.com/docs/authentication/getting-started 
+[info] 
+[info] Visit this URL on this device to log in:
+[info] https://accounts.google.com/o/oauth2/auth?client_id=563584335869-fgrhgmd47bqnekij5i8b5pr03ho849e6.apps.googleusercontent.com&scope=email%20openid%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloudplatformprojects.readonly%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Ffirebase%20https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fcloud-platform&response_type=code&state=968184711&redirect_uri=http%3A%2F%2Flocalhost%3A9005
+[info] 
+[info] Waiting for authentication...
