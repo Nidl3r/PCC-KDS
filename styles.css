@@ -94,11 +94,53 @@ input:focus, textarea:focus {
 
 .order-controls {
   display: flex;
-  gap: 8px;
+  align-items: center;
   flex-wrap: wrap;
-  justify-content: center;
+  gap: 8px;
+  justify-content: flex-start;
   margin: 8px 0;
 }
+
+.order-controls label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+/* Sizing for specific inputs */
+.order-controls select {
+  width: 150px;
+}
+
+.order-controls input[type="number"] {
+  width: 60px;
+}
+
+.order-controls input[type="text"] {
+  width: 220px;
+  max-width: 100%;
+}
+
+.order-controls button {
+  white-space: nowrap;
+}
+
+/* Responsive fallback for small screens */
+@media (max-width: 600px) {
+  .order-controls {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .order-controls label,
+  .order-controls select,
+  .order-controls input,
+  .order-controls button {
+    width: 100%;
+  }
+}
+
 
 .order-controls select,
 .order-controls input,
@@ -200,4 +242,168 @@ table button {
   border-radius: 4px;
   cursor: pointer;
   margin-bottom: 8px;
+}
+.tab-button.active {
+  border: 2px solid #007bff;
+  background-color: #e9f3ff;
+  font-weight: bold;
+  border-radius: 6px;
+}
+.chat-section {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  background: var(--panel-bg);
+  border-top: 1px solid var(--border);
+  padding: 12px 16px;
+  z-index: 999;
+  box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.3);
+  box-sizing: border-box;
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+
+.chat-section.highlight {
+  box-shadow: 0 -2px 12px 4px #facc15; /* yellow glow for new message */
+}
+
+.chat-section h3 {
+  margin: 0 0 8px;
+  font-size: 16px;
+  color: var(--text);
+  display: inline-block;
+}
+
+.chat-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  height: 32px; /* ✨ fixed height */
+  overflow: hidden;
+}
+
+.chat-section.minimized {
+  transform: translateY(calc(100% - 44px)); /* ✨ show header only */
+  overflow: hidden;
+}
+
+.chat-toggle-btn {
+  background: transparent;
+  border: none;
+  font-size: 18px;
+  color: var(--text);
+  cursor: pointer;
+  padding: 0 8px;
+  height: 100%;
+}
+
+.chat-messages {
+  max-height: 180px;
+  overflow-y: auto;
+  background: var(--highlight);
+  border: 1px solid var(--border);
+  padding: 8px;
+  font-size: 14px;
+  margin-bottom: 8px;
+  color: var(--text);
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.chat-input-row {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+#chatInput {
+  flex: 1;
+  padding: 8px;
+  font-size: 14px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  min-width: 0;
+}
+
+#chatInput::placeholder {
+  color: #aaa;
+}
+
+.chat-section button {
+  padding: 8px 12px;
+  font-size: 14px;
+  background: var(--highlight);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.chat-section button:hover {
+  background: #5a5a6a;
+}
+
+#addonsFilterSelect {
+  width: 150px; /* or however wide you want it */
+  min-width: 150px;
+  max-width: 150px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow: hidden;
+  padding: 6px;
+  border-radius: 4px;
+  border: 1px solid #ccc;
+  appearance: none; /* optional, for consistent styling */
+}
+
+
+.form-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 400px;
+  margin-top: 20px;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.form-group label {
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: var(--text); /* Match your text color */
+}
+
+.styled-select {
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  font-size: 1rem;
+  background-color: var(--panel-bg);
+  color: var(--text);
+}
+
+.save-btn {
+  padding: 10px 20px;
+  border: none;
+  background-color: var(--highlight); /* Gray button */
+  color: var(--text);
+  border-radius: 6px;
+  font-size: 1rem;
+  cursor: pointer;
+  align-self: flex-start;
+  transition: background-color 0.2s ease;
+}
+
+.save-btn:hover {
+  background-color: var(--border); /* Slightly darker gray on hover */
 }

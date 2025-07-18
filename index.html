@@ -16,36 +16,58 @@
       <option value="concession">Concession</option>
       <option value="main-kitchen">Main Kitchen</option>
       <option value="stations">Stations</option>
+      <option value="accounting">Accounting</option>
+
     </select>
   </div>
+<div id="offlineBanner" style="
+  display: none;
+  position: fixed;
+  top: 0;
+  width: 100%;
+  background: #ff9800;
+  color: white;
+  text-align: center;
+  padding: 10px;
+  z-index: 1000;
+  font-weight: bold;">
+  ⚠️ Offline Mode: Some features may not be updated in real-time
+</div>
 
 <div class="screen" id="guest-count">
   <h2>Guest Count</h2>
-  <form id="guest-count-form">
-    <label>
-      Aloha guests:
-      <select id="count-Aloha">
+  <form id="guest-count-form" class="form-grid">
+    <div id="current-guest-counts" class="guest-count-summary">
+  <h3>Current Guest Counts</h3>
+  <p>Aloha: <span id="current-Aloha">—</span></p>
+  <p>Ohana: <span id="current-Ohana">—</span></p>
+  <p>Gateway: <span id="current-Gateway">—</span></p>
+</div>
+
+    <div class="form-group">
+      <label for="count-Aloha">Aloha Guests</label>
+      <select id="count-Aloha" class="styled-select">
         <option value="200">200</option>
         <option value="250">250</option>
         <option value="300">300</option>
         <option value="350">350</option>
       </select>
-    </label>
-    <br /><br />
-    <label>
-      Ohana guests:
-      <select id="count-Ohana">
+    </div>
+
+    <div class="form-group">
+      <label for="count-Ohana">Ohana Guests</label>
+      <select id="count-Ohana" class="styled-select">
         <option value="75">75</option>
         <option value="100">100</option>
         <option value="125">125</option>
         <option value="150">150</option>
         <option value="175">175</option>
       </select>
-    </label>
-    <br /><br />
-    <label>
-      Gateway guests:
-      <select id="count-Gateway">
+    </div>
+
+    <div class="form-group">
+      <label for="count-Gateway">Gateway Guests</label>
+      <select id="count-Gateway" class="styled-select">
         <option value="250">250</option>
         <option value="300">300</option>
         <option value="350">350</option>
@@ -63,78 +85,222 @@
         <option value="950">950</option>
         <option value="1000">1000</option>
       </select>
-    </label>
-    <br /><br />
-    <button type="submit">Save Guest Counts</button>
+    </div>
+
+    <button type="submit" class="save-btn">Save Guest Counts</button>
   </form>
+
   <div id="guest-count-status"></div>
 </div>
 
 
 
 
+
   </div>
-<!-- Aloha Screen -->
+<!-- ✅ Aloha Screen (fixed) -->
 <div class="screen" id="aloha">
   <div class="header-container">
-    <h2>Aloha Orders</h2>
+    <h2>Aloha</h2>
     <div class="area-tabs">
-      <button onclick="showAreaSection('aloha','order')">Add-ons</button>
-<button onclick="showAreaSection('aloha','starting')">Starting Par</button>
-<button onclick="showAreaSection('aloha','waste')">Waste</button>
-<button onclick="showAreaSection('aloha','returns')">Returns</button>
-
+      <button class="area-tab" data-area="aloha" data-sec="order" onclick="showAreaSection('aloha','order')">Add-ons</button>
+      <button class="area-tab" data-area="aloha" data-sec="starting" onclick="showAreaSection('aloha','starting')">Starting Par</button>
+      <button class="area-tab" data-area="aloha" data-sec="waste" onclick="showAreaSection('aloha','waste')">Waste</button>
+      <button class="area-tab" data-area="aloha" data-sec="returns" onclick="showAreaSection('aloha','returns')">Returns</button>
     </div>
   </div>
 
-  <!-- ➊ Add-Ons -->
-  <div class="aloha-section" data-sec="order">
+<!-- ➊ Add-Ons -->
+<div class="aloha-section" data-sec="order">
+  <div class="order-controls">
+    <label>
+      Section:
+      <select id="alohaCategory" onchange="applyCategoryFilter('aloha')"> 
+        <option value="">All</option>
+        <option value="HOTFOODS">Hotfoods</option>
+        <option value="PANTRY">Pantry</option>
+        <option value="BAKERY">Bakery</option>
+      </select>
+    </label>
+
+    <select id="alohaItem">
+      <option value="">-- Select Item --</option>
+    </select>
+
+    <input id="alohaQty" type="number" min="1" value="1" placeholder="Qty" />
+    <input id="alohaNotes" type="text" placeholder="Notes (e.g. no tomato)" />
+    <button onclick="sendAlohaOrder(this)">Send</button>
+  </div>
+
+  <!-- 💰 Cost Summary + Guest Input -->
+  <div style="display: flex; align-items: center; gap: 2rem; justify-content: space-between; margin-top: 1rem;">
+    <h3>Open Orders</h3>
+    <div id="alohaCostSummary" style="font-size: 1rem; display: flex; align-items: center; gap: 1.5rem;">
+      <div><strong>Total Spent:</strong> $<span id="totalSpent">0.00</span></div>
+      <div>
+        <strong>Guests:</strong>
+        <input type="number" id="guestInput" value="1" min="1" style="width: 60px;" />
+      </div>
+      <div><strong>Cost per Guest:</strong> $<span id="costPerGuest">0.00</span></div>
+    </div>
+  </div>
+
+  <table id="alohaTable">
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Due</th>
+        <th>Item</th>
+        <th>Qty</th>
+        <th>Status</th>
+        <th>Receive</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+
+  <!-- ➋ Starting Par -->
+  <div class="aloha-section" data-sec="starting" style="display:none">
+    <h3>Starting Par</h3>
+    <p id="alohaGuestInfo">Loading guest count...</p>
+
     <div class="order-controls">
       <label>
         Section:
-        <select id="alohaCategory" onchange="applyCategoryFilter('aloha')">
-  <option value="">All</option>
-<option value="Hotfoods">Hotfoods</option>
-<option value="Pantry">Pantry</option>
-<option value="Bakery">Bakery</option>
-
-
-</select>
-
-
+        <select id="aloha-starting-category" onchange="renderStartingStatus('Aloha', startingCache['Aloha'])">
+          <option value="">All</option>
+          <option>Hotfoods</option>
+          <option>Bakery</option>
+          <option>Pantry</option>
+        </select>
       </label>
-
-      <select id="alohaItem">
-        <option value="">-- Select Item --</option>
-      </select>
-
-      <input id="alohaQty" type="number" min="1" value="1" />
-      <button onclick="sendAlohaOrder(this)">Send</button>
     </div>
 
-    <h3>Open Orders</h3>
-    <table id="alohaTable">
+    <table>
       <thead>
         <tr>
-          <th>Time</th>
           <th>Item</th>
-          <th>Qty</th>
-          <th>Due</th>
-          <th>Status</th>
+          <th>Par Qty</th>
+          <th>Sent Qty</th>
           <th>Receive</th>
+        </tr>
+      </thead>
+      <tbody id="alohaParTableBody"></tbody>
+    </table>
+  </div>
+
+  <!-- ➌ Waste -->
+  <div class="aloha-section" data-sec="waste" style="display:none">
+    <h3>Aloha Waste</h3>
+    <div style="margin-bottom: 10px;">
+      <button onclick="sendAllWaste()">Send All Waste</button>
+    </div>
+
+    <table class="waste-table">
+      <thead>
+        <tr>
+          <th>Item</th>
+          <th>UOM</th>
+          <th>Qty</th>
+          <th>Send</th>
         </tr>
       </thead>
       <tbody></tbody>
     </table>
   </div>
 
+  <!-- ➍ Returns -->
+  <div class="aloha-section returns-section" data-sec="returns" style="display:none">
+    <h3>Aloha Returns</h3>
+    <table class="aloha-returns-table">
+      <thead>
+        <tr>
+          <th>Item</th>
+          <th>Current</th>
+          <th>Returned</th>
+          <th>Return</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+
+
+  <div class="screen" id="ohana">
+  <div class="header-container">
+    <h2>Ohana</h2>
+    <div class="area-tabs">
+      <button class="area-tab" data-area="ohana" data-sec="order" onclick="showAreaSection('ohana','order')">Add-ons</button>
+      <button class="area-tab" data-area="ohana" data-sec="starting" onclick="showAreaSection('ohana','starting')">Starting Par</button>
+      <button class="area-tab" data-area="ohana" data-sec="waste" onclick="showAreaSection('ohana','waste')">Waste</button>
+      <button class="area-tab" data-area="ohana" data-sec="returns" onclick="showAreaSection('ohana','returns')">Returns</button>
+    </div>
+  </div>
+
+<!-- ➊ Add-Ons -->
+<div class="ohana-section" data-sec="order">
+  <div class="order-controls">
+    <label>
+      Section:
+      <select id="ohanaCategory" onchange="applyCategoryFilter('ohana')">
+        <option value="">All</option>
+        <option value="HOTFOODS">Hotfoods</option>
+        <option value="PANTRY">Pantry</option>
+        <option value="BAKERY">Bakery</option>
+      </select>
+    </label>
+
+    <select id="ohanaItem">
+      <option value="">-- Select Item --</option>
+    </select>
+
+    <input id="ohanaQty" type="number" min="1" value="1" placeholder="Qty" />
+    <input id="ohanaNotes" type="text" placeholder="Notes (e.g. no tomato)" />
+    <button onclick="sendOhanaOrder(this)">Send</button>
+  </div>
+
+<div style="display: flex; align-items: center; gap: 2rem; justify-content: space-between; margin-top: 1rem;">
+  <h3>Open Orders</h3>
+  <div id="ohanaCostSummary" style="font-size: 1rem; display: flex; align-items: center; gap: 1.5rem;">
+    <div><strong>Total Spent:</strong> $<span id="totalSpentOhana">0.00</span></div>
+    <div>
+      <strong>Guests:</strong>
+      <input id="guestInputOhana" type="number" min="1" value="1" style="width: 4rem;" />
+    </div>
+    <div><strong>Cost per Guest:</strong> $<span id="costPerGuestOhana">0.00</span></div>
+  </div>
+</div>
+
+
+  <table id="ohanaTable">
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Due</th>
+        <th>Item</th>
+        <th>Qty</th>
+        <th>Status</th>
+        <th>Receive</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+
   <!-- ➋ Starting Par -->
-  <div class="Aloha-section" data-sec="starting" style="display:none">
+  <div class="ohana-section" data-sec="starting" style="display:none">
     <h3>Starting Par</h3>
+    <p id="ohanaGuestInfo">Loading guest count...</p>
+
     <div class="order-controls">
       <label>
         Section:
-        <select id="aloha-starting-category" onchange="renderStartingStatus('Aloha', startingCache['Aloha'])">
+        <select id="ohana-starting-category" onchange="renderStartingStatus('Ohana', startingCache['Ohana'])">
           <option value="">All</option>
           <option>Hotfoods</option>
           <option>Bakery</option>
@@ -151,21 +317,25 @@
           <th>Receive</th>
         </tr>
       </thead>
-      <tbody></tbody>
+      <tbody id="ohanaParTableBody"></tbody>
     </table>
   </div>
 
   <!-- ➌ Waste -->
-  <div class="Aloha-section" data-sec="waste" style="display:none">
-    <h3>Aloha Waste</h3>
+  <div class="ohana-section" data-sec="waste" style="display:none">
+    <h3>Ohana Waste</h3>
+
+    <div style="margin-bottom: 10px;">
+      <button onclick="sendAllOhanaWaste()">Send All Waste</button>
+    </div>
+
     <table class="waste-table">
       <thead>
         <tr>
           <th>Item</th>
           <th>UOM</th>
           <th>Qty</th>
-          <th>Add</th>
-          <th>Action</th>
+          <th>Send</th>
         </tr>
       </thead>
       <tbody></tbody>
@@ -173,15 +343,15 @@
   </div>
 
   <!-- ➍ Returns -->
-  <div class="Aloha-section" data-sec="returns" style="display:none">
-    <h3>Returns</h3>
-    <table id="alohaReturnsTable">
+  <div class="ohana-section returns-section" data-sec="returns" style="display:none">
+    <h3>Ohana Returns</h3>
+    <table class="ohana-returns-table">
       <thead>
         <tr>
           <th>Item</th>
           <th>Current</th>
-          <th>Add</th>
-          <th>Action</th>
+          <th>Returned</th>
+          <th>Return</th>
         </tr>
       </thead>
       <tbody></tbody>
@@ -190,43 +360,527 @@
 </div>
 
 
-
-
-
-  <div class="screen" id="ohana">
-    <h2>Ohana</h2>
-    <!-- Add-ons, Starting Par, Waste, Returns -->
-  </div>
-
   <div class="screen" id="gateway">
+  <div class="header-container">
     <h2>Gateway</h2>
-    <!-- Add-ons, Starting Par, Waste, Returns -->
+    <div class="area-tabs">
+      <button class="area-tab" data-area="gateway" data-sec="order" onclick="showAreaSection('gateway','order')">Add-ons</button>
+      <button class="area-tab" data-area="gateway" data-sec="starting" onclick="showAreaSection('gateway','starting')">Starting Par</button>
+      <button class="area-tab" data-area="gateway" data-sec="waste" onclick="showAreaSection('gateway','waste')">Waste</button>
+      <button class="area-tab" data-area="gateway" data-sec="returns" onclick="showAreaSection('gateway','returns')">Returns</button>
+    </div>
   </div>
 
-  <div class="screen" id="concession">
+<!-- ➊ Add-Ons -->
+<div class="gateway-section" data-sec="order">
+  <div class="order-controls">
+    <label>
+      Section:
+      <select id="gatewayCategory" onchange="applyCategoryFilter('gateway')">
+        <option value="">All</option>
+        <option value="HOTFOODS">Hotfoods</option>
+        <option value="PANTRY">Pantry</option>
+        <option value="BAKERY">Bakery</option>
+      </select>
+    </label>
+
+    <select id="gatewayItem">
+      <option value="">-- Select Item --</option>
+    </select>
+
+    <input id="gatewayQty" type="number" min="1" value="1" placeholder="Qty" />
+    <input id="gatewayNotes" type="text" placeholder="Notes (e.g. no tomato)" />
+    <button onclick="sendGatewayOrder(this)">Send</button>
+  </div>
+<div style="display: flex; align-items: center; gap: 2rem; justify-content: space-between; margin-top: 1rem;">
+  <h3>Open Orders</h3>
+  <div id="gatewayCostSummary" style="font-size: 1rem; display: flex; align-items: center; gap: 1.5rem;">
+    <div><strong>Total Spent:</strong> $<span id="totalSpentGateway">0.00</span></div>
+    <div>
+      <strong>Guests:</strong>
+      <input id="guestInputGateway" type="number" min="1" value="1" style="width: 4rem;" />
+    </div>
+    <div><strong>Cost per Guest:</strong> $<span id="costPerGuestGateway">0.00</span></div>
+  </div>
+</div>
+
+
+  <table id="gatewayTable">
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Due</th>
+        <th>Item</th>
+        <th>Qty</th>
+        <th>Status</th>
+        <th>Receive</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+
+  <!-- ➋ Starting Par -->
+  <div class="gateway-section" data-sec="starting" style="display:none">
+    <h3>Starting Par</h3>
+    <p id="gatewayGuestInfo">Loading guest count...</p>
+
+    <div class="order-controls">
+      <label>
+        Section:
+        <select id="gateway-starting-category" onchange="renderStartingStatus('Gateway', startingCache['Gateway'])">
+          <option value="">All</option>
+          <option>Hotfoods</option>
+          <option>Bakery</option>
+          <option>Pantry</option>
+        </select>
+      </label>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Item</th>
+          <th>Par Qty</th>
+          <th>Sent Qty</th>
+          <th>Receive</th>
+        </tr>
+      </thead>
+      <tbody id="gatewayParTableBody"></tbody>
+    </table>
+  </div>
+
+  <!-- ➌ Waste -->
+  <div class="gateway-section" data-sec="waste" style="display:none">
+    <h3>Gateway Waste</h3>
+
+    <div style="margin-bottom: 10px;">
+      <button onclick="sendAllGatewayWaste()">Send All Waste</button>
+
+    </div>
+
+    <table class="waste-table">
+      <thead>
+        <tr>
+          <th>Item</th>
+          <th>UOM</th>
+          <th>Qty</th>
+          <th>Send</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <!-- ➍ Returns -->
+  <div class="gateway-section returns-section" data-sec="returns" style="display:none">
+    <h3>Gateway Returns</h3>
+    <table class="gateway-returns-table">
+      <thead>
+        <tr>
+          <th>Item</th>
+          <th>Current</th>
+          <th>Returned</th>
+          <th>Return</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+
+ <div class="screen" id="concession">
+  <div class="header-container">
     <h2>Concession</h2>
-    <!-- Add-ons, Starting Par only -->
+    <div class="area-tabs">
+      <button class="area-tab" data-area="concession" data-sec="order" onclick="showAreaSection('concession','order')">Add-ons</button>
+      <button class="area-tab" data-area="concession" data-sec="starting" onclick="showAreaSection('concession','starting')">Starting Par</button>
+    </div>
   </div>
 
-  <div class="screen" id="main-kitchen">
+  <!-- Add-Ons Section -->
+  <div class="concession-section" data-sec="order">
+    <div class="order-controls">
+     
+
+      <select id="concessionItem">
+        <option value="">-- Select Item --</option>
+      </select>
+
+      <input id="concessionQty" type="number" min="1" value="1" placeholder="Qty" />
+      <input id="concessionNotes" type="text" placeholder="Notes (e.g. extra ice)" />
+      <button onclick="sendConcessionOrder(this)">Send</button>
+    </div>
+
+    <h3>Open Orders</h3>
+    <table id="concessionTable">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Due</th>
+          <th>Item</th>
+          <th>Qty</th>
+          <th>Status</th>
+          <th>Receive</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <!-- Starting Par Section -->
+  <div class="concession-section" data-sec="starting" style="display:none">
+    <h3>Starting Par</h3>
+    <p id="concessionGuestInfo">Loading guest count...</p>
+
+    <div class="order-controls">
+      <label>
+        Section:
+        <select id="concession-starting-category" onchange="renderStartingStatus('Concession', startingCache['Concession'])">
+          <option value="">All</option>
+          <option>Hotfoods</option>
+          <option>Bakery</option>
+          <option>Pantry</option>
+        </select>
+      </label>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th>Item</th>
+          <th>Par Qty</th>
+          <th>Sent Qty</th>
+          <th>Receive</th>
+        </tr>
+      </thead>
+      <tbody id="concessionParTableBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<div id="main-kitchen" class="screen">
+  <div class="header-container">
     <h2>Main Kitchen</h2>
-    <div id="kitchen-orders"></div>
-    <div id="orders"></div>
+
+    <!-- Tabs -->
+    <!-- Tabs -->
+<div class="area-tabs">
+  <button class="area-tab" data-area="mainkitchen" data-sec="order" onclick="showKitchenSection('order')">Add-Ons</button>
+  <button class="area-tab" data-area="mainkitchen" data-sec="starting" onclick="showKitchenSection('starting')">Starting Pars</button>
+  <button class="area-tab" data-area="mainkitchen" data-sec="waste" onclick="showKitchenSection('waste')">Waste</button>
+  <button class="area-tab" data-area="mainkitchen" data-sec="returns" onclick="showKitchenSection('returns')">Returns</button>
+</div>
 
 
+    <!-- Send Selected Button (for Starting Pars) -->
+    <div id="mainKitchenControls" class="order-controls" style="display: none;">
+      <button onclick="sendSelected(this)">Send Selected</button>
+    </div>
   </div>
 
-  <div class="screen" id="stations">
-    <h2>Stations</h2>
-    <!-- Wok, Fryer, Grill, Ovens, Pantry, Pastry -->
+  <!-- 📦 Open Orders Table -->
+  <div class="main-kitchen-section order-section" data-sec="order">
+    <h3>Open Orders</h3>
+    <table id="kitchenTable">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Due</th>
+          <th>Area</th>
+          <th>Item</th>
+          <th>Notes</th>
+          <th>Qty</th>
+          <th>Status</th>
+          <th>Send Qty</th>
+          <th>UOM</th>
+          <th>Send</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
   </div>
 
+  <!-- 🥄 Starting Pars Section -->
+ <div class="main-kitchen-section starting-section" data-sec="starting" style="display: none;">
+
+  <h3>Starting Pars</h3>
+  <div class="order-controls filter-controls" style="margin: 8px 0;">
+    <label>
+      Venue:
+      <select id="starting-filter-venue">
+        <option value="">All</option>
+        <option value="Aloha">Aloha</option>
+        <option value="Ohana">Ohana</option>
+        <option value="Gateway">Gateway</option>
+        <option value="Concessions">Concessions</option>
+      </select>
+    </label>
+    <label>
+      Station:
+      <select id="starting-filter-station">
+        <option value="">All</option>
+        <option value="Hotfoods">Hotfoods</option>
+        <option value="Bakery">Bakery</option>
+        <option value="Pantry">Pantry</option>
+      </select>
+    </label>
+  </div>
+
+  <table id="startingParsTable">
+    <thead>
+      <tr>
+        <th>Area</th>
+        <th>Item</th>
+        <th>Par Qty</th>
+        <th>UOM</th>
+        <th>Send Qty</th>
+        <th>Action</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+
+<!-- ♻️ Main Kitchen Waste Section -->
+<div class="main-kitchen-section waste-section" data-sec="waste" style="display:none">
+  <h3>Main Kitchen Waste</h3>
+
+  <!-- 🔍 Filters -->
+  <div style="margin-bottom: 10px;">
+    <input
+      id="mainWasteSearch"
+      type="text"
+      placeholder="Search item..."
+      oninput="filterMainWaste()"
+      style="margin-right: 10px; padding: 4px;"
+    />
+
+    <select id="mainWasteCategory" onchange="filterMainWaste()" style="padding: 4px;">
+      <option value="">All Categories</option>
+      <option value="bakery">Bakery</option>
+      <option value="hotfoods">Hotfoods</option>
+      <option value="pantry">Pantry</option>
+      <option value="ingredients">Ingredients</option>
+    </select>
+
+    <button onclick="sendAllMainWaste()" style="margin-left: 12px;">Send All Waste</button>
+  </div>
+
+  <!-- 📦 Waste Table -->
+  <table class="main-waste-table">
+    <thead>
+      <tr>
+        <th>Item</th>
+        <th>UOM</th>
+        <th>Qty</th>
+        <th>Send</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+
+
+<!-- ♻️ Main Kitchen Returns Section -->
+<div class="main-kitchen-section returns-section" data-sec="returns" style="display: none;">
+  <h3>Main Kitchen Returns</h3>
+  <!-- 🔍 Venue Filter -->
+<div style="margin-bottom: 10px;">
+  <label>
+    Filter by Venue:
+    <select id="mainReturnsVenueFilter" onchange="filterMainKitchenReturns()" style="padding: 4px;">
+      <option value="">All Venues</option>
+      <option value="Aloha">Aloha</option>
+      <option value="Ohana">Ohana</option>
+      <option value="Gateway">Gateway</option>
+      <option value="Concession">Concession</option>
+    </select>
+  </label>
+</div>
+
+  <table class="main-returns-table">
+    <thead>
+  <tr>
+    <th>Item</th>
+    <th>Venue</th>
+    <th>Qty</th>
+    <th>Receive</th>
+  </tr>
+</thead>
+
+    <tbody></tbody>
+  </table>
+</div>
+
+</div>
+<div class="screen" id="stations">
+  <h2>Stations</h2>
+
+  <!-- Navigation Tabs -->
+  <div class="station-tabs">
+    <button onclick="showStationTab('Wok')">Wok</button>
+    <button onclick="showStationTab('Fryer')">Fryer</button>
+    <button onclick="showStationTab('Grill')">Grill</button>
+    <button onclick="showStationTab('Oven')">Oven</button>
+    <button onclick="showStationTab('Pantry')">Pantry</button>
+    <button onclick="showStationTab('Pastry')">Pastry</button>
+  </div>
+
+  <!-- Station Tables -->
+  <div id="WokSection" class="station-section">
+    <h3>Wok Station</h3>
+    <table id="WokTable">
+      <thead>
+        <tr><th>Time</th><th>Due</th><th>Area</th><th>Item</th><th>Qty</th><th>Notes</th><th>Complete</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div id="FryerSection" class="station-section" style="display:none">
+    <h3>Fryer Station</h3>
+    <table id="FryerTable">
+      <thead>
+        <tr><th>Time</th><th>Due</th><th>Area</th><th>Item</th><th>Qty</th><th>Notes</th><th>Complete</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div id="GrillSection" class="station-section" style="display:none">
+    <h3>Grill Station</h3>
+    <table id="GrillTable">
+      <thead>
+        <tr><th>Time</th><th>Due</th><th>Area</th><th>Item</th><th>Qty</th><th>Notes</th><th>Complete</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div id="OvenSection" class="station-section" style="display:none">
+    <h3>Oven Station</h3>
+    <table id="OvenTable">
+      <thead>
+        <tr><th>Time</th><th>Due</th><th>Area</th><th>Item</th><th>Qty</th><th>Notes</th><th>Complete</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div id="PantrySection" class="station-section" style="display:none">
+    <h3>Pantry Station</h3>
+    <table id="PantryTable">
+      <thead>
+        <tr><th>Time</th><th>Due</th><th>Area</th><th>Item</th><th>Qty</th><th>Notes</th><th>Complete</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div id="PastrySection" class="station-section" style="display:none">
+    <h3>Pastry Station</h3>
+    <table id="PastryTable">
+      <thead>
+        <tr><th>Time</th><th>Due</th><th>Area</th><th>Item</th><th>Qty</th><th>Notes</th><th>Complete</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- 🔐 Accounting screen with passcode protection -->
+<div class="screen" id="accounting" style="display:none;">
+  <div id="accounting-lock">
+    <h2>Enter Passcode</h2>
+    <input type="password" id="accountingPass" placeholder="Enter code" />
+    <button onclick="unlockAccounting()">Unlock</button>
+  </div>
+
+  <div id="accounting-content" style="display:none;">
+    <div class="area-tabs">
+      <button onclick="showAccountingTab('production')">Production</button>
+      <button onclick="showAccountingTab('shipments'); loadProductionShipments([]);">Production Shipments</button>
+      <button onclick="showAccountingTab('waste')">Waste</button>
+    </div>
+
+    <!-- Production Section -->
+    <div id="productionSection" class="accounting-section" data-sec="production">
+      <h3>Production Summary</h3>
+      <button onclick="copyProductionSummaryToClipboard()">Copy to Excel</button>
+
+
+      <table id="productionTable">
+        <thead>
+          <tr>
+            <th>Submenu Code</th>
+            <th>Dish Code</th>
+            <th>Recipe No.</th>
+            <th>Recipe Description</th>
+            <th>Total</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <!-- Shipments Section -->
+<div id="shipmentsTab" class="accounting-section" data-sec="shipments" style="display:none;">
+  <h3>Production Shipments</h3>
+  <div class="venue-tabs">
+    <button onclick="loadVenueShipment('b001')">Aloha</button>
+    <button onclick="loadVenueShipment('b002')">Ohana</button>
+    <button onclick="loadVenueShipment('b003')">Gateway</button>
+    <button onclick="loadVenueShipment('c002')">Samoa Concessions</button>
+    <button onclick="loadVenueShipment('c003')">Maori Concessions</button>
+    <!--<button onclick="loadVenueShipment('c004')">Tongan Concessions</button> -->
+  </div>
+
+
+  <div id="singleVenueShipmentContainer"></div>
+</div>
+
+
+    <!-- Waste Section -->
+<div id="wasteTab" class="accounting-section" data-sec="waste" style="display:none;">
+  <h3>WASTE COMPILE</h3>
+  <button onclick="copyWasteTableToClipboard()">Copy to Excel</button>
+
+  <table id="wasteTable">
+    <thead>
+      <tr>
+        <th>Date</th>
+        <th>Location Code</th>
+        <th>Recipe No.</th>
+        <th>Recipe Description</th>
+        <th>Quantity</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+</div>
+</div>
   <!-- Chat Box -->
-  <div id="chat-box">
-    <div id="chat-messages"></div>
-    <input type="text" id="chat-input" placeholder="Type a message..." />
-    <button id="chat-send">Send</button>
+<div id="chatBox" class="chat-section open">
+  <div id="chatHeader" class="chat-header">
+    <h3>📢 Kitchen Chat - <span id="currentVenueLabel">Main Kitchen</span></h3>
+    <button id="chatToggleBtn" class="chat-toggle-btn">_</button>
   </div>
+
+  <div id="chatMessages" class="chat-messages"></div>
+
+  <div class="chat-input-row">
+    <input id="chatInput" type="text" placeholder="Type your message..." />
+    <button onclick="sendChatMessage()">Send</button>
+  </div>
+</div>
+
+
 
 <script type="module" src="firebaseConfig.js"></script>
 <script type="module" src="script.js"></script>

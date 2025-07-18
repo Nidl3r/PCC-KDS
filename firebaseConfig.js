@@ -1,20 +1,25 @@
-// firebaseConfig.js
-import { initializeApp } from "https://www.gstatic.com/firebasejs/11.9.1/firebase-app.js";
+// ✅ firebaseconfig.js (with FirestoreSettings.cache)
+
+import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-app.js";
+import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-analytics.js";
 import {
-  getFirestore,
+  initializeFirestore,
   collection,
-  onSnapshot,
   doc,
   setDoc,
   getDoc,
-  serverTimestamp,
   addDoc,
+  onSnapshot,
+  serverTimestamp,
+  updateDoc,
   query,
   where,
   getDocs,
-  Timestamp
-} from "https://www.gstatic.com/firebasejs/11.9.1/firebase-firestore.js";
+  Timestamp,
+  orderBy
+} from "https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore.js";
 
+// ✅ Firebase configuration
 const firebaseConfig = {
   apiKey: "AIzaSyCkDeNR98GOSi3D0Co5kGcrdruGaBw31vc",
   authDomain: "pcc-kds-5bee6.firebaseapp.com",
@@ -25,22 +30,29 @@ const firebaseConfig = {
   measurementId: "G-E49YCBZZEQ"
 };
 
-// Initialize Firebase
+// ✅ Initialize Firebase
 const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
+const analytics = getAnalytics(app);
 
-// Export all Firestore tools you need in script.js
+// ✅ Initialize Firestore with cache enabled
+const db = initializeFirestore(app, {
+  localCache: "persistent" // ✅ NEW recommended way to enable offline persistence
+});
+
+// ✅ Export everything needed
 export {
   db,
   collection,
-  onSnapshot,
   doc,
   setDoc,
   getDoc,
-  serverTimestamp,
   addDoc,
+  onSnapshot,
+  serverTimestamp,
+  updateDoc,
   query,
   where,
   getDocs,
-  Timestamp
+  Timestamp,
+  orderBy
 };
