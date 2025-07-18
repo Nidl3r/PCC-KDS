@@ -127,7 +127,7 @@
       <option value="">-- Select Item --</option>
     </select>
 
-    <input id="alohaQty" type="number" min="1" value="1" placeholder="Qty" />
+    <input id="alohaQty" type="number" min="0" placeholder="Qty" />
     <input id="alohaNotes" type="text" placeholder="Notes (e.g. no tomato)" />
     <button onclick="sendAlohaOrder(this)">Send</button>
   </div>
@@ -193,11 +193,25 @@
 
   <!-- ➌ Waste -->
   <div class="aloha-section" data-sec="waste" style="display:none">
-    <h3>Aloha Waste</h3>
-    <div style="margin-bottom: 10px;">
-      <button onclick="sendAllWaste()">Send All Waste</button>
-    </div>
+  <h3>Aloha Waste</h3>
 
+  <!-- Category Filter Dropdown -->
+<div class="order-controls">
+  <label for="aloha-waste-category">
+    Filter by Category:
+    <select id="aloha-waste-category" onchange="filterAlohaWaste()">
+      <option value="">All Categories</option>
+      <option value="Hotfoods">Hotfoods</option>
+      <option value="Bakery">Bakery</option>
+      <option value="Pantry">Pantry</option>
+      <!-- Add more options as needed -->
+    </select>
+  </label>
+
+  <button onclick="sendAllWaste()">Send All Waste</button>
+</div>
+
+  <div class="waste-table-wrapper">
     <table class="waste-table">
       <thead>
         <tr>
@@ -210,6 +224,7 @@
       <tbody></tbody>
     </table>
   </div>
+</div>
 
   <!-- ➍ Returns -->
   <div class="aloha-section returns-section" data-sec="returns" style="display:none">
@@ -258,7 +273,7 @@
       <option value="">-- Select Item --</option>
     </select>
 
-    <input id="ohanaQty" type="number" min="1" value="1" placeholder="Qty" />
+    <input id="ohanaQty" type="number" min="0"  placeholder="Qty" />
     <input id="ohanaNotes" type="text" placeholder="Notes (e.g. no tomato)" />
     <button onclick="sendOhanaOrder(this)">Send</button>
   </div>
@@ -322,25 +337,37 @@
   </div>
 
   <!-- ➌ Waste -->
-  <div class="ohana-section" data-sec="waste" style="display:none">
-    <h3>Ohana Waste</h3>
+ <div class="ohana-section" data-sec="waste" style="display:none">
+  <h3>Ohana Waste</h3>
 
-    <div style="margin-bottom: 10px;">
-      <button onclick="sendAllOhanaWaste()">Send All Waste</button>
-    </div>
+<div class="order-controls">
+  <label for="ohana-waste-category">
+    Filter by Category:
+    <select id="ohana-waste-category" onchange="filterOhanaWaste()">
+      <option value="">All Categories</option>
+      <option value="Hotfoods">Hotfoods</option>
+      <option value="Bakery">Bakery</option>
+      <option value="Pantry">Pantry</option>
+      <!-- Add more categories if needed -->
+    </select>
+  </label>
 
-    <table class="waste-table">
-      <thead>
-        <tr>
-          <th>Item</th>
-          <th>UOM</th>
-          <th>Qty</th>
-          <th>Send</th>
-        </tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-  </div>
+  <button onclick="sendAllOhanaWaste()">Send All Waste</button>
+</div>
+
+
+  <table class="waste-table">
+    <thead>
+      <tr>
+        <th>Item</th>
+        <th>UOM</th>
+        <th>Qty</th>
+        <th>Send</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
 
   <!-- ➍ Returns -->
   <div class="ohana-section returns-section" data-sec="returns" style="display:none">
@@ -388,7 +415,7 @@
       <option value="">-- Select Item --</option>
     </select>
 
-    <input id="gatewayQty" type="number" min="1" value="1" placeholder="Qty" />
+    <input id="gatewayQty" type="number" min="0" placeholder="Qty" />
     <input id="gatewayNotes" type="text" placeholder="Notes (e.g. no tomato)" />
     <button onclick="sendGatewayOrder(this)">Send</button>
   </div>
@@ -451,26 +478,39 @@
   </div>
 
   <!-- ➌ Waste -->
-  <div class="gateway-section" data-sec="waste" style="display:none">
-    <h3>Gateway Waste</h3>
+<div class="gateway-section" data-sec="waste" style="display:none">
+  <h3>Gateway Waste</h3>
 
-    <div style="margin-bottom: 10px;">
-      <button onclick="sendAllGatewayWaste()">Send All Waste</button>
+  <!-- Category Filter Dropdown -->
+ <div class="order-controls">
+  <label for="gateway-waste-category">
+    Filter by Category:
+    <select id="gateway-waste-category" onchange="filterGatewayWaste()">
+      <option value="">All Categories</option>
+      <option value="Hotfoods">Hotfoods</option>
+      <option value="Bakery">Bakery</option>
+      <option value="Pantry">Pantry</option>
+      <!-- Add more categories if needed -->
+    </select>
+  </label>
 
-    </div>
+  <button onclick="sendAllGatewayWaste()">Send All Waste</button>
+</div>
 
-    <table class="waste-table">
-      <thead>
-        <tr>
-          <th>Item</th>
-          <th>UOM</th>
-          <th>Qty</th>
-          <th>Send</th>
-        </tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-  </div>
+
+
+  <table class="waste-table">
+    <thead>
+      <tr>
+        <th>Item</th>
+        <th>UOM</th>
+        <th>Qty</th>
+        <th>Send</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
 
   <!-- ➍ Returns -->
   <div class="gateway-section returns-section" data-sec="returns" style="display:none">

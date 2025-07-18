@@ -11,7 +11,9 @@
 html, body {
   margin: 0;
   padding: 0;
-  height: 100%;
+  height: auto;
+  overflow-x: hidden;
+  overflow-y:auto;
   background: var(--bg);
   color: var(--text);
   font-family: 'Inter', sans-serif;
@@ -97,9 +99,10 @@ input:focus, textarea:focus {
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
-  justify-content: flex-start;
+  justify-content: center; /* ✅ centers the controls */
   margin: 8px 0;
 }
+
 
 .order-controls label {
   display: flex;
@@ -406,4 +409,51 @@ table button {
 
 .save-btn:hover {
   background-color: var(--border); /* Slightly darker gray on hover */
+}
+/* iPads and Tablets (Portrait and Landscape) */
+@media (min-width: 601px) and (max-width: 1024px) {
+  .order-controls {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 12px 16px;
+  }
+
+  .order-controls select,
+  .order-controls input,
+  .order-controls button {
+    font-size: 1.2em;
+    padding: 10px 14px;
+    min-width: 160px;
+  }
+
+  .order-controls input[type="text"] {
+    width: 250px;
+  }
+
+  #viewSelect {
+    font-size: 1.1em;
+    padding: 10px;
+  }
+
+  .area-tabs {
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  table th, table td {
+    font-size: 1rem;
+    padding: 10px;
+  }
+
+  .chat-section h3 {
+    font-size: 18px;
+  }
+
+  .chat-section button,
+  #chatInput {
+    font-size: 16px;
+  }
+}
+body {
+  padding-bottom: 150px; /* Adjust based on height of chat header */
 }

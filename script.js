@@ -643,7 +643,7 @@ async function updateCostSummaryForVenue(venueName) {
   }
 
   // 👥 Get guest count and element IDs
-  let guestCount = 1;
+  let guestCount = 0;
   let guestInputId = "";
   let spentDisplayId = "";
   let costDisplayId = "";
@@ -667,18 +667,24 @@ async function updateCostSummaryForVenue(venueName) {
   }
 
   // 📥 Try to use input value, otherwise fallback to Firestore
-  const guestInput = document.getElementById(guestInputId);
-  const inputValue = guestInput ? Number(guestInput.value) : 0;
+const guestInput = document.getElementById(guestInputId);
 
-  if (inputValue > 0) {
-    guestCount = inputValue;
-  } else {
+if (guestInput) {
+  const rawValue = guestInput.value.trim();
+
+  if (rawValue === "") {
+    // If input is empty, try to get value from Firestore
     const guestSnap = await getDoc(doc(db, "guestCounts", venueName));
-    guestCount = guestSnap.exists() ? guestSnap.data().count : 1;
-    if (guestInput) guestInput.value = guestCount;
+    guestCount = guestSnap.exists() ? guestSnap.data().count : 0;
+    // Do NOT set guestInput.value — let it stay blank
+  } else {
+    const parsedValue = Number(rawValue);
+    guestCount = parsedValue > 0 ? parsedValue : 1; // fallback to 1 if invalid or 0
   }
+}
 
-  const costPerGuest = totalSpent / guestCount;
+const costPerGuest = guestCount > 0 ? totalSpent / guestCount : 0;
+
 
   // 💰 Update cost display
   document.getElementById(spentDisplayId).textContent = totalSpent.toFixed(2);
@@ -1347,10 +1353,11 @@ row.remove();
 
 //**WASTE aloha */
 window.loadAlohaWaste = async function () {
-  const tableBody = document.querySelector(".waste-table tbody");
+  const tableBody = document.querySelector(".aloha-section[data-sec='waste'] .waste-table tbody");
   tableBody.innerHTML = "";
 
-
+  // 🏷️ Get selected category from dropdown (converted to lowercase for comparison)
+  const selectedCategory = document.getElementById("aloha-waste-category")?.value?.toLowerCase() || "";
 
   // 🔁 Load all Aloha recipes
   const recipesRef = collection(db, "recipes");
@@ -1358,29 +1365,36 @@ window.loadAlohaWaste = async function () {
   const snapshot = await getDocs(q);
   const recipes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-console.log("📦 Loaded Aloha recipes:", snapshot.size);
- 
+  console.log("📦 Loaded Aloha recipes:", snapshot.size);
+
   window.alohaWasteRecipeList = recipes;
 
   recipes.forEach(recipe => {
+    // 🛑 If filter is active and category doesn't match, skip
+    const recipeCategory = (recipe.category || "").toLowerCase();
+    if (selectedCategory && recipeCategory !== selectedCategory) return;
+
     const row = document.createElement("tr");
     row.dataset.recipeId = recipe.id;
 
-  row.innerHTML = `
-  <td>${recipe.description}</td>
-  <td>${recipe.uom || "ea"}</td>
-  <td>
-    <span class="waste-total">0</span>
-    <input class="waste-input" type="number" min="0" value="0" style="width: 60px; margin-left: 6px;" />
-    <button onclick="addToWasteQty(this)" style="margin-left: 6px;">Add</button>
-  </td>
-  <td><button onclick="sendSingleWaste(this, '${recipe.id}')">Send</button></td>
-`;
-
+    row.innerHTML = `
+      <td>${recipe.description}</td>
+      <td>${recipe.uom || "ea"}</td>
+      <td>
+        <span class="waste-total">0</span>
+        <input class="waste-input" type="number" min="0" value="0" style="width: 60px; margin-left: 6px;" />
+        <button onclick="addToWasteQty(this)" style="margin-left: 6px;">Add</button>
+      </td>
+      <td><button onclick="sendSingleWaste(this, '${recipe.id}')">Send</button></td>
+    `;
 
     tableBody.appendChild(row);
   });
 };
+window.filterAlohaWaste = function () {
+  loadAlohaWaste();
+};
+
 
 window.addToWasteQty = function (button) {
   const row = button.closest("tr");
@@ -2099,10 +2113,13 @@ function renderGatewayTable(orders) {
 
 // 🔁 Load Gateway Waste Items
 window.loadGatewayWaste = async function () {
-  const tableBody = document.querySelector("#gateway .waste-table tbody");
+  const tableBody = document.querySelector(".gateway-section[data-sec='waste'] .waste-table tbody");
   if (!tableBody) return;
 
   tableBody.innerHTML = "";
+
+  // 🏷️ Get selected category from dropdown (lowercased)
+  const selectedCategory = document.getElementById("gateway-waste-category")?.value?.toLowerCase() || "";
 
   // 🔁 Load all Gateway recipes
   const recipesRef = collection(db, "recipes");
@@ -2115,6 +2132,9 @@ window.loadGatewayWaste = async function () {
   window.gatewayWasteRecipeList = recipes;
 
   recipes.forEach(recipe => {
+    const recipeCategory = (recipe.category || "").toLowerCase();
+    if (selectedCategory && recipeCategory !== selectedCategory) return;
+
     const row = document.createElement("tr");
     row.dataset.recipeId = recipe.id;
 
@@ -2132,6 +2152,10 @@ window.loadGatewayWaste = async function () {
     tableBody.appendChild(row);
   });
 };
+window.filterGatewayWaste = function () {
+  loadGatewayWaste();
+};
+
 
 // 🔘 Single waste sender for Gateway
 window.sendSingleGatewayWaste = async function (button, recipeId) {
@@ -2850,8 +2874,11 @@ window.receiveConcessionItem = async function (recipeId, qty, button) {
 //OHANA WASTE
 
 window.loadOhanaWaste = async function () {
-  const tableBody = document.querySelector("#ohana .waste-table tbody");
+  const tableBody = document.querySelector(".ohana-section[data-sec='waste'] .waste-table tbody");
   tableBody.innerHTML = "";
+
+  // 🏷️ Get selected category from dropdown (lowercased)
+  const selectedCategory = document.getElementById("ohana-waste-category")?.value?.toLowerCase() || "";
 
   const recipesRef = collection(db, "recipes");
   const q = query(recipesRef, where("venueCodes", "array-contains", "b002"));
@@ -2863,6 +2890,9 @@ window.loadOhanaWaste = async function () {
   window.ohanaWasteRecipeList = recipes;
 
   recipes.forEach(recipe => {
+    const recipeCategory = (recipe.category || "").toLowerCase();
+    if (selectedCategory && recipeCategory !== selectedCategory) return;
+
     const row = document.createElement("tr");
     row.dataset.recipeId = recipe.id;
 
@@ -2880,6 +2910,11 @@ window.loadOhanaWaste = async function () {
     tableBody.appendChild(row);
   });
 };
+
+window.filterOhanaWaste = function () {
+  loadOhanaWaste();
+};
+
 
 window.sendAllOhanaWaste = async function () {
   const rows = document.querySelectorAll("#ohana .waste-table tbody tr");
