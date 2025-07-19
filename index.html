@@ -127,7 +127,7 @@
       <option value="">-- Select Item --</option>
     </select>
 
-    <input id="alohaQty" type="number" min="0" placeholder="Qty" />
+    <input id="alohaQty" type="number" min="1" value="1" placeholder="1" />
     <input id="alohaNotes" type="text" placeholder="Notes (e.g. no tomato)" />
     <button onclick="sendAlohaOrder(this)">Send</button>
   </div>
@@ -273,7 +273,7 @@
       <option value="">-- Select Item --</option>
     </select>
 
-    <input id="ohanaQty" type="number" min="0"  placeholder="Qty" />
+    <input id="ohanaQty" type="number" min="1" value="1" placeholder="1" />
     <input id="ohanaNotes" type="text" placeholder="Notes (e.g. no tomato)" />
     <button onclick="sendOhanaOrder(this)">Send</button>
   </div>
@@ -415,7 +415,7 @@
       <option value="">-- Select Item --</option>
     </select>
 
-    <input id="gatewayQty" type="number" min="0" placeholder="Qty" />
+    <input id="gatewayQty" type="number" min="1" value="1" placeholder="1" />
     <input id="gatewayNotes" type="text" placeholder="Notes (e.g. no tomato)" />
     <button onclick="sendGatewayOrder(this)">Send</button>
   </div>
@@ -605,18 +605,11 @@
     <h2>Main Kitchen</h2>
 
     <!-- Tabs -->
-    <!-- Tabs -->
-<div class="area-tabs">
-  <button class="area-tab" data-area="mainkitchen" data-sec="order" onclick="showKitchenSection('order')">Add-Ons</button>
-  <button class="area-tab" data-area="mainkitchen" data-sec="starting" onclick="showKitchenSection('starting')">Starting Pars</button>
-  <button class="area-tab" data-area="mainkitchen" data-sec="waste" onclick="showKitchenSection('waste')">Waste</button>
-  <button class="area-tab" data-area="mainkitchen" data-sec="returns" onclick="showKitchenSection('returns')">Returns</button>
-</div>
-
-
-    <!-- Send Selected Button (for Starting Pars) -->
-    <div id="mainKitchenControls" class="order-controls" style="display: none;">
-      <button onclick="sendSelected(this)">Send Selected</button>
+    <div class="area-tabs">
+      <button class="area-tab" data-area="mainkitchen" data-sec="order" onclick="showKitchenSection('order')">Add-Ons</button>
+      <button class="area-tab" data-area="mainkitchen" data-sec="starting" onclick="showKitchenSection('starting')">Starting Pars</button>
+      <button class="area-tab" data-area="mainkitchen" data-sec="waste" onclick="showKitchenSection('waste')">Waste</button>
+      <button class="area-tab" data-area="mainkitchen" data-sec="returns" onclick="showKitchenSection('returns')">Returns</button>
     </div>
   </div>
 
@@ -642,11 +635,11 @@
     </table>
   </div>
 
-  <!-- 🥄 Starting Pars Section -->
- <div class="main-kitchen-section starting-section" data-sec="starting" style="display: none;">
-
+<!-- 🥄 Starting Pars Section -->
+<div class="main-kitchen-section starting-section" data-sec="starting" style="display: none;">
   <h3>Starting Pars</h3>
-  <div class="order-controls filter-controls" style="margin: 8px 0;">
+
+  <div class="order-controls filter-controls" style="margin: 8px 0; display: flex; flex-wrap: wrap; align-items: center; gap: 12px;">
     <label>
       Venue:
       <select id="starting-filter-venue">
@@ -657,6 +650,7 @@
         <option value="Concessions">Concessions</option>
       </select>
     </label>
+
     <label>
       Station:
       <select id="starting-filter-station">
@@ -682,6 +676,7 @@
     <tbody></tbody>
   </table>
 </div>
+
 
 
 <!-- ♻️ Main Kitchen Waste Section -->
@@ -761,76 +756,107 @@
   <h2>Stations</h2>
 
   <!-- Navigation Tabs -->
-  <div class="station-tabs">
-    <button onclick="showStationTab('Wok')">Wok</button>
-    <button onclick="showStationTab('Fryer')">Fryer</button>
-    <button onclick="showStationTab('Grill')">Grill</button>
-    <button onclick="showStationTab('Oven')">Oven</button>
-    <button onclick="showStationTab('Pantry')">Pantry</button>
-    <button onclick="showStationTab('Pastry')">Pastry</button>
-  </div>
-
-  <!-- Station Tables -->
-  <div id="WokSection" class="station-section">
-    <h3>Wok Station</h3>
-    <table id="WokTable">
-      <thead>
-        <tr><th>Time</th><th>Due</th><th>Area</th><th>Item</th><th>Qty</th><th>Notes</th><th>Complete</th></tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-  </div>
-
-  <div id="FryerSection" class="station-section" style="display:none">
-    <h3>Fryer Station</h3>
-    <table id="FryerTable">
-      <thead>
-        <tr><th>Time</th><th>Due</th><th>Area</th><th>Item</th><th>Qty</th><th>Notes</th><th>Complete</th></tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-  </div>
-
-  <div id="GrillSection" class="station-section" style="display:none">
-    <h3>Grill Station</h3>
-    <table id="GrillTable">
-      <thead>
-        <tr><th>Time</th><th>Due</th><th>Area</th><th>Item</th><th>Qty</th><th>Notes</th><th>Complete</th></tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-  </div>
-
-  <div id="OvenSection" class="station-section" style="display:none">
-    <h3>Oven Station</h3>
-    <table id="OvenTable">
-      <thead>
-        <tr><th>Time</th><th>Due</th><th>Area</th><th>Item</th><th>Qty</th><th>Notes</th><th>Complete</th></tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-  </div>
-
-  <div id="PantrySection" class="station-section" style="display:none">
-    <h3>Pantry Station</h3>
-    <table id="PantryTable">
-      <thead>
-        <tr><th>Time</th><th>Due</th><th>Area</th><th>Item</th><th>Qty</th><th>Notes</th><th>Complete</th></tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-  </div>
-
-  <div id="PastrySection" class="station-section" style="display:none">
-    <h3>Pastry Station</h3>
-    <table id="PastryTable">
-      <thead>
-        <tr><th>Time</th><th>Due</th><th>Area</th><th>Item</th><th>Qty</th><th>Notes</th><th>Complete</th></tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-  </div>
+<div class="station-tabs">
+  <button onclick="showStationTab('Wok')">Wok</button>
+  <button onclick="showStationTab('Fryer')">Fryer</button>
+  <button onclick="showStationTab('Grill')">Grill</button>
+  <button onclick="showStationTab('Oven')">Oven</button>
+  <button onclick="showStationTab('Pantry')">Pantry</button>
+  <button onclick="showStationTab('Pastry')">Pastry</button>
 </div>
+
+<!-- Station Tables -->
+
+<!-- Wok Section -->
+<div id="WokSection" class="station-section">
+  <h3>Wok Station</h3>
+
+  
+  <table id="WokTable">
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Due</th>
+        <th>Area</th>
+        <th>Item</th>
+        <th>Notes</th>
+        <th>Qty</th>
+        <th>Send Qty</th>
+        <th>UOM</th>
+        <th>Send</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+<!-- Fryer Section -->
+<div id="FryerSection" class="station-section" style="display:none">
+  <h3>Fryer Station</h3>
+  <table id="FryerTable">
+    <thead>
+      <tr><th>Time</th><th>Due</th><th>Area</th><th>Item</th><th>Qty</th><th>Notes</th><th>Complete</th></tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+<!-- Grill Section -->
+<div id="GrillSection" class="station-section" style="display:none">
+  <h3>Grill Station</h3>
+
+
+  <table id="GrillTable">
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Due</th>
+        <th>Area</th>
+        <th>Item</th>
+        <th>Notes</th>
+        <th>Qty</th>
+        <th>Send Qty</th>
+        <th>UOM</th>
+        <th>Send</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+<!-- Oven Section -->
+<div id="OvenSection" class="station-section" style="display:none">
+  <h3>Oven Station</h3>
+  <table id="OvenTable">
+    <thead>
+      <tr><th>Time</th><th>Due</th><th>Area</th><th>Item</th><th>Qty</th><th>Notes</th><th>Complete</th></tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+<!-- Pantry Section -->
+<div id="PantrySection" class="station-section" style="display:none">
+  <h3>Pantry Station</h3>
+  <table id="PantryTable">
+    <thead>
+      <tr><th>Time</th><th>Due</th><th>Area</th><th>Item</th><th>Qty</th><th>Notes</th><th>Complete</th></tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+<!-- Pastry Section -->
+<div id="PastrySection" class="station-section" style="display:none">
+  <h3>Pastry Station</h3>
+  <table id="PastryTable">
+    <thead>
+      <tr><th>Time</th><th>Due</th><th>Area</th><th>Item</th><th>Qty</th><th>Notes</th><th>Complete</th></tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
+
 
 <!-- 🔐 Accounting screen with passcode protection -->
 <div class="screen" id="accounting" style="display:none;">

@@ -431,6 +431,8 @@ window.showKitchenSection = function (sectionId) {
   const sectionToShow = mainKitchen.querySelector(`.${sectionId}-section`);
   if (sectionToShow) {
     sectionToShow.style.display = "block";
+  } else {
+    console.warn(`⚠️ Section .${sectionId}-section not found in #main-kitchen`);
   }
 
   // Highlight active tab
@@ -439,9 +441,11 @@ window.showKitchenSection = function (sectionId) {
     tab.classList.toggle("active", tab.dataset.sec === sectionId);
   });
 
-  // Show send controls only for 'starting'
-  document.getElementById("mainKitchenControls").style.display =
-    sectionId === "starting" ? "flex" : "none";
+  // Show send controls only for 'starting' if element exists
+  const controls = document.getElementById("mainKitchenControls");
+  if (controls) {
+    controls.style.display = sectionId === "starting" ? "flex" : "none";
+  }
 
   // Load section-specific data
   if (sectionId === "starting") {
@@ -452,8 +456,6 @@ window.showKitchenSection = function (sectionId) {
     loadMainKitchenReturns();
   }
 };
-
-
 
 
 //**ALOHA*/
@@ -1047,8 +1049,8 @@ function renderStationTable(stationName, orders) {
   orders.sort((a, b) => a.timestamp?.toMillis?.() - b.timestamp?.toMillis?.());
 
   orders.forEach(order => {
-    // 🚫 Skip orders that are no longer open
-    if (order.status === "Ready to Send" || order.status === "completed") return;
+    // Skip closed or sent orders
+    if (["Ready to Send", "completed", "sent"].includes(order.status)) return;
 
     const row = document.createElement("tr");
 
@@ -1059,21 +1061,115 @@ function renderStationTable(stationName, orders) {
     const isLate = dueTime < now;
 
     if (isLate) {
-      row.style.backgroundColor = "rgba(255, 0, 0, 0.15)"; // same as Aloha
+      row.style.backgroundColor = "rgba(255, 0, 0, 0.15)";
     }
 
-    row.innerHTML = `
-      <td>${createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</td>
-      <td>${dueTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</td>
-      <td>${order.venue || ""}</td>
-      <td>${order.item}</td>
-      <td>${order.qty}</td>
-      <td>${order.notes || ""}</td>
-      <td><button onclick="markStationOrderComplete('${order.id}')">✓</button></td>
-    `;
+    // Create cells
+    const timeCell = document.createElement("td");
+    timeCell.textContent = createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    const dueCell = document.createElement("td");
+    dueCell.textContent = dueTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    const venueCell = document.createElement("td");
+    venueCell.textContent = order.venue || "";
+
+    const itemCell = document.createElement("td");
+    itemCell.textContent = order.item;
+
+    const notesCell = document.createElement("td");
+    notesCell.textContent = order.notes || "";
+
+    const qtyCell = document.createElement("td");
+    qtyCell.textContent = order.qty || 1;
+
+    // Send Qty input
+    const sendQtyInput = document.createElement("input");
+    sendQtyInput.type = "number";
+    sendQtyInput.min = 0;
+    sendQtyInput.placeholder = "0";
+    sendQtyInput.style.width = "60px";
+
+    const sendQtyCell = document.createElement("td");
+    sendQtyCell.appendChild(sendQtyInput);
+
+    // UOM Cell
+    const uomCell = document.createElement("td");
+    uomCell.textContent = order.uom || "ea";
+
+    // Send Button
+    const sendButton = document.createElement("button");
+    sendButton.textContent = "Send";
+    sendButton.onclick = () => {
+      const sendQty = parseFloat(sendQtyInput.value);
+      if (!sendQty || sendQty <= 0) return alert("Enter valid send quantity");
+
+      sendStationAddonOrder(stationName, {
+        ...order,
+        sendQty
+      });
+    };
+
+    const sendCell = document.createElement("td");
+    sendCell.appendChild(sendButton);
+
+    // Append all cells to row
+    row.append(
+      timeCell,
+      dueCell,
+      venueCell,
+      itemCell,
+      notesCell,
+      qtyCell,
+      sendQtyCell,
+      uomCell,
+      sendCell
+    );
 
     tableBody.appendChild(row);
   });
+}
+
+
+async function sendStationAddonOrder(stationName, order) {
+  try {
+    const { id, recipeNo, sendQty, venue } = order;
+
+    // ✅ Ensure lowercase for recipeNo
+    const recipeId = (recipeNo || "").toLowerCase();
+
+    // 1. Get recipe doc to retrieve cost
+    const recipeRef = doc(db, "recipes", recipeId);
+    const recipeSnap = await getDoc(recipeRef);
+
+    if (!recipeSnap.exists()) {
+      return alert("Recipe not found.");
+    }
+
+    const recipeData = recipeSnap.data();
+    const costPerUOM = recipeData.cost || 0;
+
+    // 2. Calculate total cost
+    const totalCost = parseFloat((sendQty * costPerUOM).toFixed(4));
+
+    // 3. Build update object
+    const updateData = {
+      sendQty,
+      status: "sent",
+      sentAt: serverTimestamp(),
+      totalCost,
+      type: "addon",
+    };
+
+    // 4. Update the original order in Firestore
+    const orderRef = doc(db, "orders", id);
+    await updateDoc(orderRef, updateData);
+
+    alert("Order sent successfully.");
+  } catch (error) {
+    console.error("Failed to send order:", error);
+    alert("Error sending order.");
+  }
 }
 
 
@@ -1265,10 +1361,16 @@ window.addToSendQty = function (button) {
   const currentQty = Number(totalSpan.textContent);
 
   if (!isNaN(addQty) && addQty > 0) {
-    totalSpan.textContent = currentQty + addQty;
+    const newTotal = currentQty + addQty;
+    totalSpan.textContent = newTotal;
     input.value = "0";
+    input.focus();
+    console.log(`📦 Updated Send Qty: ${currentQty} + ${addQty} = ${newTotal}`);
+  } else {
+    console.warn("⚠️ Enter a valid number greater than 0");
   }
 };
+
 
 document.getElementById("starting-filter-venue").addEventListener("change", () => {
   renderMainKitchenPars();
@@ -1276,7 +1378,6 @@ document.getElementById("starting-filter-venue").addEventListener("change", () =
 document.getElementById("starting-filter-station").addEventListener("change", () => {
   renderMainKitchenPars();
 });
-
 
 
 window.sendSingleStartingPar = async function (recipeId, venue, button) {
@@ -1295,59 +1396,118 @@ window.sendSingleStartingPar = async function (recipeId, venue, button) {
   }
 
   const today = getTodayDate();
-  const ordersRef = collection(db, "orders");
 
-const orderData = {
-  type: "starting-par",
-  venue,
-  recipeId,
-  qty: sendQty,
-  date: today,
-  status: "sent"  // ✅ Mark as sent
+  // 1. Get today's guest count
+  const guestCountDoc = await getDoc(doc(db, "guestCounts", today));
+  const guestCount = guestCountDoc.exists() ? guestCountDoc.data()[venue] : 0;
+
+  // 2. Get recipe info
+  const recipeSnap = await getDoc(doc(db, "recipes", recipeId));
+  if (!recipeSnap.exists()) {
+    console.error("❌ Recipe not found");
+    return;
+  }
+
+  const recipeData = recipeSnap.data();
+  const panWeight = Number(recipeData.panWeight || 0);
+  const costPerLb = Number(recipeData.cost || 0);
+  const pans = recipeData.pars?.[venue]?.[guestCount] || 0;
+
+  // 3. Calculate net weight and total cost
+  const netWeight = Math.max(0, sendQty - (pans * panWeight));
+  const totalCost = netWeight * costPerLb;
+
+  const orderData = {
+    type: "starting-par",
+    venue,
+    recipeId,
+    qty: sendQty,
+    pans,
+    panWeight,
+    netWeight,
+    costPerLb,
+    totalCost,
+    date: today,
+    status: "sent"
+  };
+
+  await addDoc(collection(db, "orders"), orderData);
+  row.remove();
+
+  console.log(`✅ Sent ${sendQty} lbs for ${recipeId} to ${venue} → Net: ${netWeight} lbs, Cost: $${totalCost.toFixed(2)}`);
 };
-
-
-  // ✅ Only add to orders — no startingPars or productionLog
-  await addDoc(ordersRef, orderData);
-
-  // UI Feedback
- // ✅ Remove row from the table after sending
-row.remove();
-
-
-  console.log(`✅ Sent ${sendQty} for ${recipeId} to ${venue}`);
-};
-
 
 window.sendSelected = async function () {
+  console.log("🚀 Send Selected called");
+
   const today = getTodayDate();
-  const ordersRef = collection(db, "orders");
+  const guestCountDoc = await getDoc(doc(db, "guestCounts", today));
+  const guestCounts = guestCountDoc.exists() ? guestCountDoc.data() : {};
+
   const rows = document.querySelectorAll("#startingParsTable tbody tr");
+  console.log(`🔎 Found ${rows.length} rows`);
 
   for (const row of rows) {
-    const recipeId = row.querySelector("button").getAttribute("onclick").match(/'([^']+)'/)[1];
-    const venue = row.querySelector("button").getAttribute("onclick").match(/, '([^']+)'/)[1];
     const totalSpan = row.querySelector(".total-send-qty");
+    const sendQty = Number(totalSpan?.textContent);
 
-    const sendQty = Number(totalSpan.textContent);
-    if (isNaN(sendQty) || sendQty <= 0) continue;
+    console.log("➡️ Checking row:");
+    console.log("   - Qty span:", totalSpan?.textContent);
+    console.log("   - Parsed Qty:", sendQty);
+
+    if (isNaN(sendQty) || sendQty <= 0) {
+      console.warn("⏭️ Skipping row: invalid or 0 qty");
+      continue;
+    }
+
+    const button = row.querySelector("button");
+    const match = button?.getAttribute("onclick")?.match(/'([^']+)', '([^']+)'/);
+    if (!match) {
+      console.warn("⚠️ Could not extract recipeId/venue from button");
+      continue;
+    }
+
+    const recipeId = match[1];
+    const venue = match[2];
+    const guestCount = guestCounts[venue] || 0;
+
+    console.log(`📦 Preparing to send ${sendQty} lbs for ${recipeId} (${venue})`);
+
+    const recipeSnap = await getDoc(doc(db, "recipes", recipeId));
+    if (!recipeSnap.exists()) {
+      console.warn(`⚠️ Recipe ${recipeId} not found in Firestore`);
+      continue;
+    }
+
+    const recipeData = recipeSnap.data();
+    const panWeight = Number(recipeData.panWeight || 0);
+    const costPerLb = Number(recipeData.cost || 0);
+    const pans = recipeData.pars?.[venue]?.[guestCount.toString()] || 0;
+
+    const netWeight = Math.max(0, sendQty - (pans * panWeight));
+    const totalCost = netWeight * costPerLb;
 
     const orderData = {
       type: "starting-par",
       venue,
       recipeId,
       qty: sendQty,
-      date: today
+      pans,
+      panWeight,
+      netWeight,
+      costPerLb,
+      totalCost,
+      date: today,
+      status: "sent"
     };
 
-    await addDoc(ordersRef, orderData);
+    await addDoc(collection(db, "orders"), orderData);
+    console.log(`✅ Sent ${sendQty} lbs for ${recipeId} → Net: ${netWeight} lbs, Cost: $${totalCost.toFixed(2)}`);
 
-   // ✅ Remove row from table after sending
-row.remove();
-
-
-    console.log(`✅ Sent ${sendQty} for ${recipeId} to ${venue}`);
+    row.remove();
   }
+
+  console.log("🏁 Finished sending all valid rows.");
 };
 
 
@@ -1855,37 +2015,46 @@ async function loadMainKitchenReturns() {
     const snapshot = await getDocs(collection(db, "returns"));
     const recipeMap = new Map();
 
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today);
+    tomorrow.setDate(today.getDate() + 1);
+
     for (const docSnap of snapshot.docs) {
       const returnData = docSnap.data();
 
-      // Only show if status is "returned"
+      // Only process if status is "returned"
       if (returnData.status !== "returned") continue;
+
+      // Only include if returnedAt is today
+      const returnedAt = returnData.returnedAt?.toDate();
+      if (!returnedAt || returnedAt < today || returnedAt >= tomorrow) continue;
 
       const returnId = docSnap.id;
       const recipeId = returnData.recipeId;
       const qty = returnData.qty;
 
-      // Get recipe name (from cache or Firestore)
+      // Get recipe name from cache or fetch from Firestore
       let recipeName = recipeMap.get(recipeId);
       if (!recipeName) {
         const recipeDoc = await getDoc(doc(db, "recipes", recipeId));
-recipeName = recipeDoc.exists() ? recipeDoc.data().description : "Unknown Item";
-
+        recipeName = recipeDoc.exists() ? recipeDoc.data().description : "Unknown Item";
         recipeMap.set(recipeId, recipeName);
       }
 
-     const row = document.createElement("tr");
-row.setAttribute("data-return-id", returnId);
-row.setAttribute("data-venue", returnData.venue);
+      const row = document.createElement("tr");
+      row.setAttribute("data-return-id", returnId);
+      row.setAttribute("data-venue", returnData.venue);
+      row.setAttribute("data-returned-at", returnedAt.toISOString());
 
-row.innerHTML = `
-  <td>${recipeName}</td>
-  <td>${returnData.venue}</td>
-  <td>${qty}</td>
-  <td><button onclick="receiveMainReturn('${returnId}', this)">Receive</button></td>
-`;
-tableBody.appendChild(row);
+      row.innerHTML = `
+        <td>${recipeName}</td>
+        <td>${returnData.venue}</td>
+        <td>${qty}</td>
+        <td><button onclick="receiveMainReturn('${returnId}', this)">Receive</button></td>
+      `;
 
+      tableBody.appendChild(row);
     }
 
     console.log(`✅ Rendered ${tableBody.children.length} return rows`);
@@ -1947,10 +2116,21 @@ window.filterMainKitchenReturns = function () {
   const selectedVenue = document.getElementById("mainReturnsVenueFilter").value;
   const rows = document.querySelectorAll(".main-returns-table tbody tr");
 
+  const today = new Date();
+  today.setHours(0, 0, 0, 0); // Start of today
+
+  const tomorrow = new Date(today);
+  tomorrow.setDate(today.getDate() + 1); // Start of tomorrow
+
   rows.forEach(row => {
     const venue = row.getAttribute("data-venue");
-    const matches = !selectedVenue || venue === selectedVenue;
-    row.style.display = matches ? "" : "none";
+    const returnedAtAttr = row.getAttribute("data-returned-at");
+    const returnedAt = new Date(returnedAtAttr);
+
+    const isToday = returnedAt >= today && returnedAt < tomorrow;
+    const matchesVenue = !selectedVenue || venue === selectedVenue;
+
+    row.style.display = (isToday && matchesVenue) ? "" : "none";
   });
 };
 
