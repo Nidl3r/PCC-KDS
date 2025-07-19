@@ -610,6 +610,7 @@
       <button class="area-tab" data-area="mainkitchen" data-sec="starting" onclick="showKitchenSection('starting')">Starting Pars</button>
       <button class="area-tab" data-area="mainkitchen" data-sec="waste" onclick="showKitchenSection('waste')">Waste</button>
       <button class="area-tab" data-area="mainkitchen" data-sec="returns" onclick="showKitchenSection('returns')">Returns</button>
+      <button class="area-tab" data-area="mainkitchen" data-sec="lunch" onclick="showKitchenSection('lunch')">Lunch</button>
     </div>
   </div>
 
@@ -635,123 +636,129 @@
     </table>
   </div>
 
-<!-- 🥄 Starting Pars Section -->
-<div class="main-kitchen-section starting-section" data-sec="starting" style="display: none;">
-  <h3>Starting Pars</h3>
-
-  <div class="order-controls filter-controls" style="margin: 8px 0; display: flex; flex-wrap: wrap; align-items: center; gap: 12px;">
-    <label>
-      Venue:
-      <select id="starting-filter-venue">
-        <option value="">All</option>
-        <option value="Aloha">Aloha</option>
-        <option value="Ohana">Ohana</option>
-        <option value="Gateway">Gateway</option>
-        <option value="Concessions">Concessions</option>
-      </select>
-    </label>
-
-    <label>
-      Station:
-      <select id="starting-filter-station">
-        <option value="">All</option>
-        <option value="Hotfoods">Hotfoods</option>
-        <option value="Bakery">Bakery</option>
-        <option value="Pantry">Pantry</option>
-      </select>
-    </label>
+  <!-- 🥄 Starting Pars Section -->
+  <div class="main-kitchen-section starting-section" data-sec="starting" style="display: none;">
+    <h3>Starting Pars</h3>
+    <div class="order-controls filter-controls" style="margin: 8px 0; display: flex; flex-wrap: wrap; align-items: center; gap: 12px;">
+      <label>
+        Venue:
+        <select id="starting-filter-venue">
+          <option value="">All</option>
+          <option value="Aloha">Aloha</option>
+          <option value="Ohana">Ohana</option>
+          <option value="Gateway">Gateway</option>
+          <option value="Concessions">Concessions</option>
+        </select>
+      </label>
+      <label>
+        Station:
+        <select id="starting-filter-station">
+          <option value="">All</option>
+          <option value="Hotfoods">Hotfoods</option>
+          <option value="Bakery">Bakery</option>
+          <option value="Pantry">Pantry</option>
+        </select>
+      </label>
+    </div>
+    <table id="startingParsTable">
+      <thead>
+        <tr>
+          <th>Area</th>
+          <th>Item</th>
+          <th>Par Qty</th>
+          <th>UOM</th>
+          <th>Send Qty</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
   </div>
 
-  <table id="startingParsTable">
-    <thead>
-      <tr>
-        <th>Area</th>
-        <th>Item</th>
-        <th>Par Qty</th>
-        <th>UOM</th>
-        <th>Send Qty</th>
-        <th>Action</th>
-      </tr>
-    </thead>
-    <tbody></tbody>
-  </table>
-</div>
-
-
-
-<!-- ♻️ Main Kitchen Waste Section -->
-<div class="main-kitchen-section waste-section" data-sec="waste" style="display:none">
-  <h3>Main Kitchen Waste</h3>
-
-  <!-- 🔍 Filters -->
-  <div style="margin-bottom: 10px;">
-    <input
-      id="mainWasteSearch"
-      type="text"
-      placeholder="Search item..."
-      oninput="filterMainWaste()"
-      style="margin-right: 10px; padding: 4px;"
-    />
-
-    <select id="mainWasteCategory" onchange="filterMainWaste()" style="padding: 4px;">
-      <option value="">All Categories</option>
-      <option value="bakery">Bakery</option>
-      <option value="hotfoods">Hotfoods</option>
-      <option value="pantry">Pantry</option>
-      <option value="ingredients">Ingredients</option>
-    </select>
-
-    <button onclick="sendAllMainWaste()" style="margin-left: 12px;">Send All Waste</button>
+  <!-- ♻️ Waste Section -->
+  <div class="main-kitchen-section waste-section" data-sec="waste" style="display:none">
+    <h3>Main Kitchen Waste</h3>
+    <div style="margin-bottom: 10px;">
+      <input id="mainWasteSearch" type="text" placeholder="Search item..." oninput="filterMainWaste()" style="margin-right: 10px; padding: 4px;" />
+      <select id="mainWasteCategory" onchange="filterMainWaste()" style="padding: 4px;">
+        <option value="">All Categories</option>
+        <option value="bakery">Bakery</option>
+        <option value="hotfoods">Hotfoods</option>
+        <option value="pantry">Pantry</option>
+        <option value="ingredients">Ingredients</option>
+      </select>
+      <button onclick="sendAllMainWaste()" style="margin-left: 12px;">Send All Waste</button>
+    </div>
+    <table class="main-waste-table">
+      <thead>
+        <tr>
+          <th>Item</th>
+          <th>UOM</th>
+          <th>Qty</th>
+          <th>Send</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
   </div>
 
-  <!-- 📦 Waste Table -->
-  <table class="main-waste-table">
-    <thead>
-      <tr>
-        <th>Item</th>
-        <th>UOM</th>
-        <th>Qty</th>
-        <th>Send</th>
-      </tr>
-    </thead>
-    <tbody></tbody>
-  </table>
+  <!-- 🔁 Returns Section -->
+  <div class="main-kitchen-section returns-section" data-sec="returns" style="display: none;">
+    <h3>Main Kitchen Returns</h3>
+    <div style="margin-bottom: 10px;">
+      <label>
+        Filter by Venue:
+        <select id="mainReturnsVenueFilter" onchange="filterMainKitchenReturns()" style="padding: 4px;">
+          <option value="">All Venues</option>
+          <option value="Aloha">Aloha</option>
+          <option value="Ohana">Ohana</option>
+          <option value="Gateway">Gateway</option>
+          <option value="Concession">Concession</option>
+        </select>
+      </label>
+    </div>
+    <table class="main-returns-table">
+      <thead>
+        <tr>
+          <th>Item</th>
+          <th>Venue</th>
+          <th>Qty</th>
+          <th>Receive</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <!-- 🥗 Lunch Section -->
+  <div class="main-kitchen-section lunch-section" data-sec="lunch" style="display: none;">
+    <h3>Main Kitchen Lunch</h3>
+    <div style="margin-bottom: 10px;">
+      <input id="mainLunchSearch" type="text" placeholder="Search item..." oninput="filterMainLunch()" style="margin-right: 10px; padding: 4px;" />
+      <select id="mainLunchCategory" onchange="filterMainLunch()" style="padding: 4px;">
+        <option value="">All Categories</option>
+        <option value="bakery">Bakery</option>
+        <option value="hotfoods">Hotfoods</option>
+        <option value="pantry">Pantry</option>
+        <option value="ingredients">Ingredients</option>
+      </select>
+      <button onclick="sendAllMainLunch()" style="margin-left: 12px;">Send All Lunch</button>
+    </div>
+    <table class="main-lunch-table">
+      <thead>
+        <tr>
+          <th>Item</th>
+          <th>UOM</th>
+          <th>Qty</th>
+          <th>Send</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
 </div>
 
 
-
-<!-- ♻️ Main Kitchen Returns Section -->
-<div class="main-kitchen-section returns-section" data-sec="returns" style="display: none;">
-  <h3>Main Kitchen Returns</h3>
-  <!-- 🔍 Venue Filter -->
-<div style="margin-bottom: 10px;">
-  <label>
-    Filter by Venue:
-    <select id="mainReturnsVenueFilter" onchange="filterMainKitchenReturns()" style="padding: 4px;">
-      <option value="">All Venues</option>
-      <option value="Aloha">Aloha</option>
-      <option value="Ohana">Ohana</option>
-      <option value="Gateway">Gateway</option>
-      <option value="Concession">Concession</option>
-    </select>
-  </label>
-</div>
-
-  <table class="main-returns-table">
-    <thead>
-  <tr>
-    <th>Item</th>
-    <th>Venue</th>
-    <th>Qty</th>
-    <th>Receive</th>
-  </tr>
-</thead>
-
-    <tbody></tbody>
-  </table>
-</div>
-
-</div>
 <div class="screen" id="stations">
   <h2>Stations</h2>
 
@@ -868,10 +875,12 @@
 
   <div id="accounting-content" style="display:none;">
     <div class="area-tabs">
-      <button onclick="showAccountingTab('production')">Production</button>
-      <button onclick="showAccountingTab('shipments'); loadProductionShipments([]);">Production Shipments</button>
-      <button onclick="showAccountingTab('waste')">Waste</button>
-    </div>
+  <button onclick="showAccountingTab('production')">Production</button>
+  <button onclick="showAccountingTab('shipments'); loadProductionShipments([]);">Production Shipments</button>
+  <button onclick="showAccountingTab('waste')">Waste</button>
+  <button onclick="showAccountingTab('lunch')">Lunch</button>
+</div>
+
 
     <!-- Production Section -->
     <div id="productionSection" class="accounting-section" data-sec="production">
@@ -928,6 +937,25 @@
     <tbody></tbody>
   </table>
 </div>
+
+<!-- Lunch Section -->
+<div id="lunchTab" class="accounting-section" data-sec="lunch" style="display:none;">
+  <h3>LUNCH RECORDS</h3>
+  <button onclick="copyLunchTableToClipboard()">Copy to Excel</button>
+
+  <table id="lunchTable">
+    <thead>
+      <tr>
+        <th>Date</th>
+        <th>Item</th>
+        <th>Qty</th>
+        <th>UOM</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
+
 
 </div>
 </div>

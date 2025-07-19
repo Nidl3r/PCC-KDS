@@ -191,6 +191,10 @@ function showAccountingTab(tabName) {
   if (tabName === "waste") {
     loadAccountingWaste();
   }
+
+  if (tabName === "lunch") {
+    loadLunchAccountingTable();
+  }
 }
 
 window.showAccountingTab = showAccountingTab;
@@ -405,9 +409,9 @@ window.showAreaSection = function (area, sectionId) {
 window.showKitchenSection = function (sectionId) {
   const mainKitchen = document.getElementById("main-kitchen");
 
-  // Hide all sections
+  // Hide all sections (now includes 'lunch-section')
   const allSections = mainKitchen.querySelectorAll(
-    ".order-section, .starting-section, .waste-section, .returns-section"
+    ".order-section, .starting-section, .waste-section, .returns-section, .lunch-section"
   );
   allSections.forEach(sec => {
     sec.style.display = "none";
@@ -440,8 +444,11 @@ window.showKitchenSection = function (sectionId) {
     loadMainKitchenWaste();
   } else if (sectionId === "returns") {
     loadMainKitchenReturns();
+  } else if (sectionId === "lunch") {
+    loadMainKitchenLunch();
   }
 };
+
 
 
 //**ALOHA*/
@@ -3782,28 +3789,25 @@ window.loadAccountingWaste = async function () {
   const tableBody = document.querySelector("#wasteTable tbody");
   tableBody.innerHTML = "";
 
-  // 🔎 Get today's date in yyyy-mm-dd format
   const today = new Date();
-const yyyy = today.getFullYear();
-const mm = String(today.getMonth() + 1).padStart(2, '0'); // Month is 0-based
-const dd = String(today.getDate()).padStart(2, '0');
-const localToday = `${yyyy}-${mm}-${dd}`;
+  const yyyy = today.getFullYear();
+  const mm = String(today.getMonth() + 1).padStart(2, '0');
+  const dd = String(today.getDate()).padStart(2, '0');
+  const localToday = `${yyyy}-${mm}-${dd}`;
 
-
-  // Step 1: Get waste docs
   const wasteSnapshot = await getDocs(query(collection(db, "waste"), orderBy("timestamp", "desc")));
 
   for (const doc of wasteSnapshot.docs) {
     const data = doc.data();
-    const date = data.date || "";
-    if (date !== localToday) continue;
+    const rawDate = data.date || "";
+    if (rawDate !== localToday) continue;
 
+    const formattedDate = formatDateLocal(rawDate);
     const venue = data.venue || "";
     const locationCode = venueCodes[venue] || venue;
     const description = data.item || "";
     const quantity = data.qty || 0;
 
-    // Step 2: Lookup matching recipe by description
     let recipeNo = "";
     try {
       const recipeQuery = query(
@@ -3818,10 +3822,9 @@ const localToday = `${yyyy}-${mm}-${dd}`;
       console.error("Error finding recipe for:", description, err);
     }
 
-    // Step 3: Build and append table row
     const row = document.createElement("tr");
     row.innerHTML = `
-      <td>${date}</td>
+      <td>${formattedDate}</td>
       <td>${locationCode}</td>
       <td>${recipeNo}</td>
       <td>${description}</td>
@@ -3830,6 +3833,7 @@ const localToday = `${yyyy}-${mm}-${dd}`;
     tableBody.appendChild(row);
   }
 };
+
 
 
 window.copyWasteTableToClipboard = function () {
@@ -3854,4 +3858,243 @@ window.copyWasteTableToClipboard = function () {
       console.error("Copy failed:", err);
       alert("Copy failed. Try again.");
     });
+};
+
+
+async function loadLunchAccountingTable() {
+  const tbody = document.querySelector("#lunchTable tbody");
+  tbody.innerHTML = "";
+
+  const snapshot = await getDocs(collection(db, "lunch"));
+  const entries = snapshot.docs.map(doc => doc.data());
+
+  entries.forEach(entry => {
+    let formattedDate = "";
+    if (typeof entry.date === "string") {
+      formattedDate = formatDateLocal(entry.date); // ✅ use custom function
+    } else if (entry.date instanceof Timestamp || (entry.date?.seconds && entry.date?.nanoseconds)) {
+      const jsDate = entry.date.toDate ? entry.date.toDate() : new Date(entry.date.seconds * 1000);
+      formattedDate = `${jsDate.getMonth() + 1}/${jsDate.getDate()}/${jsDate.getFullYear()}`;
+    }
+
+    let venueCode = entry.venue === "Main Kitchen" ? "w002" : entry.venue;
+
+    const row = document.createElement("tr");
+    row.innerHTML = `
+      <td>${formattedDate}</td>
+      <td>${entry.item || ""}</td>
+      <td>${entry.qty || 0}</td>
+      <td>${entry.uom || "ea"}</td>
+    `;
+    tbody.appendChild(row);
+  });
+}
+function formatDateLocal(dateStr) {
+  // Split the YYYY-MM-DD string manually
+  const parts = dateStr.split("-");
+  if (parts.length !== 3) return dateStr;
+
+  const year = parseInt(parts[0], 10);
+  const month = parseInt(parts[1], 10) - 1; // JS months are 0-based
+  const day = parseInt(parts[2], 10);
+
+  const localDate = new Date(year, month, day); // 👈 Local time
+  return `${localDate.getMonth() + 1}/${localDate.getDate()}/${localDate.getFullYear()}`;
+}
+
+
+window.copyLunchTableToClipboard = function () {
+  const table = document.getElementById("lunchTable");
+  const rows = Array.from(table.querySelectorAll("tbody tr"));
+
+  if (rows.length === 0) {
+    alert("⚠️ No data to copy.");
+    return;
+  }
+
+  // Build tab-delimited string
+  const text = rows
+    .map(row =>
+      Array.from(row.cells)
+        .map(cell => cell.textContent.trim())
+        .join("\t")
+    )
+    .join("\n");
+
+  // Copy to clipboard
+  navigator.clipboard.writeText(text).then(() => {
+    alert("✅ Lunch table (without headers) copied to clipboard.");
+  }).catch(err => {
+    console.error("Clipboard error:", err);
+    alert("❌ Failed to copy.");
+  });
+};
+
+
+//**LUNCH */
+
+window.loadMainKitchenLunch = async function () {
+  const tableBody = document.querySelector(".main-lunch-table tbody");
+  tableBody.innerHTML = "";
+
+  // Load all recipes
+  const recipesSnap = await getDocs(collection(db, "recipes"));
+  const allRecipes = recipesSnap.docs.map(doc => {
+    const data = doc.data();
+    return {
+      id: doc.id,
+      ...data,
+      type: "recipe",
+      name: data.description || "Unnamed",
+      uom: data.uom || "ea",
+      category: (data.category || "uncategorized").toLowerCase()
+    };
+  });
+
+  // Load all ingredients
+  const ingredientsSnap = await getDocs(collection(db, "ingredients"));
+  const allIngredients = ingredientsSnap.docs.map(doc => {
+    const data = doc.data();
+    return {
+      id: doc.id,
+      ...data,
+      type: "ingredient",
+      name: data.itemName || "Unnamed",
+      uom: data.baseUOM || "ea",
+      category: (data.category || "ingredients").toLowerCase()
+    };
+  });
+
+  const combinedItems = [...allRecipes, ...allIngredients];
+  window.mainLunchItemList = combinedItems;
+
+  renderMainLunchRows(combinedItems);
+};
+
+window.renderMainLunchRows = function (items) {
+  const tableBody = document.querySelector(".main-lunch-table tbody");
+  tableBody.innerHTML = "";
+
+  items.forEach(item => {
+    const row = document.createElement("tr");
+    row.dataset.itemId = item.id;
+    row.dataset.itemType = item.type;
+    row.dataset.category = item.category?.toLowerCase() || "";
+
+    row.innerHTML = `
+      <td>${item.name}</td>
+      <td>${item.uom}</td>
+      <td>
+        <span class="lunch-total">0</span>
+        <input class="lunch-input" type="number" min="0" value="0" style="width: 60px; margin-left: 6px;" />
+        <button onclick="addToLunchQty(this)" style="margin-left: 6px;">Add</button>
+      </td>
+      <td><button onclick="sendSingleMainLunch(this)">Send</button></td>
+    `;
+
+    tableBody.appendChild(row);
+  });
+};
+
+window.filterMainLunch = function () {
+  const searchInput = document.getElementById("mainLunchSearch").value.trim().toLowerCase();
+  const selectedCategory = document.getElementById("mainLunchCategory").value.toLowerCase();
+
+  const filtered = window.mainLunchItemList.filter(item => {
+    const itemName = item.name?.toLowerCase() || "";
+    const itemCategory = item.category?.toLowerCase() || "";
+
+    const matchesSearch = !searchInput || itemName.includes(searchInput);
+    const matchesCategory = !selectedCategory || itemCategory === selectedCategory;
+
+    return matchesSearch && matchesCategory;
+  });
+
+  renderMainLunchRows(filtered);
+};
+
+window.addToLunchQty = function (button) {
+  const row = button.closest("tr");
+  const input = row.querySelector(".lunch-input");
+  const span = row.querySelector(".lunch-total");
+  const addedQty = Number(input.value);
+  const currentQty = Number(span.textContent);
+
+  if (!isNaN(addedQty) && addedQty > 0) {
+    span.textContent = currentQty + addedQty;
+    input.value = "0";
+  }
+};
+
+window.sendSingleMainLunch = async function (button) {
+  const row = button.closest("tr");
+  const span = row.querySelector(".lunch-total");
+  const input = row.querySelector(".lunch-input");
+  const qty = Number(span.textContent);
+
+  if (qty <= 0) {
+    alert("Please add a quantity first.");
+    return;
+  }
+
+  const itemId = row.dataset.itemId;
+  const item = window.mainLunchItemList.find(i => i.id === itemId);
+  const today = getTodayDate();
+
+  const lunchData = {
+    item: item.name,
+    venue: "Main Kitchen",
+    qty,
+    uom: item.uom || "ea",
+    date: today,
+    timestamp: serverTimestamp()
+  };
+
+  await addDoc(collection(db, "lunch"), lunchData);
+  console.log(`✅ Sent lunch to 'lunch': ${qty} of ${item.name}`);
+
+  span.textContent = "0";
+  input.value = "0";
+
+  const confirm = document.createElement("span");
+  confirm.textContent = "Sent";
+  confirm.style.color = "green";
+  confirm.style.marginLeft = "8px";
+  button.parentNode.appendChild(confirm);
+  setTimeout(() => confirm.remove(), 2000);
+};
+
+window.sendAllMainLunch = async function () {
+  const rows = document.querySelectorAll(".main-lunch-table tbody tr");
+  const today = getTodayDate();
+  let sentCount = 0;
+
+  for (const row of rows) {
+    const span = row.querySelector(".lunch-total");
+    const qty = Number(span.textContent);
+
+    if (qty > 0) {
+      const itemId = row.dataset.itemId;
+      const item = window.mainLunchItemList.find(i => i.id === itemId);
+
+      const lunchData = {
+        item: item.name,
+        venue: "Main Kitchen",
+        qty,
+        uom: item.uom || "ea",
+        date: today,
+        timestamp: serverTimestamp()
+      };
+
+      await addDoc(collection(db, "lunch"), lunchData);
+      console.log(`📦 Sent ${qty} of ${item.name}`);
+      sentCount++;
+    }
+  }
+
+  if (sentCount > 0) {
+    alert(`✅ ${sentCount} lunch entries recorded for Main Kitchen.`);
+  } else {
+    alert("⚠️ No lunch entries with quantity > 0 found.");
+  }
 };
