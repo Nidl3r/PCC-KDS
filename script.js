@@ -67,15 +67,18 @@ function updateCurrentVenueFromSelect() {
 // Update on change
 viewSelect.addEventListener("change", updateCurrentVenueFromSelect);
 
-// Call immediately to set initial value
 document.addEventListener("DOMContentLoaded", () => {
   const viewSelect = document.getElementById("viewSelect");
   const screens = document.querySelectorAll(".screen");
+  const chatBox = document.getElementById("chatBox");
 
   function showScreen(id) {
     screens.forEach(screen => {
       screen.style.display = screen.id === id ? "block" : "none";
     });
+
+    // 🔧 Optional: make sure chat stays visible
+    if (chatBox) chatBox.style.display = "block";
   }
 
   // Set initial screen
@@ -89,54 +92,39 @@ document.addEventListener("DOMContentLoaded", () => {
   console.log("✅ PCC KDS App Loaded");
 
   // 🔁 Listen to Firestore collections
-  listenToOrders();             // Kitchen-wide orders
-  listenToAlohaOrders?.();      // Aloha-specific open orders
-  listenToGatewayOrders?.();    // Gateway-specific open orders
-  listenToOhanaOrders?.();      // Ohana-specific open orders
+  listenToOrders?.();            
+  listenToAlohaOrders?.();      
+  listenToGatewayOrders?.();    
+  listenToOhanaOrders?.();      
 
-  loadGuestCounts();            // Load today's guest count
+  loadGuestCounts?.();            
 
   // 🔽 Apply category filter on load for all venues
-  applyCategoryFilter("aloha");
-  applyCategoryFilter("gateway");
-  applyCategoryFilter("ohana");
-  applyCategoryFilter("concession");
+  applyCategoryFilter?.("aloha");
+  applyCategoryFilter?.("gateway");
+  applyCategoryFilter?.("ohana");
+  applyCategoryFilter?.("concession");
 
   // 🚀 Start listeners for each station
   ["Wok", "Fryer", "Grill", "Oven", "Pantry", "Pastry"].forEach(station => {
-    listenToStationOrders(station);
+    listenToStationOrders?.(station);
   });
 
-  // 💰 Wait until DOM is fully ready before attaching cost tracking listeners
+  // 💰 Delay for cost summary input listeners
   setTimeout(() => {
-    // Aloha
-    listenToVenueOrdersAndUpdateCost("Aloha");
-    const guestInputAloha = document.getElementById("guestInput");
-    if (guestInputAloha) {
-      guestInputAloha.addEventListener("input", () => {
-        updateCostSummaryForVenue("Aloha");
-      });
-    }
+    ["Aloha", "Gateway", "Ohana"].forEach(venue => {
+      listenToVenueOrdersAndUpdateCost?.(venue);
 
-    // Gateway
-    listenToVenueOrdersAndUpdateCost("Gateway");
-    const guestInputGateway = document.getElementById("guestInputGateway");
-    if (guestInputGateway) {
-      guestInputGateway.addEventListener("input", () => {
-        updateCostSummaryForVenue("Gateway");
-      });
-    }
-
-    // Ohana
-    listenToVenueOrdersAndUpdateCost("Ohana");
-    const guestInputOhana = document.getElementById("guestInputOhana");
-    if (guestInputOhana) {
-      guestInputOhana.addEventListener("input", () => {
-        updateCostSummaryForVenue("Ohana");
-      });
-    }
-  }, 250); // Adjust if needed
+      const guestInput = document.getElementById(`guestInput${venue === "Aloha" ? "" : venue}`);
+      if (guestInput) {
+        guestInput.addEventListener("input", () => {
+          updateCostSummaryForVenue?.(venue);
+        });
+      }
+    });
+  }, 250);
 });
+
 
 // 🔁 Live Firestore snapshot listener
 function listenToVenueOrdersAndUpdateCost(venueName) {
@@ -154,9 +142,7 @@ function listenToVenueOrdersAndUpdateCost(venueName) {
   });
 }
 
-document.addEventListener("DOMContentLoaded", () => {
-  // ... everything you posted ...
-});
+
 
 //offline banner
 function updateOfflineBanner() {

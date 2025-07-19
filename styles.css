@@ -295,6 +295,7 @@ table button {
   font-weight: bold;
   border-radius: 6px;
 }
+
 .chat-section {
   position: fixed;
   bottom: 0;
@@ -330,9 +331,10 @@ table button {
 }
 
 .chat-section.minimized {
-  transform: translateY(calc(100% - 44px)); /* ✨ show header only */
-  overflow: hidden;
+  transform: translateY(calc(100% - 44px)); /* Only shows the header */
 }
+
+
 
 .chat-toggle-btn {
   background: transparent;
