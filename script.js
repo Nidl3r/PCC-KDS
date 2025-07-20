@@ -1509,12 +1509,12 @@ window.sendSelected = async function () {
 
 
 //**WASTE aloha */
-window.loadAlohaWaste = async function () {
+// 🧠 Store waste totals between filter switches
+window.alohaWasteTotals = {}; 
+
+window.loadAlohaWaste = async function (filteredList = null) {
   const tableBody = document.querySelector(".aloha-section[data-sec='waste'] .waste-table tbody");
   tableBody.innerHTML = "";
-
-  // 🏷️ Get selected category from dropdown (converted to lowercase for comparison)
-  const selectedCategory = document.getElementById("aloha-waste-category")?.value?.toLowerCase() || "";
 
   // 🔁 Use cache if available, else load from Firestore
   if (!window.cachedAlohaWasteRecipes) {
@@ -1525,21 +1525,20 @@ window.loadAlohaWaste = async function () {
     console.log("📦 Loaded and cached Aloha recipes:", window.cachedAlohaWasteRecipes.length);
   }
 
-  const recipes = window.cachedAlohaWasteRecipes;
+  const recipes = filteredList || window.cachedAlohaWasteRecipes;
   window.alohaWasteRecipeList = recipes; // Keep for send/waste function access
 
   recipes.forEach(recipe => {
-    const recipeCategory = (recipe.category || "").toLowerCase();
-    if (selectedCategory && recipeCategory !== selectedCategory) return;
-
     const row = document.createElement("tr");
     row.dataset.recipeId = recipe.id;
+
+    const savedQty = window.alohaWasteTotals?.[recipe.id] || 0;
 
     row.innerHTML = `
       <td>${recipe.description}</td>
       <td>${recipe.uom || "ea"}</td>
       <td>
-        <span class="waste-total">0</span>
+        <span class="waste-total">${savedQty}</span>
         <input class="waste-input" type="number" min="0" value="0" style="width: 60px; margin-left: 6px;" />
         <button onclick="addToWasteQty(this)" style="margin-left: 6px;">Add</button>
       </td>
@@ -1551,9 +1550,21 @@ window.loadAlohaWaste = async function () {
 };
 
 window.filterAlohaWaste = function () {
-  window.loadAlohaWaste(); // call with window prefix to avoid scope confusion
-};
+  const searchValue = document.getElementById("alohaWasteSearch")?.value?.trim().toLowerCase() || "";
+  const selectedCategory = document.getElementById("aloha-waste-category")?.value?.toLowerCase() || "";
 
+  const filtered = window.cachedAlohaWasteRecipes.filter(recipe => {
+    const name = recipe.description?.toLowerCase() || "";
+    const category = recipe.category?.toLowerCase() || "";
+
+    const matchesSearch = !searchValue || name.includes(searchValue);
+    const matchesCategory = !selectedCategory || category === selectedCategory;
+
+    return matchesSearch && matchesCategory;
+  });
+
+  window.loadAlohaWaste(filtered);
+};
 
 
 window.addToWasteQty = function (button) {
@@ -1563,12 +1574,17 @@ window.addToWasteQty = function (button) {
 
   const addQty = Number(input.value);
   const currentQty = Number(span.textContent);
+  const newQty = currentQty + addQty;
 
   if (!isNaN(addQty) && addQty > 0) {
-    span.textContent = currentQty + addQty;
+    span.textContent = newQty;
     input.value = "0";
+
+    const recipeId = row.dataset.recipeId;
+    window.alohaWasteTotals[recipeId] = newQty;
   }
 };
+
 
 
 window.sendSingleWaste = async function (button, recipeId) {
@@ -1687,6 +1703,8 @@ window.sendAllWaste = async function () {
 
 
 //**Main kitchen waste */
+window.mainWasteTotals = {}; // 🧠 Key: itemId, value: qty
+
 window.loadMainKitchenWaste = async function () {
   const tableBody = document.querySelector(".main-waste-table tbody");
   tableBody.innerHTML = "";
@@ -1743,20 +1761,41 @@ window.renderMainWasteRows = function (items) {
     row.dataset.itemType = item.type;
     row.dataset.category = item.category?.toLowerCase() || "";
 
-    row.innerHTML = `
-      <td>${item.name}</td>
-      <td>${item.uom}</td>
-      <td>
-        <span class="waste-total">0</span>
-        <input class="waste-input" type="number" min="0" value="0" style="width: 60px; margin-left: 6px;" />
-        <button onclick="addToWasteQty(this)" style="margin-left: 6px;">Add</button>
-      </td>
-      <td><button onclick="sendSingleMainWaste(this)">Send</button></td>
-    `;
+  const savedQty = window.mainWasteTotals?.[item.id] || 0;
+
+row.innerHTML = `
+  <td>${item.name}</td>
+  <td>${item.uom}</td>
+  <td>
+    <span class="waste-total">${savedQty}</span>
+    <input class="waste-input" type="number" min="0" value="0" style="width: 60px; margin-left: 6px;" />
+    <button onclick="addToMainWasteQty(this)" style="margin-left: 6px;">Add</button>
+  </td>
+  <td><button onclick="sendSingleMainWaste(this)">Send</button></td>
+`;
 
     tableBody.appendChild(row);
   });
 };
+
+window.addToMainWasteQty = function (button) {
+  const row = button.closest("tr");
+  const input = row.querySelector(".waste-input");
+  const span = row.querySelector(".waste-total");
+
+  const addQty = Number(input.value);
+  const currentQty = Number(span.textContent);
+  const newQty = currentQty + addQty;
+
+  if (!isNaN(addQty) && addQty > 0) {
+    span.textContent = newQty;
+    input.value = "0";
+
+    const itemId = row.dataset.itemId;
+    window.mainWasteTotals[itemId] = newQty;
+  }
+};
+
 
 window.filterMainWaste = function () {
   const searchInput = document.getElementById("mainWasteSearch").value.trim().toLowerCase();
@@ -2293,39 +2332,38 @@ function renderGatewayTable(orders) {
 
 
 // 🔁 Load Gateway Waste Items
-window.loadGatewayWaste = async function () {
+window.gatewayWasteTotals = window.gatewayWasteTotals || {};
+
+window.loadGatewayWaste = async function (filteredList = null) {
   const tableBody = document.querySelector(".gateway-section[data-sec='waste'] .waste-table tbody");
   if (!tableBody) return;
 
   tableBody.innerHTML = "";
 
-  // 🏷️ Get selected category from dropdown (lowercased)
-  const selectedCategory = document.getElementById("gateway-waste-category")?.value?.toLowerCase() || "";
+  if (!window.cachedGatewayWasteRecipes) {
+    const recipesRef = collection(db, "recipes");
+    const q = query(recipesRef, where("venueCodes", "array-contains", "b003"));
+    const snapshot = await getDocs(q);
+    window.cachedGatewayWasteRecipes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    console.log("📦 Loaded and cached Gateway recipes:", snapshot.size);
+  }
 
-  // 🔁 Load all Gateway recipes
-  const recipesRef = collection(db, "recipes");
-  const q = query(recipesRef, where("venueCodes", "array-contains", "b003"));
-  const snapshot = await getDocs(q);
-  const recipes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-
-  console.log("📦 Loaded Gateway recipes:", snapshot.size);
-
+  const recipes = filteredList || window.cachedGatewayWasteRecipes;
   window.gatewayWasteRecipeList = recipes;
 
   recipes.forEach(recipe => {
-    const recipeCategory = (recipe.category || "").toLowerCase();
-    if (selectedCategory && recipeCategory !== selectedCategory) return;
-
     const row = document.createElement("tr");
     row.dataset.recipeId = recipe.id;
+
+    const savedQty = window.gatewayWasteTotals?.[recipe.id] || 0;
 
     row.innerHTML = `
       <td>${recipe.description}</td>
       <td>${recipe.uom || "ea"}</td>
       <td>
-        <span class="waste-total">0</span>
+        <span class="waste-total">${savedQty}</span>
         <input class="waste-input" type="number" min="0" value="0" style="width: 60px; margin-left: 6px;" />
-        <button onclick="addToWasteQty(this)" style="margin-left: 6px;">Add</button>
+        <button onclick="addToGatewayWasteQty(this)" style="margin-left: 6px;">Add</button>
       </td>
       <td><button onclick="sendSingleGatewayWaste(this, '${recipe.id}')">Send</button></td>
     `;
@@ -2334,7 +2372,41 @@ window.loadGatewayWaste = async function () {
   });
 };
 window.filterGatewayWaste = function () {
-  loadGatewayWaste();
+  const searchValue = document.getElementById("gatewayWasteSearch")?.value?.trim().toLowerCase() || "";
+  const selectedCategory = document.getElementById("gateway-waste-category")?.value?.toLowerCase() || "";
+
+  const filtered = window.cachedGatewayWasteRecipes.filter(recipe => {
+    const name = recipe.description?.toLowerCase() || "";
+    const category = recipe.category?.toLowerCase() || "";
+
+    const matchesSearch = !searchValue || name.includes(searchValue);
+    const matchesCategory = !selectedCategory || category === selectedCategory;
+
+    return matchesSearch && matchesCategory;
+  });
+
+  window.loadGatewayWaste(filtered);
+};
+
+
+
+
+window.addToGatewayWasteQty = function (button) {
+  const row = button.closest("tr");
+  const input = row.querySelector(".waste-input");
+  const span = row.querySelector(".waste-total");
+
+  const addQty = Number(input.value);
+  const currentQty = Number(span.textContent);
+  const newQty = currentQty + addQty;
+
+  if (!isNaN(addQty) && addQty > 0) {
+    span.textContent = newQty;
+    input.value = "0";
+
+    const recipeId = row.dataset.recipeId;
+    window.gatewayWasteTotals[recipeId] = newQty;
+  }
 };
 
 
@@ -3053,37 +3125,38 @@ window.receiveConcessionItem = async function (recipeId, qty, button) {
 
 
 //OHANA WASTE
+// Initialize memory for totals if not already set
+window.ohanaWasteTotals = window.ohanaWasteTotals || {};
 
-window.loadOhanaWaste = async function () {
+window.loadOhanaWaste = async function (filteredList = null) {
   const tableBody = document.querySelector(".ohana-section[data-sec='waste'] .waste-table tbody");
   tableBody.innerHTML = "";
 
-  // 🏷️ Get selected category from dropdown (lowercased)
-  const selectedCategory = document.getElementById("ohana-waste-category")?.value?.toLowerCase() || "";
+  // 🔁 Load from Firestore if not cached
+  if (!window.cachedOhanaWasteRecipes) {
+    const recipesRef = collection(db, "recipes");
+    const q = query(recipesRef, where("venueCodes", "array-contains", "b002"));
+    const snapshot = await getDocs(q);
+    window.cachedOhanaWasteRecipes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    console.log("📦 Loaded and cached Ohana recipes:", snapshot.size);
+  }
 
-  const recipesRef = collection(db, "recipes");
-  const q = query(recipesRef, where("venueCodes", "array-contains", "b002"));
-  const snapshot = await getDocs(q);
-  const recipes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-
-  console.log("📦 Loaded Ohana recipes:", snapshot.size);
-
+  const recipes = filteredList || window.cachedOhanaWasteRecipes;
   window.ohanaWasteRecipeList = recipes;
 
   recipes.forEach(recipe => {
-    const recipeCategory = (recipe.category || "").toLowerCase();
-    if (selectedCategory && recipeCategory !== selectedCategory) return;
-
     const row = document.createElement("tr");
     row.dataset.recipeId = recipe.id;
+
+    const savedQty = window.ohanaWasteTotals?.[recipe.id] || 0;
 
     row.innerHTML = `
       <td>${recipe.description}</td>
       <td>${recipe.uom || "ea"}</td>
       <td>
-        <span class="waste-total">0</span>
+        <span class="waste-total">${savedQty}</span>
         <input class="waste-input" type="number" min="0" value="0" style="width: 60px; margin-left: 6px;" />
-        <button onclick="addToWasteQty(this)" style="margin-left: 6px;">Add</button>
+        <button onclick="addToOhanaWasteQty(this)" style="margin-left: 6px;">Add</button>
       </td>
       <td><button onclick="sendSingleOhanaWaste(this, '${recipe.id}')">Send</button></td>
     `;
@@ -3093,8 +3166,41 @@ window.loadOhanaWaste = async function () {
 };
 
 window.filterOhanaWaste = function () {
-  loadOhanaWaste();
+  const searchValue = document.getElementById("ohanaWasteSearch")?.value?.trim().toLowerCase() || "";
+  const selectedCategory = document.getElementById("ohana-waste-category")?.value?.toLowerCase() || "";
+
+  const filtered = window.cachedOhanaWasteRecipes.filter(recipe => {
+    const name = recipe.description?.toLowerCase() || "";
+    const category = recipe.category?.toLowerCase() || "";
+
+    const matchesSearch = !searchValue || name.includes(searchValue);
+    const matchesCategory = !selectedCategory || category === selectedCategory;
+
+    return matchesSearch && matchesCategory;
+  });
+
+  window.loadOhanaWaste(filtered);
 };
+
+
+window.addToOhanaWasteQty = function (button) {
+  const row = button.closest("tr");
+  const input = row.querySelector(".waste-input");
+  const span = row.querySelector(".waste-total");
+
+  const addQty = Number(input.value);
+  const currentQty = Number(span.textContent);
+  const newQty = currentQty + addQty;
+
+  if (!isNaN(addQty) && addQty > 0) {
+    span.textContent = newQty;
+    input.value = "0";
+
+    const recipeId = row.dataset.recipeId;
+    window.ohanaWasteTotals[recipeId] = newQty;
+  }
+};
+
 
 
 window.sendAllOhanaWaste = async function () {
