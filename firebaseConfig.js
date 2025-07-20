@@ -16,7 +16,8 @@ import {
   where,
   getDocs,
   Timestamp,
-  orderBy
+  orderBy,
+  limit
 } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore.js";
 
 // ✅ Firebase configuration
@@ -54,5 +55,6 @@ export {
   where,
   getDocs,
   Timestamp,
-  orderBy
+  orderBy,
+  limit
 };

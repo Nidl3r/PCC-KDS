@@ -12,7 +12,8 @@ import {
   where,
   getDocs,
   Timestamp,
-  orderBy
+  orderBy,
+  limit 
 } from './firebaseConfig.js';
 
 
@@ -478,23 +479,26 @@ async function applyCategoryFilter(area) {
   if (venueCodes.length === 0) return;
 
   try {
-    const recipesRef = collection(db, "recipes");
-    const snapshot = await getDocs(recipesRef);
+    // ✅ Use cached recipes if available
+    if (!window.cachedRecipeList) {
+      const recipesRef = collection(db, "recipes");
+      const snapshot = await getDocs(recipesRef);
+      window.cachedRecipeList = snapshot.docs.map(doc => doc.data());
+      console.log("📦 Cached all recipes:", window.cachedRecipeList.length);
+    }
 
-    let filteredDocs = snapshot.docs.filter(doc => {
-      const data = doc.data();
+    // 🔍 Filter by venue + category
+    const filteredDocs = window.cachedRecipeList.filter(data => {
       const matchesVenue = data.venueCodes?.some(code => venueCodes.includes(code));
       const matchesCategory = category
         ? data.category?.toUpperCase() === category.toUpperCase()
         : true;
-
       return matchesVenue && matchesCategory;
     });
 
-    console.log(`📦 Loaded ${filteredDocs.length} recipes for ${area}`);
+    console.log(`📦 Filtered ${filteredDocs.length} recipes for ${area}`);
 
-    filteredDocs.forEach(doc => {
-      const recipe = doc.data();
+    filteredDocs.forEach(recipe => {
       const option = document.createElement("option");
       option.value = recipe.recipeNo;
       option.textContent = `${recipe.recipeNo} - ${recipe.description}`;
@@ -1512,18 +1516,19 @@ window.loadAlohaWaste = async function () {
   // 🏷️ Get selected category from dropdown (converted to lowercase for comparison)
   const selectedCategory = document.getElementById("aloha-waste-category")?.value?.toLowerCase() || "";
 
-  // 🔁 Load all Aloha recipes
-  const recipesRef = collection(db, "recipes");
-  const q = query(recipesRef, where("venueCodes", "array-contains", "b001"));
-  const snapshot = await getDocs(q);
-  const recipes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+  // 🔁 Use cache if available, else load from Firestore
+  if (!window.cachedAlohaWasteRecipes) {
+    const recipesRef = collection(db, "recipes");
+    const q = query(recipesRef, where("venueCodes", "array-contains", "b001"));
+    const snapshot = await getDocs(q);
+    window.cachedAlohaWasteRecipes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    console.log("📦 Loaded and cached Aloha recipes:", window.cachedAlohaWasteRecipes.length);
+  }
 
-  console.log("📦 Loaded Aloha recipes:", snapshot.size);
-
-  window.alohaWasteRecipeList = recipes;
+  const recipes = window.cachedAlohaWasteRecipes;
+  window.alohaWasteRecipeList = recipes; // Keep for send/waste function access
 
   recipes.forEach(recipe => {
-    // 🛑 If filter is active and category doesn't match, skip
     const recipeCategory = (recipe.category || "").toLowerCase();
     if (selectedCategory && recipeCategory !== selectedCategory) return;
 
@@ -1544,9 +1549,11 @@ window.loadAlohaWaste = async function () {
     tableBody.appendChild(row);
   });
 };
+
 window.filterAlohaWaste = function () {
-  loadAlohaWaste();
+  window.loadAlohaWaste(); // call with window prefix to avoid scope confusion
 };
+
 
 
 window.addToWasteQty = function (button) {
@@ -1684,42 +1691,43 @@ window.loadMainKitchenWaste = async function () {
   const tableBody = document.querySelector(".main-waste-table tbody");
   tableBody.innerHTML = "";
 
+  // ✅ Use cache if available
+  if (!window.cachedMainWasteItems) {
+    // 1. Load all recipes
+    const recipesSnap = await getDocs(collection(db, "recipes"));
+    const allRecipes = recipesSnap.docs.map(doc => {
+      const data = doc.data();
+      return {
+        id: doc.id,
+        ...data,
+        type: "recipe",
+        name: data.description || "Unnamed",
+        uom: data.uom || "ea",
+        category: (data.category || "uncategorized").toLowerCase()
+      };
+    });
 
-  // 1. Load all recipes
-  const recipesSnap = await getDocs(collection(db, "recipes"));
-  const allRecipes = recipesSnap.docs.map(doc => {
-    const data = doc.data();
-    return {
-      id: doc.id,
-      ...data,
-      type: "recipe",
-      name: data.description || "Unnamed",
-      uom: data.uom || "ea",
-      category: (data.category || "uncategorized").toLowerCase()  // ✅ Use `category` not `station`
-    };
-  });
+    // 2. Load all ingredients
+    const ingredientsSnap = await getDocs(collection(db, "ingredients"));
+    const allIngredients = ingredientsSnap.docs.map(doc => {
+      const data = doc.data();
+      return {
+        id: doc.id,
+        ...data,
+        type: "ingredient",
+        name: data.itemName || "Unnamed",
+        uom: data.baseUOM || "ea",
+        category: (data.category || "ingredients").toLowerCase()
+      };
+    });
 
-  // 2. Load all ingredients
-  const ingredientsSnap = await getDocs(collection(db, "ingredients"));
-  const allIngredients = ingredientsSnap.docs.map(doc => {
-    const data = doc.data();
-    return {
-      id: doc.id,
-      ...data,
-      type: "ingredient",
-      name: data.itemName || "Unnamed",
-      uom: data.baseUOM || "ea",
-      category: (data.category || "ingredients").toLowerCase()  // ✅ use category here too
-    };
-  });
+    // 🔁 Combine and cache
+    window.cachedMainWasteItems = [...allRecipes, ...allIngredients];
+    console.log("📦 Cached main waste items:", window.cachedMainWasteItems.length);
+  }
 
-  // Combine all
-  const combinedItems = [...allRecipes, ...allIngredients];
-  window.mainWasteItemList = combinedItems;
-
-
-
-  renderMainWasteRows(combinedItems);
+  window.mainWasteItemList = window.cachedMainWasteItems;
+  renderMainWasteRows(window.mainWasteItemList);
 };
 
 
@@ -3413,47 +3421,69 @@ function getHawaiiTimestampRange() {
   };
 }
 
-
-
-const { start, end } = getHawaiiTimestampRange();
-
-const chatRef = collection(db, "chats");
-
-const todayChatsQuery = query(
-  chatRef,
-  where("timestamp", ">=", start),
-  where("timestamp", "<", end),
-  orderBy("timestamp", "asc")
-);
-
-// Realtime chat listener
-onSnapshot(todayChatsQuery, snapshot => {
-  const chatBox = document.getElementById("chatMessages");
-  chatBox.innerHTML = "";
-
-  snapshot.forEach(doc => {
-    const data = doc.data();
-    const time = new Date(data.timestamp?.toDate()).toLocaleTimeString([], {
-      hour: '2-digit',
-      minute: '2-digit'
-    });
-    const msg = `<div><strong>${data.sender}</strong> (${time}): ${data.message}</div>`;
-    chatBox.innerHTML += msg;
-  });
-
-  chatBox.scrollTop = chatBox.scrollHeight;
-});
 const chatBox = document.getElementById("chatBox");
 const chatToggleBtn = document.getElementById("chatToggleBtn");
 let isChatMinimized = false;
+let chatUnsubscribe = null;
 
+function startChatListener() {
+  if (chatUnsubscribe) return; // Avoid duplicate listeners
+
+  const chatMessages = document.getElementById("chatMessages");
+  const { start, end } = getHawaiiTimestampRange();
+  const chatRef = collection(db, "chats");
+
+  const todayChatsQuery = query(
+    chatRef,
+    where("timestamp", ">=", start),
+    where("timestamp", "<", end),
+    orderBy("timestamp", "asc"),
+    limit(50) // ✅ Limit to most recent 50 messages
+  );
+
+  chatUnsubscribe = onSnapshot(todayChatsQuery, snapshot => {
+    chatMessages.innerHTML = "";
+
+    snapshot.forEach(doc => {
+      const data = doc.data();
+      const time = new Date(data.timestamp?.toDate()).toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+      const msg = `<div><strong>${data.sender}</strong> (${time}): ${data.message}</div>`;
+      chatMessages.innerHTML += msg;
+    });
+
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+  });
+}
+
+function stopChatListener() {
+  if (chatUnsubscribe) {
+    chatUnsubscribe();
+    chatUnsubscribe = null;
+  }
+}
+
+// 🔁 Toggle chat visibility and listener
 chatToggleBtn.addEventListener("click", () => {
   isChatMinimized = !isChatMinimized;
   chatBox.classList.toggle("minimized", isChatMinimized);
-  chatBox.classList.remove("highlight"); // remove glow when reopened
+  chatBox.classList.remove("highlight");
+
+  if (isChatMinimized) {
+    stopChatListener(); // 🛑 Save reads
+  } else {
+    startChatListener(); // ▶️ Live feed
+  }
 });
 
-// When receiving a new chat message
+// ✅ Start listening if chat is visible at page load
+if (!isChatMinimized) {
+  startChatListener();
+}
+
+// ✉️ Show temporary new message if chat is minimized
 function handleNewChatMessage(messageText, sender = "Other") {
   const chatMessages = document.getElementById("chatMessages");
   const message = document.createElement("div");
@@ -3465,7 +3495,6 @@ function handleNewChatMessage(messageText, sender = "Other") {
     chatBox.classList.add("highlight");
   }
 }
-
 
 // ✅ Global send function
 window.sendChatMessage = async function () {
@@ -3937,39 +3966,45 @@ window.loadMainKitchenLunch = async function () {
   const tableBody = document.querySelector(".main-lunch-table tbody");
   tableBody.innerHTML = "";
 
-  // Load all recipes
-  const recipesSnap = await getDocs(collection(db, "recipes"));
-  const allRecipes = recipesSnap.docs.map(doc => {
-    const data = doc.data();
-    return {
-      id: doc.id,
-      ...data,
-      type: "recipe",
-      name: data.description || "Unnamed",
-      uom: data.uom || "ea",
-      category: (data.category || "uncategorized").toLowerCase()
-    };
-  });
+  // ✅ Use cache if available
+  if (!window.cachedMainLunchItems) {
+    // Load all recipes
+    const recipesSnap = await getDocs(collection(db, "recipes"));
+    const allRecipes = recipesSnap.docs.map(doc => {
+      const data = doc.data();
+      return {
+        id: doc.id,
+        ...data,
+        type: "recipe",
+        name: data.description || "Unnamed",
+        uom: data.uom || "ea",
+        category: (data.category || "uncategorized").toLowerCase()
+      };
+    });
 
-  // Load all ingredients
-  const ingredientsSnap = await getDocs(collection(db, "ingredients"));
-  const allIngredients = ingredientsSnap.docs.map(doc => {
-    const data = doc.data();
-    return {
-      id: doc.id,
-      ...data,
-      type: "ingredient",
-      name: data.itemName || "Unnamed",
-      uom: data.baseUOM || "ea",
-      category: (data.category || "ingredients").toLowerCase()
-    };
-  });
+    // Load all ingredients
+    const ingredientsSnap = await getDocs(collection(db, "ingredients"));
+    const allIngredients = ingredientsSnap.docs.map(doc => {
+      const data = doc.data();
+      return {
+        id: doc.id,
+        ...data,
+        type: "ingredient",
+        name: data.itemName || "Unnamed",
+        uom: data.baseUOM || "ea",
+        category: (data.category || "ingredients").toLowerCase()
+      };
+    });
 
-  const combinedItems = [...allRecipes, ...allIngredients];
-  window.mainLunchItemList = combinedItems;
+    // Cache combined items
+    window.cachedMainLunchItems = [...allRecipes, ...allIngredients];
+    console.log("📦 Cached Main Kitchen lunch items:", window.cachedMainLunchItems.length);
+  }
 
-  renderMainLunchRows(combinedItems);
+  window.mainLunchItemList = window.cachedMainLunchItems;
+  renderMainLunchRows(window.mainLunchItemList);
 };
+
 
 window.renderMainLunchRows = function (items) {
   const tableBody = document.querySelector(".main-lunch-table tbody");
