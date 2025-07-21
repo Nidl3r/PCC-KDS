@@ -201,7 +201,8 @@ function showAccountingTab(tabName) {
 window.showAccountingTab = showAccountingTab;
 
 
-// ✅ Render kitchen orders (optional Firestore integration)
+// ✅ Render kitchen add ons
+
 function renderKitchen(orders) {
   const container = document.getElementById("kitchenTable").querySelector("tbody");
   if (!container) return;
@@ -1161,11 +1162,7 @@ async function sendStationAddonOrder(stationName, order) {
   try {
     const { id, recipeNo, sendQty, venue } = order;
 
-    // ✅ Ensure lowercase for recipeNo
-    const recipeId = (recipeNo || "").toLowerCase();
-
-    // 1. Get recipe doc to retrieve cost
-    const recipeRef = doc(db, "recipes", recipeId);
+    const recipeRef = doc(db, "recipes", recipeNo);
     const recipeSnap = await getDoc(recipeRef);
 
     if (!recipeSnap.exists()) {
@@ -1174,20 +1171,21 @@ async function sendStationAddonOrder(stationName, order) {
 
     const recipeData = recipeSnap.data();
     const costPerUOM = recipeData.cost || 0;
+    const panWeight = recipeData.panWeight || 0;
 
-    // 2. Calculate total cost
-    const totalCost = parseFloat((sendQty * costPerUOM).toFixed(4));
+    // 🔁 Subtract pan weight
+    const netQty = parseFloat((sendQty - panWeight).toFixed(4));
+    const totalCost = parseFloat((netQty * costPerUOM).toFixed(4));
 
-    // 3. Build update object
+    // 📦 Update Firestore
     const updateData = {
-      sendQty,
+      sendQty: netQty,               // Save adjusted quantity
       status: "sent",
       sentAt: serverTimestamp(),
       totalCost,
       type: "addon",
     };
 
-    // 4. Update the original order in Firestore
     const orderRef = doc(db, "orders", id);
     await updateDoc(orderRef, updateData);
 
@@ -1216,7 +1214,6 @@ window.sendKitchenOrder = async function(orderId, button) {
     const order = orderSnap.data();
     const row = button.closest("tr");
 
-    // ✅ Select only the Send Qty input
     const sendQtyInput = row.querySelector(".send-qty-input");
     const sendQty = parseFloat(sendQtyInput?.value || order.qty || 1);
 
@@ -1225,14 +1222,41 @@ window.sendKitchenOrder = async function(orderId, button) {
       return;
     }
 
+    let adjustedQty = sendQty;
+
+    // ✅ Lookup recipe by "recipeNo" field
+    if (order.type === "addon" && order.recipeNo) {
+      const recipeQuery = query(
+        collection(db, "recipes"),
+        where("recipeNo", "==", order.recipeNo)
+      );
+      const recipeSnap = await getDocs(recipeQuery);
+
+      if (!recipeSnap.empty) {
+        const recipeData = recipeSnap.docs[0].data();
+        const panWeight = recipeData.panWeight || 0;
+
+        // ❌ If result is negative, block it
+        if (sendQty < panWeight) {
+          alert(`⚠️ Send Qty must be greater than pan weight (${panWeight}).`);
+          return;
+        }
+
+        adjustedQty = parseFloat((sendQty - panWeight).toFixed(4));
+        console.log(`💡 Adjusted Qty for ${order.recipeNo}: ${adjustedQty} (panWeight: ${panWeight})`);
+      } else {
+        console.warn("⚠️ Recipe not found for", order.recipeNo);
+      }
+    }
+
     await setDoc(orderRef, {
       status: "sent",
       sentAt: serverTimestamp(),
-      sendQty: sendQty,
-      qty: sendQty // Optional: remove this line if you want to eliminate 'qty'
+      sendQty: adjustedQty,
+      qty: adjustedQty
     }, { merge: true });
 
-    console.log(`✅ Sent order ${orderId} with sendQty: ${sendQty}`);
+    console.log(`✅ Sent order ${orderId} with sendQty: ${adjustedQty}`);
 
     if (row) row.remove();
 
@@ -1241,6 +1265,7 @@ window.sendKitchenOrder = async function(orderId, button) {
     alert("❌ Failed to send order.");
   }
 };
+
 
 
 window.loadMainKitchenStartingPars = async function () {
@@ -3586,66 +3611,96 @@ window.sendChatMessage = async function () {
 
 
 //**accounting */
-
-
 window.loadProductionSummary = async function () {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
+
+  const yyyy = today.getFullYear();
+  const mm = String(today.getMonth() + 1).padStart(2, '0');
+  const dd = String(today.getDate()).padStart(2, '0');
+  const todayStr = `${yyyy}-${mm}-${dd}`;
 
   const snapshot = await getDocs(collection(db, "orders"));
   const summaryMap = new Map();
   const recipeKeyList = [];
 
-  snapshot.forEach(doc => {
+  for (const doc of snapshot.docs) {
     const data = doc.data();
+
     const timestamp =
       data.timestamp?.toDate?.() ||
       data.sentAt?.toDate?.() ||
       data.receivedAt?.toDate?.();
 
-    if (!timestamp) return;
+    let matchesToday = false;
 
-    const date = new Date(timestamp);
-    date.setHours(0, 0, 0, 0);
-    if (date.getTime() !== today.getTime()) return;
+    if (timestamp instanceof Date) {
+      const date = new Date(timestamp);
+      date.setHours(0, 0, 0, 0);
+      matchesToday = date.getTime() === today.getTime();
+    } else if (typeof data.date === "string") {
+      matchesToday = data.date === todayStr;
+    }
 
+    if (!matchesToday) continue;
+
+    const type = data.type || "";
     const recipeNo = (data.recipeNo || data.recipeId || "").toUpperCase();
-    if (!recipeNo) return;
+    if (!recipeNo) continue;
 
-    const description = data.description || data.item || "No Description";
     const submenuCode = data.submenuCode || "";
-    const qty = Number(data.sendQty ?? data.qty ?? 0);
 
-    if (qty <= 0) return;
+    let qty = 0;
+    if (type === "starting-par") {
+      qty = Number(data.netWeight ?? 0);
+    } else {
+      qty = Number(data.sendQty ?? data.qty ?? 0);
+    }
+
+    if (qty <= 0) continue;
 
     if (!summaryMap.has(recipeNo)) {
       summaryMap.set(recipeNo, {
         submenuCode,
         dishCode: "",
         recipeNo,
-        description,
+        description: "No Description",
         total: 0,
       });
       recipeKeyList.push(recipeNo);
     }
 
     summaryMap.get(recipeNo).total += qty;
-  });
+  }
 
-  // 🔍 Fetch missing descriptions from 'recipes'
+  // 🔍 Dual strategy to fetch recipe descriptions
   for (const [recipeNo, item] of summaryMap.entries()) {
-    if (item.description === "No Description") {
-      const recipeSnapshot = await getDocs(
+    try {
+      // First try: look up by doc ID (used by starting-par)
+      const recipeDocRef = doc(db, "recipes", recipeNo);
+      const recipeDocSnap = await getDoc(recipeDocRef);
+
+      if (recipeDocSnap.exists()) {
+        const data = recipeDocSnap.data();
+        item.description = data.description || "No Description";
+        continue;
+      }
+
+      // Second try: fallback to searching by recipeNo field (used by addon)
+      const fallbackSnap = await getDocs(
         query(collection(db, "recipes"), where("recipeNo", "==", recipeNo))
       );
-      if (!recipeSnapshot.empty) {
-        const recipeData = recipeSnapshot.docs[0].data();
-        item.description = recipeData.description || "No Description";
+      if (!fallbackSnap.empty) {
+        const data = fallbackSnap.docs[0].data();
+        item.description = data.description || "No Description";
       }
+
+    } catch (err) {
+      console.error(`Error fetching description for ${recipeNo}:`, err);
     }
   }
 
-  // Assign dish codes
+  // 🏷️ Assign dish codes
   recipeKeyList.forEach((recipeNo, index) => {
     const dishCode = `PCC${String(index + 1).padStart(3, "0")}`;
     if (summaryMap.has(recipeNo)) {
@@ -3653,14 +3708,13 @@ window.loadProductionSummary = async function () {
     }
   });
 
-  // 🧾 Fill the table
+  // 🧾 Render the table
   const tbody = document.querySelector("#productionTable tbody");
   tbody.innerHTML = "";
 
   if (summaryMap.size === 0) {
     const tr = document.createElement("tr");
-    tr.innerHTML =
-      `<td colspan="5" style="text-align:center; font-style:italic; color:gray;">No data for today</td>`;
+    tr.innerHTML = `<td colspan="5" style="text-align:center; font-style:italic; color:gray;">No data for today</td>`;
     tbody.appendChild(tr);
     return;
   }
@@ -3731,54 +3785,102 @@ window.loadProductionShipments = async function () {
 
   const shipments = [];
   const today = new Date();
-  today.setHours(0, 0, 0, 0); // Midnight start of today
+  today.setHours(0, 0, 0, 0);
+
+  const yyyy = today.getFullYear();
+  const mm = String(today.getMonth() + 1).padStart(2, '0');
+  const dd = String(today.getDate()).padStart(2, '0');
+  const todayStr = `${yyyy}-${mm}-${dd}`;
+
+  const recipeMap = new Map(); // For unique recipeNo -> { ...shipment }
 
   snapshot.forEach(doc => {
     const data = doc.data();
 
+    const type = data.type || "";
+    const rawRecipeNo = data.recipeNo || data.recipeId || "";
+    const recipeNo = rawRecipeNo.toUpperCase();
+    if (!recipeNo) return;
+
+    const venue = (data.venue || "").toLowerCase();
+    const venueCode = venueCodesByName[venue];
+    if (!venueCode) return;
+
+    // Match date
     const timestamp = data.timestamp?.toDate?.() || data.sentAt?.toDate?.();
-    if (!timestamp) return;
+    let matchesToday = false;
 
-    const orderDate = new Date(timestamp);
-    orderDate.setHours(0, 0, 0, 0);
+    if (timestamp instanceof Date) {
+      const orderDate = new Date(timestamp);
+      orderDate.setHours(0, 0, 0, 0);
+      matchesToday = orderDate.getTime() === today.getTime();
+    } else if (typeof data.date === "string") {
+      matchesToday = data.date === todayStr;
+    }
 
-    if (orderDate.getTime() !== today.getTime()) return;
+    if (!matchesToday) return;
 
-    const isStartingPar = data.type === "starting-par";
-    const venueCode = venueCodesByName[(data.venue || "").toLowerCase()];
+    let quantity = 0;
+    if (type === "starting-par") {
+      quantity = Number(data.netWeight ?? 0);
+    } else {
+      quantity = Number(data.sendQty ?? data.qty ?? 0);
+    }
 
-    const recipeNo = isStartingPar
-      ? (data.recipeId || "").toUpperCase()
-      : (data.recipeNo || data.recipeId || "").toUpperCase();
+    if (quantity <= 0) return;
 
-   const description = data.item || data.description || "No Description";
+    const key = `${venueCode}__${recipeNo}`;
 
-
-    const quantity = Number(data.sendQty ?? data.qty ?? 0);
-
-
-    if (venueCode && recipeNo && quantity > 0) {
-      shipments.push({
+    if (!recipeMap.has(key)) {
+      recipeMap.set(key, {
         venueCode,
         recipeNo,
-        description,
-        quantity
+        quantity: 0,
+        description: "No Description",
+        type,
       });
     }
+
+    recipeMap.get(key).quantity += quantity;
   });
 
-  allShipmentData = shipments;
+  // 🔍 Fetch missing descriptions
+  for (const shipment of recipeMap.values()) {
+    try {
+      const docRef = doc(db, "recipes", shipment.recipeNo);
+      const docSnap = await getDoc(docRef);
 
-  // Default to ALOHA
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        shipment.description = data.description || "No Description";
+        continue;
+      }
+
+      const fallbackSnap = await getDocs(
+        query(collection(db, "recipes"), where("recipeNo", "==", shipment.recipeNo))
+      );
+      if (!fallbackSnap.empty) {
+        const data = fallbackSnap.docs[0].data();
+        shipment.description = data.description || "No Description";
+      }
+    } catch (err) {
+      console.error(`Error getting recipe description for ${shipment.recipeNo}:`, err);
+    }
+  }
+
+  allShipmentData = Array.from(recipeMap.values());
+
+  // 👇 Default to ALOHA view
   loadVenueShipment("b001");
 };
+
 
 // 📤 Show one venue shipment
 window.loadVenueShipment = function (venueCode) {
   currentVenueCode = venueCode;
 
   const container = document.getElementById("singleVenueShipmentContainer");
-  container.innerHTML = ""; // Clear previous
+  container.innerHTML = "";
 
   const venueLabel = venueNames[venueCode] || venueCode;
   const shipments = allShipmentData.filter(
@@ -3789,6 +3891,9 @@ window.loadVenueShipment = function (venueCode) {
   shipments.forEach(item => {
     const recipeNo = item.recipeNo || "UNKNOWN";
     const description = item.description || "No Description";
+    const type = item.type || "";
+
+    // ✅ Ensure correct quantity based on type
     const qty = Number(item.quantity || 0);
     const key = `${recipeNo}__${description}`;
     if (!rows[key]) rows[key] = { recipeNo, description, quantity: 0 };
