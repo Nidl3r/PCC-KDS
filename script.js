@@ -257,7 +257,7 @@ orders.sort((a, b) => {
       <td>${order.notes || ""}</td>
       <td>${order.qty}</td>
       <td>${order.status}</td>
-      <td><input type="number" min="1" value="${order.qty}" /></td>
+      <td><input type="number" min="1" value="${order.qty}" class="send-qty-input" /></td>
       <td>${order.uom || "ea"}</td>
       <td><button onclick="sendKitchenOrder('${order.id}', this)">Send</button></td>
     `;
@@ -1042,11 +1042,10 @@ function renderStationTable(stationName, orders) {
 
   tableBody.innerHTML = "";
 
-  // Sort orders by timestamp
+  // Sort by timestamp
   orders.sort((a, b) => a.timestamp?.toMillis?.() - b.timestamp?.toMillis?.());
 
   orders.forEach(order => {
-    // Skip closed or sent orders
     if (["Ready to Send", "completed", "sent"].includes(order.status)) return;
 
     const row = document.createElement("tr");
@@ -1055,13 +1054,11 @@ function renderStationTable(stationName, orders) {
     const cookTime = order.cookTime || 0;
     const dueTime = new Date(createdAt.getTime() + cookTime * 60000);
     const now = new Date();
-    const isLate = dueTime < now;
-
-    if (isLate) {
+    if (dueTime < now) {
       row.style.backgroundColor = "rgba(255, 0, 0, 0.15)";
     }
 
-    // Create cells
+    // Shared cells
     const timeCell = document.createElement("td");
     timeCell.textContent = createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -1074,54 +1071,86 @@ function renderStationTable(stationName, orders) {
     const itemCell = document.createElement("td");
     itemCell.textContent = order.item;
 
-    const notesCell = document.createElement("td");
-    notesCell.textContent = order.notes || "";
-
     const qtyCell = document.createElement("td");
     qtyCell.textContent = order.qty || 1;
 
-    // Send Qty input
-    const sendQtyInput = document.createElement("input");
-    sendQtyInput.type = "number";
-    sendQtyInput.min = 0;
-    sendQtyInput.placeholder = "0";
-    sendQtyInput.style.width = "60px";
+    const notesCell = document.createElement("td");
+    notesCell.textContent = order.notes || "";
 
-    const sendQtyCell = document.createElement("td");
-    sendQtyCell.appendChild(sendQtyInput);
+    // Grill/Wok stations: full send interface
+    if (["Grill", "Wok"].includes(stationName)) {
+      const sendQtyInput = document.createElement("input");
+      sendQtyInput.type = "number";
+      sendQtyInput.min = 0;
+      sendQtyInput.placeholder = "0";
+      sendQtyInput.style.width = "60px";
 
-    // UOM Cell
-    const uomCell = document.createElement("td");
-    uomCell.textContent = order.uom || "ea";
+      const sendQtyCell = document.createElement("td");
+      sendQtyCell.appendChild(sendQtyInput);
 
-    // Send Button
-    const sendButton = document.createElement("button");
-    sendButton.textContent = "Send";
-    sendButton.onclick = () => {
-      const sendQty = parseFloat(sendQtyInput.value);
-      if (!sendQty || sendQty <= 0) return alert("Enter valid send quantity");
+      const uomCell = document.createElement("td");
+      uomCell.textContent = order.uom || "ea";
 
-      sendStationAddonOrder(stationName, {
-        ...order,
-        sendQty
-      });
-    };
+      const sendButton = document.createElement("button");
+      sendButton.textContent = "Send";
+      sendButton.onclick = () => {
+        const sendQty = parseFloat(sendQtyInput.value);
+        if (!sendQty || sendQty <= 0) return alert("Enter valid send quantity");
 
-    const sendCell = document.createElement("td");
-    sendCell.appendChild(sendButton);
+        sendStationAddonOrder(stationName, {
+          ...order,
+          sendQty
+        });
+      };
 
-    // Append all cells to row
-    row.append(
-      timeCell,
-      dueCell,
-      venueCell,
-      itemCell,
-      notesCell,
-      qtyCell,
-      sendQtyCell,
-      uomCell,
-      sendCell
-    );
+      const sendCell = document.createElement("td");
+      sendCell.appendChild(sendButton);
+
+      row.append(
+        timeCell,
+        dueCell,
+        venueCell,
+        itemCell,
+        notesCell,
+        qtyCell,
+        sendQtyCell,
+        uomCell,
+        sendCell
+      );
+    }
+
+    // Other stations: Ready button only
+    else {
+      const readyCell = document.createElement("td");
+    const readyButton = document.createElement("button");
+readyButton.textContent = "✅ Ready";
+readyButton.classList.add("ready-btn");
+
+
+      readyButton.onclick = async () => {
+        try {
+          await updateDoc(doc(db, "orders", order.id), {
+            status: "Ready to Send",
+            readyAt: serverTimestamp()
+          });
+        } catch (err) {
+          console.error("Error updating order:", err);
+          alert("Failed to mark as ready.");
+        }
+      };
+
+      readyCell.appendChild(readyButton);
+
+      row.append(
+        timeCell,
+        dueCell,
+        venueCell,
+        itemCell,
+        qtyCell,
+        notesCell,
+        readyCell
+      );
+    }
 
     tableBody.appendChild(row);
   });
@@ -1185,28 +1214,33 @@ window.sendKitchenOrder = async function(orderId, button) {
     }
 
     const order = orderSnap.data();
+    const row = button.closest("tr");
 
-    // ✅ 1. Update status to "sent"
-    await setDoc(orderRef, {
-  status: "sent",
-  sentAt: serverTimestamp()
-}, { merge: true });
+    // ✅ Select only the Send Qty input
+    const sendQtyInput = row.querySelector(".send-qty-input");
+    const sendQty = parseFloat(sendQtyInput?.value || order.qty || 1);
 
-
-
-    console.log(`✅ Order ${orderId} marked as sent and logged in production.`);
-
-    // ✅ 3. Remove the row from the UI
-    if (button && button.closest("tr")) {
-      button.closest("tr").remove();
+    if (isNaN(sendQty) || sendQty <= 0) {
+      alert("⚠️ Please enter a valid quantity to send.");
+      return;
     }
 
+    await setDoc(orderRef, {
+      status: "sent",
+      sentAt: serverTimestamp(),
+      sendQty: sendQty,
+      qty: sendQty // Optional: remove this line if you want to eliminate 'qty'
+    }, { merge: true });
+
+    console.log(`✅ Sent order ${orderId} with sendQty: ${sendQty}`);
+
+    if (row) row.remove();
+
   } catch (error) {
-    console.error("❌ Failed to send and log order:", error);
+    console.error("❌ Failed to send order:", error);
     alert("❌ Failed to send order.");
   }
 };
-
 
 
 window.loadMainKitchenStartingPars = async function () {
@@ -1377,6 +1411,47 @@ document.getElementById("starting-filter-station").addEventListener("change", ()
 });
 
 
+// 🔁 Shared function to send a starting par order
+async function sendStartingPar(recipeId, venue, sendQty) {
+  const today = getTodayDate();
+
+  const guestCountDoc = await getDoc(doc(db, "guestCounts", today));
+  const guestCount = guestCountDoc.exists() ? guestCountDoc.data()[venue] : 0;
+
+  const recipeSnap = await getDoc(doc(db, "recipes", recipeId));
+  if (!recipeSnap.exists()) {
+    console.warn(`❌ Recipe ${recipeId} not found`);
+    return;
+  }
+
+  const recipeData = recipeSnap.data();
+  const panWeight = Number(recipeData.panWeight || 0);
+  const costPerLb = Number(recipeData.cost || 0);
+  const pans = recipeData.pars?.[venue]?.[guestCount] || 0;
+
+  const netWeight = Math.max(0, sendQty - (pans * panWeight));
+  const totalCost = netWeight * costPerLb;
+
+  const orderData = {
+    type: "starting-par",
+    venue,
+    recipeId,
+    sendQty,         // ✅ use this instead of qty
+    pans,
+    panWeight,
+    netWeight,
+    costPerLb,
+    totalCost,
+    date: today,
+    status: "sent",
+    sentAt: Timestamp.now(),
+    timestamp: Timestamp.now()
+  };
+
+  await addDoc(collection(db, "orders"), orderData);
+
+  console.log(`✅ Sent ${sendQty} lbs for ${recipeId} to ${venue} → Net: ${netWeight} lbs, Cost: $${totalCost.toFixed(2)}`);
+}
 window.sendSingleStartingPar = async function (recipeId, venue, button) {
   const row = button.closest("tr");
   const totalSpan = row.querySelector(".total-send-qty");
@@ -1392,120 +1467,10 @@ window.sendSingleStartingPar = async function (recipeId, venue, button) {
     return;
   }
 
-  const today = getTodayDate();
-
-  // 1. Get today's guest count
-  const guestCountDoc = await getDoc(doc(db, "guestCounts", today));
-  const guestCount = guestCountDoc.exists() ? guestCountDoc.data()[venue] : 0;
-
-  // 2. Get recipe info
-  const recipeSnap = await getDoc(doc(db, "recipes", recipeId));
-  if (!recipeSnap.exists()) {
-    console.error("❌ Recipe not found");
-    return;
-  }
-
-  const recipeData = recipeSnap.data();
-  const panWeight = Number(recipeData.panWeight || 0);
-  const costPerLb = Number(recipeData.cost || 0);
-  const pans = recipeData.pars?.[venue]?.[guestCount] || 0;
-
-  // 3. Calculate net weight and total cost
-  const netWeight = Math.max(0, sendQty - (pans * panWeight));
-  const totalCost = netWeight * costPerLb;
-
-  const orderData = {
-    type: "starting-par",
-    venue,
-    recipeId,
-    qty: sendQty,
-    pans,
-    panWeight,
-    netWeight,
-    costPerLb,
-    totalCost,
-    date: today,
-    status: "sent"
-  };
-
-  await addDoc(collection(db, "orders"), orderData);
+  await sendStartingPar(recipeId, venue, sendQty);
   row.remove();
-
-  console.log(`✅ Sent ${sendQty} lbs for ${recipeId} to ${venue} → Net: ${netWeight} lbs, Cost: $${totalCost.toFixed(2)}`);
 };
 
-window.sendSelected = async function () {
-  console.log("🚀 Send Selected called");
-
-  const today = getTodayDate();
-  const guestCountDoc = await getDoc(doc(db, "guestCounts", today));
-  const guestCounts = guestCountDoc.exists() ? guestCountDoc.data() : {};
-
-  const rows = document.querySelectorAll("#startingParsTable tbody tr");
-  console.log(`🔎 Found ${rows.length} rows`);
-
-  for (const row of rows) {
-    const totalSpan = row.querySelector(".total-send-qty");
-    const sendQty = Number(totalSpan?.textContent);
-
-    console.log("➡️ Checking row:");
-    console.log("   - Qty span:", totalSpan?.textContent);
-    console.log("   - Parsed Qty:", sendQty);
-
-    if (isNaN(sendQty) || sendQty <= 0) {
-      console.warn("⏭️ Skipping row: invalid or 0 qty");
-      continue;
-    }
-
-    const button = row.querySelector("button");
-    const match = button?.getAttribute("onclick")?.match(/'([^']+)', '([^']+)'/);
-    if (!match) {
-      console.warn("⚠️ Could not extract recipeId/venue from button");
-      continue;
-    }
-
-    const recipeId = match[1];
-    const venue = match[2];
-    const guestCount = guestCounts[venue] || 0;
-
-    console.log(`📦 Preparing to send ${sendQty} lbs for ${recipeId} (${venue})`);
-
-    const recipeSnap = await getDoc(doc(db, "recipes", recipeId));
-    if (!recipeSnap.exists()) {
-      console.warn(`⚠️ Recipe ${recipeId} not found in Firestore`);
-      continue;
-    }
-
-    const recipeData = recipeSnap.data();
-    const panWeight = Number(recipeData.panWeight || 0);
-    const costPerLb = Number(recipeData.cost || 0);
-    const pans = recipeData.pars?.[venue]?.[guestCount.toString()] || 0;
-
-    const netWeight = Math.max(0, sendQty - (pans * panWeight));
-    const totalCost = netWeight * costPerLb;
-
-    const orderData = {
-      type: "starting-par",
-      venue,
-      recipeId,
-      qty: sendQty,
-      pans,
-      panWeight,
-      netWeight,
-      costPerLb,
-      totalCost,
-      date: today,
-      status: "sent"
-    };
-
-    await addDoc(collection(db, "orders"), orderData);
-    console.log(`✅ Sent ${sendQty} lbs for ${recipeId} → Net: ${netWeight} lbs, Cost: $${totalCost.toFixed(2)}`);
-
-    row.remove();
-  }
-
-  console.log("🏁 Finished sending all valid rows.");
-};
 
 
 //**WASTE aloha */
@@ -3649,7 +3614,8 @@ window.loadProductionSummary = async function () {
 
     const description = data.description || data.item || "No Description";
     const submenuCode = data.submenuCode || "";
-    const qty = Number(data.qty || 0);
+    const qty = Number(data.sendQty ?? data.qty ?? 0);
+
     if (qty <= 0) return;
 
     if (!summaryMap.has(recipeNo)) {
@@ -3785,11 +3751,11 @@ window.loadProductionShipments = async function () {
       ? (data.recipeId || "").toUpperCase()
       : (data.recipeNo || data.recipeId || "").toUpperCase();
 
-    const description = isStartingPar
-      ? "Starting Par Item"
-      : (data.item || data.description || "No Description");
+   const description = data.item || data.description || "No Description";
 
-    const quantity = Number(data.qty || 0);
+
+    const quantity = Number(data.sendQty ?? data.qty ?? 0);
+
 
     if (venueCode && recipeNo && quantity > 0) {
       shipments.push({

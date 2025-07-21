@@ -511,3 +511,18 @@ body {
   margin-right: 5px;
   padding: 4px;
 }
+
+
+.ready-btn {
+  padding: 8px 12px;
+  font-size: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--highlight);
+  color: var(--text);
+  transition: background 0.2s ease;
+}
+
+.ready-btn:hover {
+  background: #5a5a6a;
+}
