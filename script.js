@@ -1224,7 +1224,6 @@ window.sendKitchenOrder = async function(orderId, button) {
 
     let adjustedQty = sendQty;
 
-    // ✅ Lookup recipe by "recipeNo" field
     if (order.type === "addon" && order.recipeNo) {
       const recipeQuery = query(
         collection(db, "recipes"),
@@ -1235,15 +1234,20 @@ window.sendKitchenOrder = async function(orderId, button) {
       if (!recipeSnap.empty) {
         const recipeData = recipeSnap.docs[0].data();
         const panWeight = recipeData.panWeight || 0;
+        const uom = (recipeData.uom || "").toLowerCase();
 
-        // ❌ If result is negative, block it
-        if (sendQty < panWeight) {
-          alert(`⚠️ Send Qty must be greater than pan weight (${panWeight}).`);
-          return;
+        // ✅ Only subtract pan weight if UOM is lb
+        if (uom === "lb") {
+          if (panWeight > 0 && sendQty < panWeight) {
+            alert(`⚠️ Send Qty must be greater than pan weight (${panWeight}) for weight-based items.`);
+            return;
+          }
+
+          adjustedQty = parseFloat((sendQty - panWeight).toFixed(4));
+          console.log(`💡 Adjusted Qty for ${order.recipeNo}: ${adjustedQty} (panWeight: ${panWeight})`);
+        } else {
+          console.log(`ℹ️ UOM is '${uom}', skipping pan weight adjustment.`);
         }
-
-        adjustedQty = parseFloat((sendQty - panWeight).toFixed(4));
-        console.log(`💡 Adjusted Qty for ${order.recipeNo}: ${adjustedQty} (panWeight: ${panWeight})`);
       } else {
         console.warn("⚠️ Recipe not found for", order.recipeNo);
       }
