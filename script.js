@@ -97,7 +97,7 @@ document.addEventListener("DOMContentLoaded", () => {
   listenToAlohaOrders?.();      
   listenToGatewayOrders?.();    
   listenToOhanaOrders?.();      
-
+  listenToAddonOrders?.();
   loadGuestCounts?.();            
 
   // 🔽 Apply category filter on load for all venues
@@ -202,6 +202,7 @@ window.showAccountingTab = showAccountingTab;
 
 
 // ✅ Render kitchen add ons
+const kitchenSendQtyCache = {};
 
 function renderKitchen(orders) {
   const container = document.getElementById("kitchenTable").querySelector("tbody");
@@ -209,29 +210,18 @@ function renderKitchen(orders) {
 
   container.innerHTML = "";
 
-  // Sort by order time (oldest first)
-  // 🧠 Sort logic:
-// 1. "Ready to Send" comes before "open"
-// 2. Within each status group, sort by timestamp ascending
+  // Sort by priority and time
+  orders.sort((a, b) => {
+    const priority = { "Ready to Send": 0, "open": 1 };
+    const aPriority = priority[a.status] ?? 2;
+    const bPriority = priority[b.status] ?? 2;
 
-orders.sort((a, b) => {
-  const priority = {
-    "Ready to Send": 0,
-    "open": 1
-  };
+    if (aPriority !== bPriority) return aPriority - bPriority;
 
-  const aPriority = priority[a.status] ?? 2;
-  const bPriority = priority[b.status] ?? 2;
-
-  if (aPriority !== bPriority) {
-    return aPriority - bPriority;
-  }
-
-  const timeA = a.timestamp?.toDate?.() || new Date(0);
-  const timeB = b.timestamp?.toDate?.() || new Date(0);
-  return timeA - timeB;
-});
-
+    const timeA = a.timestamp?.toDate?.() || new Date(0);
+    const timeB = b.timestamp?.toDate?.() || new Date(0);
+    return timeA - timeB;
+  });
 
   orders.forEach(order => {
     const row = document.createElement("tr");
@@ -244,11 +234,11 @@ orders.sort((a, b) => {
     const timeFormatted = createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const dueFormatted = dueTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-    // 🔴 Highlight row if past due (Aloha style)
     const isLate = dueTime < now;
-    if (isLate) {
-      row.style.backgroundColor = "rgba(255, 0, 0, 0.15)";
-    }
+    if (isLate) row.style.backgroundColor = "rgba(255, 0, 0, 0.15)";
+
+    // Use cached value if available
+    const cachedQty = kitchenSendQtyCache[order.id] ?? order.qty;
 
     row.innerHTML = `
       <td>${timeFormatted}</td>
@@ -258,16 +248,22 @@ orders.sort((a, b) => {
       <td>${order.notes || ""}</td>
       <td>${order.qty}</td>
       <td>${order.status}</td>
-      <td><input type="number" min="1" value="${order.qty}" class="send-qty-input" /></td>
+      <td><input type="number" min="0.01" step="0.01" value="${cachedQty}" class="send-qty-input" data-order-id="${order.id}" /></td>
       <td>${order.uom || "ea"}</td>
       <td><button onclick="sendKitchenOrder('${order.id}', this)">Send</button></td>
     `;
 
     container.appendChild(row);
   });
+
+  // Update cache when any input changes
+  container.querySelectorAll(".send-qty-input").forEach(input => {
+    input.addEventListener("input", e => {
+      const id = input.getAttribute("data-order-id");
+      kitchenSendQtyCache[id] = parseFloat(input.value) || 0;
+    });
+  });
 }
-
-
 
 function listenToOrders() {
   const ordersRef = collection(db, "orders");
@@ -283,6 +279,22 @@ function listenToOrders() {
   });
 }
 
+function listenToAddonOrders() {
+  const ordersRef = collection(db, "orders");
+
+  const addonQuery = query(
+    ordersRef,
+    where("type", "==", "addon"),
+    where("status", "in", ["open", "Ready to Send"])
+  );
+
+  onSnapshot(addonQuery, (snapshot) => {
+    const orders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+    // ✅ Reuse your existing render function
+    renderKitchen(orders);
+  });
+}
 
 
 
@@ -525,13 +537,13 @@ window.sendAlohaOrder = async function(button) {
   const notesInput = document.getElementById("alohaNotes");
 
   const recipeNo = itemSelect.value;
-  const qty = parseInt(qtyInput.value);
   const notes = notesInput?.value?.trim() || "";
+const qty = parseFloat(qtyInput.value || 0);
 
   if (!recipeNo || isNaN(qty) || qty <= 0) {
-    alert("Please select an item and enter a valid quantity.");
-    return;
-  }
+  alert("Please select an item and enter a valid quantity.");
+  return;
+}
 
   try {
     // 🔍 Fetch the recipe data by recipeNo
@@ -1224,7 +1236,6 @@ window.sendKitchenOrder = async function(orderId, button) {
 
     let adjustedQty = sendQty;
 
-    // ✅ Lookup recipe by "recipeNo" field
     if (order.type === "addon" && order.recipeNo) {
       const recipeQuery = query(
         collection(db, "recipes"),
@@ -1235,8 +1246,20 @@ window.sendKitchenOrder = async function(orderId, button) {
       if (!recipeSnap.empty) {
         const recipeData = recipeSnap.docs[0].data();
         const panWeight = recipeData.panWeight || 0;
-        adjustedQty = parseFloat((sendQty - panWeight).toFixed(4));
-        console.log(`💡 Adjusted Qty for ${order.recipeNo}: ${adjustedQty} (panWeight: ${panWeight})`);
+        const uom = (recipeData.uom || "").toLowerCase();
+
+        if (uom === "lb") {
+          // ✅ Only warn or subtract if uom is 'lb'
+          if (panWeight > 0 && sendQty < panWeight) {
+            alert(`⚠️ Send Qty must be greater than pan weight (${panWeight}) for weight-based items.`);
+            return;
+          }
+
+          adjustedQty = parseFloat((sendQty - panWeight).toFixed(4));
+          console.log(`💡 Adjusted Qty for ${order.recipeNo}: ${adjustedQty} (panWeight: ${panWeight})`);
+        } else {
+          console.log(`ℹ️ UOM is '${uom}', skipping pan weight adjustment.`);
+        }
       } else {
         console.warn("⚠️ Recipe not found for", order.recipeNo);
       }
@@ -1258,6 +1281,10 @@ window.sendKitchenOrder = async function(orderId, button) {
     alert("❌ Failed to send order.");
   }
 };
+
+
+window.mainStartingQtyCache = {};      // already exists
+window.mainStartingInputCache = {};    // NEW — stores current input
 
 
 
@@ -1330,6 +1357,10 @@ window.renderMainKitchenPars = function () {
     return;
   }
 
+  // Make sure caches exist
+  window.mainStartingQtyCache = window.mainStartingQtyCache || {};
+  window.mainStartingInputCache = window.mainStartingInputCache || {};
+
   const venueCodeMap = {
     b001: "Aloha",
     b002: "Ohana",
@@ -1374,7 +1405,12 @@ window.renderMainKitchenPars = function () {
       // 🛑 Skip if fully sent
       if (sentQty >= parQty) return;
 
-      // ✅ Otherwise render the row
+      // 🧠 Load from caches
+      const cacheKey = `${venue}|${recipe.id}`;
+      const cachedTotal = window.mainStartingQtyCache[cacheKey] ?? 0;
+      const cachedInput = window.mainStartingInputCache[cacheKey] ?? 0;
+
+      // ✅ Build row with correct values
       const row = document.createElement("tr");
       row.innerHTML = `
         <td>${venue}</td>
@@ -1382,12 +1418,24 @@ window.renderMainKitchenPars = function () {
         <td>${parQty}</td>
         <td>${recipe.uom || "ea"}</td>
         <td>
-          <span class="total-send-qty">0</span>
-          <input class="add-send-qty" type="number" min="0" value="0" style="width: 60px; margin-left: 6px;" />
+          <span class="total-send-qty">${cachedTotal}</span>
+          <input class="add-send-qty" type="number" min="0" value="${cachedInput}" data-cache-key="${cacheKey}" style="width: 60px; margin-left: 6px;" />
           <button class="add-send-btn" onclick="addToSendQty(this)">Add</button>
         </td>
         <td><button onclick="sendSingleStartingPar('${recipe.id}', '${venue}', this)">Send</button></td>
       `;
+
+      // 💾 Save input to input cache only
+      const input = row.querySelector(".add-send-qty");
+      if (input) {
+        input.addEventListener("input", () => {
+          const inputQty = Number(input.value);
+          if (!isNaN(inputQty) && inputQty >= 0) {
+            window.mainStartingInputCache[cacheKey] = inputQty;
+          }
+        });
+      }
+
       tbody.appendChild(row);
       totalRows++;
     });
@@ -1396,29 +1444,34 @@ window.renderMainKitchenPars = function () {
   console.log(`✅ Rendered ${totalRows} rows based on filters`);
 };
 
+
 window.addToSendQty = function (button) {
   const row = button.closest("tr");
   const input = row.querySelector(".add-send-qty");
   const totalSpan = row.querySelector(".total-send-qty");
 
-  if (!input || !totalSpan) {
-    console.error("❌ Could not find .add-send-qty or .total-send-qty in row", row);
-    return;
-  }
+  if (!input || !totalSpan) return;
 
   const addQty = Number(input.value);
   const currentQty = Number(totalSpan.textContent);
+  const cacheKey = input.getAttribute("data-cache-key");
 
   if (!isNaN(addQty) && addQty > 0) {
     const newTotal = currentQty + addQty;
     totalSpan.textContent = newTotal;
     input.value = "0";
     input.focus();
-    console.log(`📦 Updated Send Qty: ${currentQty} + ${addQty} = ${newTotal}`);
+
+    // ✅ Update both caches
+    window.mainStartingQtyCache[cacheKey] = newTotal;
+    window.mainStartingInputCache[cacheKey] = 0;
+
+    console.log(`📦 Added ${addQty} → Total now ${newTotal}`);
   } else {
     console.warn("⚠️ Enter a valid number greater than 0");
   }
 };
+
 
 
 document.getElementById("starting-filter-venue").addEventListener("change", () => {
@@ -1486,6 +1539,15 @@ window.sendSingleStartingPar = async function (recipeId, venue, button) {
   }
 
   await sendStartingPar(recipeId, venue, sendQty);
+
+  // ✅ Clear from cache
+  const cacheKey = `${venue}|${recipeId}`;
+  if (window.mainStartingQtyCache) {
+    delete window.mainStartingQtyCache[cacheKey];
+delete window.mainStartingInputCache[cacheKey];
+  }
+
+  // 🧹 Remove the row from UI
   row.remove();
 };
 
@@ -2175,15 +2237,14 @@ window.sendGatewayOrder = async function (button) {
   const qtyInput = document.getElementById("gatewayQty");
   const notesInput = document.getElementById("gatewayNotes");
 
-  const recipeNo = itemSelect.value;
-  const qty = parseInt(qtyInput.value);
+    const recipeNo = itemSelect.value;
   const notes = notesInput?.value?.trim() || "";
+const qty = parseFloat(qtyInput.value || 0);
 
   if (!recipeNo || isNaN(qty) || qty <= 0) {
-    alert("Please select an item and enter a valid quantity.");
-    return;
-  }
-
+  alert("Please select an item and enter a valid quantity.");
+  return;
+}
   try {
     const recipeSnapshot = await getDocs(
       query(collection(db, "recipes"), where("recipeNo", "==", recipeNo))
@@ -2721,13 +2782,13 @@ window.sendOhanaOrder = async function (button) {
   const notesInput = document.getElementById("ohanaNotes");
 
   const recipeNo = itemSelect.value;
-  const qty = parseInt(qtyInput.value);
   const notes = notesInput?.value?.trim() || "";
+const qty = parseFloat(qtyInput.value || 0);
 
   if (!recipeNo || isNaN(qty) || qty <= 0) {
-    alert("Please select an item and enter a valid quantity.");
-    return;
-  }
+  alert("Please select an item and enter a valid quantity.");
+  return;
+}
 
   try {
     const recipeSnapshot = await getDocs(
@@ -2886,13 +2947,13 @@ window.sendConcessionOrder = async function (button) {
   const notesInput = document.getElementById("concessionNotes");
 
   const recipeNo = itemSelect.value;
-  const qty = parseInt(qtyInput.value);
   const notes = notesInput?.value?.trim() || "";
+const qty = parseFloat(qtyInput.value || 0);
 
   if (!recipeNo || isNaN(qty) || qty <= 0) {
-    alert("Please select an item and enter a valid quantity.");
-    return;
-  }
+  alert("Please select an item and enter a valid quantity.");
+  return;
+}
 
   try {
     const recipeSnapshot = await getDocs(
