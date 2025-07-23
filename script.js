@@ -93,7 +93,6 @@ document.addEventListener("DOMContentLoaded", () => {
   console.log("✅ PCC KDS App Loaded");
 
   // 🔁 Listen to Firestore collections
-  listenToOrders?.();            
   listenToAlohaOrders?.();      
   listenToGatewayOrders?.();    
   listenToOhanaOrders?.();      
@@ -265,19 +264,7 @@ function renderKitchen(orders) {
   });
 }
 
-function listenToOrders() {
-  const ordersRef = collection(db, "orders");
-  const kitchenQuery = query(ordersRef, where("status", "in", ["open", "Ready to Send"]));
 
-
-  onSnapshot(kitchenQuery, (snapshot) => {
-    let orders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    
-
-    // TEMP: show all orders with no filtering
-    renderKitchen(orders);
-  });
-}
 
 function listenToAddonOrders() {
   const ordersRef = collection(db, "orders");
@@ -531,6 +518,8 @@ async function applyCategoryFilter(area) {
 window.applyCategoryFilter = applyCategoryFilter;
 
 // Sends Aloha add-on orders
+let recentAlohaOrders = new Map();
+
 window.sendAlohaOrder = async function(button) {
   const itemSelect = document.getElementById("alohaItem");
   const qtyInput = document.getElementById("alohaQty");
@@ -538,15 +527,25 @@ window.sendAlohaOrder = async function(button) {
 
   const recipeNo = itemSelect.value;
   const notes = notesInput?.value?.trim() || "";
-const qty = parseFloat(qtyInput.value || 0);
+  const qty = parseFloat(qtyInput.value || 0);
 
   if (!recipeNo || isNaN(qty) || qty <= 0) {
-  alert("Please select an item and enter a valid quantity.");
-  return;
-}
+    alert("Please select an item and enter a valid quantity.");
+    return;
+  }
+
+  // ⏳ Prevent duplicate sends
+  const cacheKey = `${recipeNo}-${qty}`;
+  const now = Date.now();
+  if (recentAlohaOrders.has(cacheKey) && now - recentAlohaOrders.get(cacheKey) < 5000) {
+    alert("⏳ You've already sent this item recently. Please wait.");
+    return;
+  }
+  recentAlohaOrders.set(cacheKey, now);
+
+  button.disabled = true;
 
   try {
-    // 🔍 Fetch the recipe data by recipeNo
     const recipeSnapshot = await getDocs(
       query(collection(db, "recipes"), where("recipeNo", "==", recipeNo))
     );
@@ -558,13 +557,11 @@ const qty = parseFloat(qtyInput.value || 0);
 
     const recipeData = recipeSnapshot.docs[0].data();
 
-    // 🔒 Only restrict quantity if it's HOTFOODS
     if (qty > 1 && recipeData.category?.toUpperCase() === "HOTFOODS") {
       alert("⚠️ HOTFOODS items must be ordered one at a time.");
       return;
     }
 
-    // 💰 Calculate total cost
     const unitCost = Number(recipeData.cost || 0);
     const totalCost = unitCost * qty;
 
@@ -580,7 +577,7 @@ const qty = parseFloat(qtyInput.value || 0);
       uom: recipeData.uom || "ea",
       totalCost: totalCost,
       type: "addon",
-      date: getTodayDate(), // 🗓️ You'll need this helper if not already in your code
+      date: getTodayDate(),
       timestamp: serverTimestamp()
     };
 
@@ -591,14 +588,18 @@ const qty = parseFloat(qtyInput.value || 0);
     itemSelect.selectedIndex = 0;
     if (notesInput) notesInput.value = "";
 
-    // 🔁 Update cost summary
     await updateCostSummaryForVenue("Aloha");
 
   } catch (error) {
     console.error("❌ Failed to send order:", error);
     alert("❌ Failed to send order.");
+  } finally {
+    setTimeout(() => {
+      button.disabled = false;
+    }, 1000);
   }
 };
+
 
 async function updateCostSummaryForVenue(venueName) {
   const today = getTodayDate(); // e.g., "2025-07-17"
@@ -2232,19 +2233,34 @@ gatewayCategorySelect?.addEventListener("change", () => {
 });
 
 // ✅ Send Gateway Add-on Orders
+let recentGatewayOrders = new Map();
+
 window.sendGatewayOrder = async function (button) {
   const itemSelect = document.getElementById("gatewayItem");
   const qtyInput = document.getElementById("gatewayQty");
   const notesInput = document.getElementById("gatewayNotes");
 
-    const recipeNo = itemSelect.value;
+  const recipeNo = itemSelect.value;
   const notes = notesInput?.value?.trim() || "";
-const qty = parseFloat(qtyInput.value || 0);
+  const qty = parseFloat(qtyInput.value || 0);
 
   if (!recipeNo || isNaN(qty) || qty <= 0) {
-  alert("Please select an item and enter a valid quantity.");
-  return;
-}
+    alert("Please select an item and enter a valid quantity.");
+    return;
+  }
+
+  // ✅ Prevent duplicate rapid sends
+  const cacheKey = `${recipeNo}-${qty}`;
+  const now = Date.now();
+  if (recentGatewayOrders.has(cacheKey) && now - recentGatewayOrders.get(cacheKey) < 5000) {
+    alert("⏳ You've already sent this item recently. Please wait.");
+    return;
+  }
+  recentGatewayOrders.set(cacheKey, now);
+
+  // 🔒 Disable button to prevent double-clicks
+  button.disabled = true;
+
   try {
     const recipeSnapshot = await getDocs(
       query(collection(db, "recipes"), where("recipeNo", "==", recipeNo))
@@ -2257,7 +2273,6 @@ const qty = parseFloat(qtyInput.value || 0);
 
     const recipeData = recipeSnapshot.docs[0].data();
 
-    // 🔒 Restrict HOTFOODS quantity
     if (qty > 1 && recipeData.category?.toUpperCase() === "HOTFOODS") {
       alert("⚠️ HOTFOODS items must be ordered one at a time.");
       return;
@@ -2277,9 +2292,9 @@ const qty = parseFloat(qtyInput.value || 0);
       notes: notes,
       uom: recipeData.uom || "ea",
       timestamp: serverTimestamp(),
-      date: getTodayDate(),        // ⬅️ YYYY-MM-DD format
-      type: "addon",               // ⬅️ Required for cost tracking
-      totalCost: totalCost         // ⬅️ Required for cost tracking
+      date: getTodayDate(),
+      type: "addon",
+      totalCost: totalCost
     };
 
     await addDoc(collection(db, "orders"), order);
@@ -2292,8 +2307,13 @@ const qty = parseFloat(qtyInput.value || 0);
   } catch (error) {
     console.error("❌ Failed to send gateway order:", error);
     alert("❌ Failed to send order.");
+  } finally {
+    setTimeout(() => {
+      button.disabled = false;
+    }, 1000);
   }
 };
+
 
 
 // ✅ Listen to Gateway Orders
@@ -2824,6 +2844,8 @@ ohanaCategorySelect?.addEventListener("change", () => {
 });
 
 // Send order for Ohana
+let recentOhanaOrders = new Map();
+
 window.sendOhanaOrder = async function (button) {
   const itemSelect = document.getElementById("ohanaItem");
   const qtyInput = document.getElementById("ohanaQty");
@@ -2831,12 +2853,23 @@ window.sendOhanaOrder = async function (button) {
 
   const recipeNo = itemSelect.value;
   const notes = notesInput?.value?.trim() || "";
-const qty = parseFloat(qtyInput.value || 0);
+  const qty = parseFloat(qtyInput.value || 0);
 
   if (!recipeNo || isNaN(qty) || qty <= 0) {
-  alert("Please select an item and enter a valid quantity.");
-  return;
-}
+    alert("Please select an item and enter a valid quantity.");
+    return;
+  }
+
+  // 🛑 Prevent recent duplicate submission
+  const cacheKey = `${recipeNo}-${qty}`;
+  const now = Date.now();
+  if (recentOhanaOrders.has(cacheKey) && now - recentOhanaOrders.get(cacheKey) < 5000) {
+    alert("⏳ You've already sent this item recently. Please wait.");
+    return;
+  }
+  recentOhanaOrders.set(cacheKey, now);
+
+  button.disabled = true;
 
   try {
     const recipeSnapshot = await getDocs(
@@ -2850,7 +2883,6 @@ const qty = parseFloat(qtyInput.value || 0);
 
     const recipeData = recipeSnapshot.docs[0].data();
 
-    // 🔒 Restrict HOTFOODS quantity
     if (qty > 1 && recipeData.category?.toUpperCase() === "HOTFOODS") {
       alert("⚠️ HOTFOODS items must be ordered one at a time.");
       return;
@@ -2885,8 +2917,13 @@ const qty = parseFloat(qtyInput.value || 0);
   } catch (error) {
     console.error("❌ Failed to send order:", error);
     alert("❌ Failed to send order.");
+  } finally {
+    setTimeout(() => {
+      button.disabled = false;
+    }, 1000);
   }
 };
+
 
 
 // Realtime listener for Ohana
