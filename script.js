@@ -237,7 +237,8 @@ function renderKitchen(orders) {
     if (isLate) row.style.backgroundColor = "rgba(255, 0, 0, 0.15)";
 
     // Use cached value if available
-    const cachedQty = kitchenSendQtyCache[order.id] ?? order.qty;
+    const cachedQty = kitchenSendQtyCache[order.id] ?? ""; // empty unless user types it
+
 
     row.innerHTML = `
       <td>${timeFormatted}</td>
@@ -1170,19 +1171,22 @@ readyButton.classList.add("ready-btn");
   });
 }
 
-
 async function sendStationAddonOrder(stationName, order) {
   try {
     const { id, recipeNo, sendQty, venue } = order;
 
-    const recipeRef = doc(db, "recipes", recipeNo);
-    const recipeSnap = await getDoc(recipeRef);
+    // 🔍 Query recipe by recipeNo field
+    const recipeQuery = query(
+      collection(db, "recipes"),
+      where("recipeNo", "==", recipeNo)
+    );
+    const recipeSnap = await getDocs(recipeQuery);
 
-    if (!recipeSnap.exists()) {
+    if (recipeSnap.empty) {
       return alert("Recipe not found.");
     }
 
-    const recipeData = recipeSnap.data();
+    const recipeData = recipeSnap.docs[0].data();
     const costPerUOM = recipeData.cost || 0;
     const panWeight = recipeData.panWeight || 0;
 
@@ -1192,7 +1196,7 @@ async function sendStationAddonOrder(stationName, order) {
 
     // 📦 Update Firestore
     const updateData = {
-      sendQty: netQty,               // Save adjusted quantity
+      sendQty: netQty,
       status: "sent",
       sentAt: serverTimestamp(),
       totalCost,
@@ -1202,14 +1206,12 @@ async function sendStationAddonOrder(stationName, order) {
     const orderRef = doc(db, "orders", id);
     await updateDoc(orderRef, updateData);
 
-    alert("Order sent successfully.");
+    // ✅ No success alert here
   } catch (error) {
     console.error("Failed to send order:", error);
     alert("Error sending order.");
   }
 }
-
-
 
 
 //** Kitchen functions */
