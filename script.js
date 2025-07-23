@@ -2363,15 +2363,63 @@ function renderGatewayTable(orders) {
       <td>${order.qty}</td>
       <td>${order.status}</td>
       <td>
-        ${order.status === "sent"
-          ? `<button onclick="markOrderReceived('${order.id}', this)">✓ Receive</button>`
-          : ""}
-      </td>
+  ${["sent", "Ready to Send"].includes(order.status)
+    ? `<button onclick="markOrderReceived('${order.id}', this)">✓ Receive</button>`
+    : ""}
+</td>
+
     `;
 
     tbody.appendChild(row);
   });
 }
+
+window.markOrderReceived = async function (orderId, button) {
+  const timing = await new Promise((resolve) => {
+    const confirmBox = document.createElement("div");
+    confirmBox.style.position = "fixed";
+    confirmBox.style.top = "50%";
+    confirmBox.style.left = "50%";
+    confirmBox.style.transform = "translate(-50%, -50%)";
+    confirmBox.style.background = "#222";
+    confirmBox.style.color = "#fff";
+    confirmBox.style.padding = "20px";
+    confirmBox.style.border = "2px solid #aaa";
+    confirmBox.style.borderRadius = "8px";
+    confirmBox.style.zIndex = "9999";
+    confirmBox.innerHTML = `
+      <p style="margin-bottom: 12px;">When did the item arrive?</p>
+      <div style="display: flex; gap: 12px; justify-content: center;">
+        <button id="beforeBtn">Arrived BEFORE food ran out</button>
+        <button id="afterBtn">Arrived AFTER food ran out</button>
+      </div>
+    `;
+
+    document.body.appendChild(confirmBox);
+
+    confirmBox.querySelector("#beforeBtn").onclick = () => {
+      resolve("before");
+      document.body.removeChild(confirmBox);
+    };
+    confirmBox.querySelector("#afterBtn").onclick = () => {
+      resolve("after");
+      document.body.removeChild(confirmBox);
+    };
+  });
+
+  try {
+    const orderRef = doc(db, "orders", orderId);
+    await updateDoc(orderRef, {
+      status: "received",
+      receivedAt: serverTimestamp(),
+      arrivalTiming: timing === "before" ? "Before Food Ran Out" : "After Food Ran Out"
+    });
+  } catch (err) {
+    console.error("❌ Failed to mark received:", err);
+    alert("❌ Failed to update order.");
+  }
+};
+
 //GATEWAY WASTE
 
 
