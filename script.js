@@ -236,9 +236,7 @@ function renderKitchen(orders) {
     const isLate = dueTime < now;
     if (isLate) row.style.backgroundColor = "rgba(255, 0, 0, 0.15)";
 
-    // Use cached value if available
-    const cachedQty = kitchenSendQtyCache[order.id] ?? ""; // empty unless user types it
-
+    const cachedQty = kitchenSendQtyCache[order.id] ?? "";
 
     row.innerHTML = `
       <td>${timeFormatted}</td>
@@ -248,19 +246,39 @@ function renderKitchen(orders) {
       <td>${order.notes || ""}</td>
       <td>${order.qty}</td>
       <td>${order.status}</td>
-      <td><input type="number" min="0.01" step="0.01" value="${cachedQty}" class="send-qty-input" data-order-id="${order.id}" /></td>
+      <td>
+        <input
+          type="number"
+          min="0.01"
+          step="0.01"
+          value="${cachedQty}"
+          class="send-qty-input"
+          data-order-id="${order.id}"
+        />
+      </td>
       <td>${order.uom || "ea"}</td>
-      <td><button onclick="sendKitchenOrder('${order.id}', this)">Send</button></td>
+      <td>
+        <button onclick="sendKitchenOrder('${order.id}', this)" disabled>Send</button>
+      </td>
     `;
 
     container.appendChild(row);
   });
 
-  // Update cache when any input changes
+  // 🔄 Add input listeners to enable/disable send buttons
   container.querySelectorAll(".send-qty-input").forEach(input => {
-    input.addEventListener("input", e => {
+    input.addEventListener("input", () => {
       const id = input.getAttribute("data-order-id");
-      kitchenSendQtyCache[id] = parseFloat(input.value) || 0;
+      const sendBtn = input.closest("tr")?.querySelector("button");
+
+      const val = parseFloat(input.value);
+      const isValid = !isNaN(val) && val > 0;
+
+      kitchenSendQtyCache[id] = isValid ? val : 0;
+
+      if (sendBtn) {
+        sendBtn.disabled = !isValid;
+      }
     });
   });
 }
@@ -1230,10 +1248,17 @@ window.sendKitchenOrder = async function(orderId, button) {
     const row = button.closest("tr");
 
     const sendQtyInput = row.querySelector(".send-qty-input");
-    const sendQty = parseFloat(sendQtyInput?.value || order.qty || 1);
+
+    // ✅ Strict input-only check
+    if (!sendQtyInput || sendQtyInput.value.trim() === "") {
+      alert("⚠️ Please input a quantity before sending.");
+      return;
+    }
+
+    const sendQty = parseFloat(sendQtyInput.value);
 
     if (isNaN(sendQty) || sendQty <= 0) {
-      alert("⚠️ Please enter a valid quantity to send.");
+      alert("⚠️ Please enter a valid quantity greater than 0.");
       return;
     }
 
@@ -1252,7 +1277,6 @@ window.sendKitchenOrder = async function(orderId, button) {
         const uom = (recipeData.uom || "").toLowerCase();
 
         if (uom === "lb") {
-          // ✅ Only warn or subtract if uom is 'lb'
           if (panWeight > 0 && sendQty < panWeight) {
             alert(`⚠️ Send Qty must be greater than pan weight (${panWeight}) for weight-based items.`);
             return;
