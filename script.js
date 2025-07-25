@@ -998,17 +998,22 @@ window.renderStartingStatus = async function (venue, data) {
   ));
 
   // 🧠 Track which recipes are sent and/or received
-  const sentButNotReceived = new Set();
-  const fullyReceived = new Set();
+// 🧠 Track sent and received status and quantities
+const sentButNotReceived = new Map(); // recipeId -> sendQty
+const fullyReceived = new Set();
 
-  ordersSnapshot.docs.forEach(doc => {
-    const order = doc.data();
-    if (order.received) {
-      fullyReceived.add(order.recipeId);
-    } else {
-      sentButNotReceived.add(order.recipeId);
-    }
-  });
+ordersSnapshot.docs.forEach(doc => {
+  const order = doc.data();
+  const recipeId = order.recipeId;
+  if (!recipeId) return;
+
+  if (order.received) {
+    fullyReceived.add(recipeId);
+  } else {
+    sentButNotReceived.set(recipeId, order.sendQty || 0);
+  }
+});
+
 
   data.recipes.forEach(recipe => {
     const recipeId = recipe.id;
@@ -1034,7 +1039,8 @@ window.renderStartingStatus = async function (venue, data) {
     if (parQty <= 0) return;
 
     // 📦 Determine sent quantity
-    const sentQty = data.sentPars?.[recipeId] || 0;
+   const sentQty = sentButNotReceived.get(recipeId) || 0;
+
     const showReceiveBtn = sentButNotReceived.has(recipeId);
 
     const row = document.createElement("tr");
