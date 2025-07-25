@@ -3913,6 +3913,18 @@ window.sendChatMessage = async function () {
 
 //**accounting */
 window.loadProductionSummary = async function () {
+  const tbody = document.querySelector("#productionTable tbody");
+
+  // 🌀 Show loading immediately
+  tbody.innerHTML = `
+    <tr>
+      <td colspan="5" style="text-align:center; padding: 10px;">
+        <div class="spinner"></div>
+        <div style="font-style: italic; color: gray; margin-top: 5px;">Loading...</div>
+      </td>
+    </tr>
+  `;
+
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
@@ -3921,29 +3933,17 @@ window.loadProductionSummary = async function () {
   const dd = String(today.getDate()).padStart(2, '0');
   const todayStr = `${yyyy}-${mm}-${dd}`;
 
-  const snapshot = await getDocs(collection(db, "orders"));
+  // ✅ Filter only today's orders
+  const snapshot = await getDocs(query(
+    collection(db, "orders"),
+    where("date", "==", todayStr)
+  ));
+
   const summaryMap = new Map();
   const recipeKeyList = [];
 
   for (const doc of snapshot.docs) {
     const data = doc.data();
-
-    const timestamp =
-      data.timestamp?.toDate?.() ||
-      data.sentAt?.toDate?.() ||
-      data.receivedAt?.toDate?.();
-
-    let matchesToday = false;
-
-    if (timestamp instanceof Date) {
-      const date = new Date(timestamp);
-      date.setHours(0, 0, 0, 0);
-      matchesToday = date.getTime() === today.getTime();
-    } else if (typeof data.date === "string") {
-      matchesToday = data.date === todayStr;
-    }
-
-    if (!matchesToday) continue;
 
     const type = data.type || "";
     const recipeNo = (data.recipeNo || data.recipeId || "").toUpperCase();
@@ -3974,31 +3974,22 @@ window.loadProductionSummary = async function () {
     summaryMap.get(recipeNo).total += qty;
   }
 
-  // 🔍 Dual strategy to fetch recipe descriptions
+  // ✅ Batch load recipe descriptions
+  const recipeDescMap = new Map();
+  for (let i = 0; i < recipeKeyList.length; i += 10) {
+    const batch = recipeKeyList.slice(i, i + 10);
+    const snap = await getDocs(
+      query(collection(db, "recipes"), where("recipeNo", "in", batch))
+    );
+    snap.forEach(doc => {
+      const data = doc.data();
+      recipeDescMap.set(data.recipeNo.toUpperCase(), data.description || "No Description");
+    });
+  }
+
+  // ✅ Apply descriptions
   for (const [recipeNo, item] of summaryMap.entries()) {
-    try {
-      // First try: look up by doc ID (used by starting-par)
-      const recipeDocRef = doc(db, "recipes", recipeNo);
-      const recipeDocSnap = await getDoc(recipeDocRef);
-
-      if (recipeDocSnap.exists()) {
-        const data = recipeDocSnap.data();
-        item.description = data.description || "No Description";
-        continue;
-      }
-
-      // Second try: fallback to searching by recipeNo field (used by addon)
-      const fallbackSnap = await getDocs(
-        query(collection(db, "recipes"), where("recipeNo", "==", recipeNo))
-      );
-      if (!fallbackSnap.empty) {
-        const data = fallbackSnap.docs[0].data();
-        item.description = data.description || "No Description";
-      }
-
-    } catch (err) {
-      console.error(`Error fetching description for ${recipeNo}:`, err);
-    }
+    item.description = recipeDescMap.get(recipeNo) || "No Description";
   }
 
   // 🏷️ Assign dish codes
@@ -4009,8 +4000,7 @@ window.loadProductionSummary = async function () {
     }
   });
 
-  // 🧾 Render the table
-  const tbody = document.querySelector("#productionTable tbody");
+  // ✅ Clear loading
   tbody.innerHTML = "";
 
   if (summaryMap.size === 0) {
@@ -4020,6 +4010,7 @@ window.loadProductionSummary = async function () {
     return;
   }
 
+  // ✅ Render table
   for (const recipeNo of recipeKeyList) {
     const item = summaryMap.get(recipeNo);
     const tr = document.createElement("tr");
@@ -4033,6 +4024,7 @@ window.loadProductionSummary = async function () {
     tbody.appendChild(tr);
   }
 };
+
 
 
 
@@ -4081,10 +4073,16 @@ let allShipmentData = []; // ⏺ Global store
 
 // 📥 Fetch + normalize Firestore orders
 window.loadProductionShipments = async function () {
-  const ordersRef = collection(db, "orders");
-  const snapshot = await getDocs(ordersRef);
+  const container = document.getElementById("singleVenueShipmentContainer");
 
-  const shipments = [];
+  // 🌀 Show loading spinner immediately
+  container.innerHTML = `
+    <div style="text-align:center; padding: 20px;">
+      <div class="spinner"></div>
+      <div style="margin-top: 8px; font-style: italic; color: gray;">Loading shipments...</div>
+    </div>
+  `;
+
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
@@ -4093,7 +4091,13 @@ window.loadProductionShipments = async function () {
   const dd = String(today.getDate()).padStart(2, '0');
   const todayStr = `${yyyy}-${mm}-${dd}`;
 
-  const recipeMap = new Map(); // For unique recipeNo -> { ...shipment }
+  // ✅ Fetch only today's orders
+  const snapshot = await getDocs(
+    query(collection(db, "orders"), where("date", "==", todayStr))
+  );
+
+  const recipeMap = new Map(); // recipe key → summary object
+  const recipeNos = new Set();
 
   snapshot.forEach(doc => {
     const data = doc.data();
@@ -4107,20 +4111,6 @@ window.loadProductionShipments = async function () {
     const venueCode = venueCodesByName[venue];
     if (!venueCode) return;
 
-    // Match date
-    const timestamp = data.timestamp?.toDate?.() || data.sentAt?.toDate?.();
-    let matchesToday = false;
-
-    if (timestamp instanceof Date) {
-      const orderDate = new Date(timestamp);
-      orderDate.setHours(0, 0, 0, 0);
-      matchesToday = orderDate.getTime() === today.getTime();
-    } else if (typeof data.date === "string") {
-      matchesToday = data.date === todayStr;
-    }
-
-    if (!matchesToday) return;
-
     let quantity = 0;
     if (type === "starting-par") {
       quantity = Number(data.netWeight ?? 0);
@@ -4131,6 +4121,7 @@ window.loadProductionShipments = async function () {
     if (quantity <= 0) return;
 
     const key = `${venueCode}__${recipeNo}`;
+    recipeNos.add(recipeNo);
 
     if (!recipeMap.has(key)) {
       recipeMap.set(key, {
@@ -4145,33 +4136,28 @@ window.loadProductionShipments = async function () {
     recipeMap.get(key).quantity += quantity;
   });
 
-  // 🔍 Fetch missing descriptions
+  // ✅ Batch fetch recipe descriptions
+  const recipeDescMap = new Map();
+  const recipeList = Array.from(recipeNos);
+  for (let i = 0; i < recipeList.length; i += 10) {
+    const batch = recipeList.slice(i, i + 10);
+    const snap = await getDocs(
+      query(collection(db, "recipes"), where("recipeNo", "in", batch))
+    );
+    snap.forEach(doc => {
+      const data = doc.data();
+      recipeDescMap.set(data.recipeNo.toUpperCase(), data.description || "No Description");
+    });
+  }
+
+  // ✅ Assign descriptions
   for (const shipment of recipeMap.values()) {
-    try {
-      const docRef = doc(db, "recipes", shipment.recipeNo);
-      const docSnap = await getDoc(docRef);
-
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        shipment.description = data.description || "No Description";
-        continue;
-      }
-
-      const fallbackSnap = await getDocs(
-        query(collection(db, "recipes"), where("recipeNo", "==", shipment.recipeNo))
-      );
-      if (!fallbackSnap.empty) {
-        const data = fallbackSnap.docs[0].data();
-        shipment.description = data.description || "No Description";
-      }
-    } catch (err) {
-      console.error(`Error getting recipe description for ${shipment.recipeNo}:`, err);
-    }
+    shipment.description = recipeDescMap.get(shipment.recipeNo) || "No Description";
   }
 
   allShipmentData = Array.from(recipeMap.values());
 
-  // 👇 Default to ALOHA view
+  // ✅ This clears the spinner and renders Aloha by default
   loadVenueShipment("b001");
 };
 
@@ -4436,6 +4422,17 @@ window.copyLunchTableToClipboard = function () {
     alert("❌ Failed to copy.");
   });
 };
+
+
+//loading helper
+function showLoading(targetSelector, message = "Loading...") {
+  const target = document.querySelector(targetSelector);
+  if (!target) return;
+
+  target.innerHTML = `
+    <tr><td colspan="10" style="text-align:center; font-style:italic; color:gray;">${message}</td></tr>
+  `;
+}
 
 
 //**LUNCH */
