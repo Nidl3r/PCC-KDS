@@ -992,6 +992,50 @@
   </div>
 </div>
 
+<!-- 🔴 Delete Confirmation Modal -->
+<!-- 🔴 Dark Themed Delete Confirmation Modal -->
+<div id="deleteModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%;
+  background-color:rgba(0,0,0,0.6); z-index:1000; justify-content:center; align-items:center; font-family:inherit;">
+  <div style="background:var(--panel-bg); padding:24px; border-radius:10px; width:320px; text-align:center; color:var(--text); border:1px solid var(--border); box-shadow:0 0 15px rgba(0,0,0,0.5);">
+    <h3 style="margin-bottom: 12px;">Confirm Deletion</h3>
+    <p style="color:var(--text); opacity: 0.85;">Are you sure you want to delete this order?</p>
+    <div style="margin-top: 24px; display: flex; justify-content: center; gap: 12px;">
+      <button id="confirmDeleteBtn" style="background: crimson; color: #fff; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer;">
+        Yes, Delete
+      </button>
+      <button onclick="closeDeleteModal()" style="background: var(--highlight); color: var(--text); border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer;">
+        Cancel
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ✏️ Edit Order Modal -->
+<div id="editModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%;
+  background-color:rgba(0,0,0,0.6); z-index:1001; justify-content:center; align-items:center; font-family:inherit;">
+  <div style="background:var(--panel-bg); padding:24px; border-radius:10px; width:320px; text-align:center; color:var(--text); border:1px solid var(--border); box-shadow:0 0 15px rgba(0,0,0,0.5);">
+    <h3 style="margin-bottom: 12px;">Edit Order</h3>
+
+    <label for="editQty" style="display:block; margin-top:12px;">Quantity</label>
+    <input type="number" id="editQty" min="0.01" step="0.01"
+      style="width:100%; padding:8px; margin-top:6px; background:var(--highlight); border:1px solid var(--border); color:var(--text); border-radius:6px;">
+
+    <label for="editNotes" style="display:block; margin-top:16px;">Notes</label>
+    <textarea id="editNotes"
+      style="width:100%; padding:8px; margin-top:6px; background:var(--highlight); border:1px solid var(--border); color:var(--text); border-radius:6px;"></textarea>
+
+    <div style="margin-top: 24px; display: flex; justify-content: center; gap: 12px;">
+      <button id="confirmEditBtn" style="background: var(--highlight); color: var(--text); border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer;">
+        Save Changes
+      </button>
+      <button onclick="closeEditModal()" style="background: crimson; color: #fff; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer;">
+        Cancel
+      </button>
+    </div>
+  </div>
+</div>
+
+
 <!-- ✅ Scripts stay below everything -->
 <script type="module" src="./firebaseConfig.js"></script>
 <script type="module" src="./script.js"></script>

@@ -13,7 +13,8 @@ import {
   getDocs,
   Timestamp,
   orderBy,
-  limit 
+  limit,
+   deleteDoc
 } from './firebaseConfig.js';
 
 
@@ -753,27 +754,25 @@ function renderAlohaTable(orders) {
 
   tbody.innerHTML = ""; // Clear existing rows
 
-  // Sort by timestamp ascending (oldest first)
- // 🧠 Sort by status, then by timestamp ascending
-orders.sort((a, b) => {
-  const statusOrder = {
-    sent: 0,
-    "Ready to Send": 1,
-    open: 2
-  };
+  // 🧠 Sort by status, then by timestamp ascending
+  orders.sort((a, b) => {
+    const statusOrder = {
+      sent: 0,
+      "Ready to Send": 1,
+      open: 2
+    };
 
-  const aPriority = statusOrder[a.status] ?? 3;
-  const bPriority = statusOrder[b.status] ?? 3;
+    const aPriority = statusOrder[a.status] ?? 3;
+    const bPriority = statusOrder[b.status] ?? 3;
 
-  if (aPriority !== bPriority) {
-    return aPriority - bPriority;
-  }
+    if (aPriority !== bPriority) {
+      return aPriority - bPriority;
+    }
 
-  const timeA = a.timestamp?.toDate?.()?.getTime?.() || 0;
-  const timeB = b.timestamp?.toDate?.()?.getTime?.() || 0;
-  return timeA - timeB;
-});
-
+    const timeA = a.timestamp?.toDate?.()?.getTime?.() || 0;
+    const timeB = b.timestamp?.toDate?.()?.getTime?.() || 0;
+    return timeA - timeB;
+  });
 
   const now = new Date();
 
@@ -794,28 +793,134 @@ orders.sort((a, b) => {
     // Highlight row red if past due
     const isLate = dueTime < now;
     if (isLate) {
-      row.style.backgroundColor = "rgba(255, 0, 0, 0.15)"; // light red
+      row.style.backgroundColor = "rgba(255, 0, 0, 0.15)";
+    }
+
+    // 🛠️ Build the edit/delete buttons if order is open and an addon
+    let actionsHTML = "";
+    if (order.status === "open" && order.type === "addon") {
+      actionsHTML = `
+        <button onclick='showEditModal(${JSON.stringify(order).replace(/"/g, "&quot;")})'>✏️</button>
+
+        <button onclick="showDeleteModal('${order.id}')">🗑️</button>
+
+      `;
+    } else if (order.status === "sent") {
+      actionsHTML = `<button onclick="markOrderReceived('${order.id}', this)">✓ Receive</button>`;
     }
 
     row.innerHTML = `
-  <td>${createdFormatted}</td>
-  <td>${dueFormatted}</td>
-  <td>${order.item}</td>
-  <td>${order.qty}</td>
-  <td>${order.status}</td>
- <td>
-  ${order.status === "sent"
-    ? `<button onclick="markOrderReceived('${order.id}', this)">✓ Receive</button>`
-    : ""}
-</td>
-
-
-`;
-
+      <td>${createdFormatted}</td>
+      <td>${dueFormatted}</td>
+      <td>${order.item}</td>
+      <td>${order.qty}</td>
+      <td>${order.status}</td>
+      <td>${actionsHTML}</td>
+    `;
 
     tbody.appendChild(row);
   });
 }
+
+window.editAddonOrder = async function(order) {
+  const newQty = prompt("Enter new quantity:", order.qty);
+  if (!newQty || isNaN(newQty) || parseFloat(newQty) <= 0) return alert("Invalid quantity.");
+
+  const newNotes = prompt("Enter new notes (optional):", order.notes || "");
+
+  try {
+    const orderRef = doc(db, "orders", order.id);
+    await updateDoc(orderRef, {
+      qty: parseFloat(newQty),
+      notes: newNotes.trim(),
+      updatedAt: serverTimestamp()
+    });
+    alert("✅ Order updated.");
+  } catch (err) {
+    console.error("❌ Failed to update order:", err);
+    alert("❌ Failed to update order.");
+  }
+};
+
+let orderToEdit = null;
+
+window.showEditModal = function(order) {
+  orderToEdit = order;
+  document.getElementById("editQty").value = order.qty || "";
+  document.getElementById("editNotes").value = order.notes || "";
+  document.getElementById("editModal").style.display = "flex";
+};
+
+window.closeEditModal = function() {
+  orderToEdit = null;
+  document.getElementById("editModal").style.display = "none";
+};
+
+document.getElementById("confirmEditBtn").addEventListener("click", async () => {
+  if (!orderToEdit) return;
+
+  const newQty = parseFloat(document.getElementById("editQty").value || "0");
+  const newNotes = document.getElementById("editNotes").value.trim();
+
+  if (isNaN(newQty) || newQty <= 0) {
+    return alert("⚠️ Enter a valid quantity.");
+  }
+
+  try {
+    const orderRef = doc(db, "orders", orderToEdit.id);
+    await updateDoc(orderRef, {
+      qty: newQty,
+      notes: newNotes,
+      updatedAt: serverTimestamp()
+    });
+    alert("✅ Order updated.");
+  } catch (err) {
+    console.error("❌ Failed to update order:", err);
+    alert("❌ Failed to update order.");
+  }
+
+  closeEditModal();
+});
+
+
+window.deleteAddonOrder = async function(orderId) {
+  if (!confirm("Are you sure you want to delete this order?")) return;
+
+  try {
+    await deleteDoc(doc(db, "orders", orderId));
+    alert("🗑️ Order deleted.");
+  } catch (err) {
+    console.error("❌ Failed to delete order:", err);
+    alert("❌ Failed to delete order.");
+  }
+};
+let orderIdToDelete = null;
+
+window.showDeleteModal = function(orderId) {
+  orderIdToDelete = orderId;
+  document.getElementById("deleteModal").style.display = "flex";
+};
+
+window.closeDeleteModal = function() {
+  orderIdToDelete = null;
+  document.getElementById("deleteModal").style.display = "none";
+};
+
+document.getElementById("confirmDeleteBtn").addEventListener("click", async () => {
+  if (!orderIdToDelete) return;
+
+  try {
+    await deleteDoc(doc(db, "orders", orderIdToDelete));
+    alert("🗑️ Order deleted.");
+  } catch (err) {
+    console.error("❌ Failed to delete order:", err);
+    alert("❌ Failed to delete order.");
+  }
+
+  closeDeleteModal();
+});
+
+
 
 //**aloha starting screen */
 window.loadAlohaStartingPar = async function () {
@@ -2402,23 +2507,30 @@ function renderGatewayTable(orders) {
       row.style.backgroundColor = "rgba(255, 0, 0, 0.15)";
     }
 
+    // 🔧 Show Edit/Delete buttons only for open add-ons
+    let actionsHTML = "";
+    if (order.status === "open" && order.type === "addon") {
+      actionsHTML = `
+        <button onclick='showEditModal(${JSON.stringify(order).replace(/"/g, "&quot;")})'>✏️</button>
+        <button onclick="showDeleteModal('${order.id}')">🗑️</button>
+      `;
+    } else if (["sent", "Ready to Send"].includes(order.status)) {
+      actionsHTML = `<button onclick="markOrderReceived('${order.id}', this)">✓ Receive</button>`;
+    }
+
     row.innerHTML = `
       <td>${createdFormatted}</td>
       <td>${dueFormatted}</td>
       <td>${order.item}</td>
       <td>${order.qty}</td>
       <td>${order.status}</td>
-      <td>
-  ${["sent", "Ready to Send"].includes(order.status)
-    ? `<button onclick="markOrderReceived('${order.id}', this)">✓ Receive</button>`
-    : ""}
-</td>
-
+      <td>${actionsHTML}</td>
     `;
 
     tbody.appendChild(row);
   });
 }
+
 
 window.markOrderReceived = async function (orderId, button) {
   const timing = await new Promise((resolve) => {
@@ -2978,12 +3090,7 @@ function renderOhanaTable(orders) {
   tbody.innerHTML = "";
 
   orders.sort((a, b) => {
-    const statusOrder = {
-      sent: 0,
-      "Ready to Send": 1,
-      open: 2
-    };
-
+    const statusOrder = { sent: 0, "Ready to Send": 1, open: 2 };
     const aPriority = statusOrder[a.status] ?? 3;
     const bPriority = statusOrder[b.status] ?? 3;
 
@@ -3017,17 +3124,24 @@ function renderOhanaTable(orders) {
       row.style.backgroundColor = "rgba(255, 0, 0, 0.15)";
     }
 
+    // 🔧 Show Edit/Delete buttons only for open add-ons
+    let actionsHTML = "";
+    if (order.status === "open" && order.type === "addon") {
+      actionsHTML = `
+        <button onclick='showEditModal(${JSON.stringify(order).replace(/"/g, "&quot;")})'>✏️</button>
+        <button onclick="showDeleteModal('${order.id}')">🗑️</button>
+      `;
+    } else if (["sent", "Ready to Send"].includes(order.status)) {
+      actionsHTML = `<button onclick="markOrderReceived('${order.id}', this)">✓ Receive</button>`;
+    }
+
     row.innerHTML = `
       <td>${createdFormatted}</td>
       <td>${dueFormatted}</td>
       <td>${order.item}</td>
       <td>${order.qty}</td>
       <td>${order.status}</td>
-      <td>
-        ${order.status === "sent"
-          ? `<button onclick="markOrderReceived('${order.id}', this)">✓ Receive</button>`
-          : ""}
-      </td>
+      <td>${actionsHTML}</td>
     `;
 
     tbody.appendChild(row);
