@@ -1459,30 +1459,40 @@ window.loadMainKitchenStartingPars = async function () {
   );
   const querySnap = await getDocs(q);
 
-  const sentParMap = {};     // sentParMap[venue][recipeId] = totalQty
+   const sentParMap = {};     // sentParMap[venue][recipeId] = totalQty
   const receivedParMap = {}; // receivedParMap[venue][recipeId] = true
+  const sentParStatus = {};  // sentParStatus[venue][recipeId] = status
 
   querySnap.forEach(doc => {
-    const { venue, recipeId, qty, status, received } = doc.data();
+    const { venue, recipeId, qty, status } = doc.data();
+    if (!venue || !recipeId) return;
 
+    // Track quantity
     if (!sentParMap[venue]) sentParMap[venue] = {};
     if (!sentParMap[venue][recipeId]) sentParMap[venue][recipeId] = 0;
     sentParMap[venue][recipeId] += qty;
 
-    if (received || status === "received") {
+    // Track received
+    if (status === "received") {
       if (!receivedParMap[venue]) receivedParMap[venue] = {};
       receivedParMap[venue][recipeId] = true;
     }
+
+    // Track sent/received status
+    if (!sentParStatus[venue]) sentParStatus[venue] = {};
+    sentParStatus[venue][recipeId] = status;
   });
 
+
   // ✅ Cache everything
-  window.startingCache = window.startingCache || {};
   window.startingCache["MainKitchenAll"] = {
     recipes,
     guestCounts,
     sentPars: sentParMap,
-    receivedPars: receivedParMap
+    receivedPars: receivedParMap,
+    sentParStatus: sentParStatus  // ✅ include this!
   };
+
 
   renderMainKitchenPars();
 };
@@ -1525,6 +1535,10 @@ window.renderMainKitchenPars = function () {
       const venue = venueCodeMap[code] || "Unknown";
       if (venueFilter && venue !== venueFilter) return;
 
+      // 🛑 Skip if already sent or received today
+      const sentToday = data.sentParStatus?.[venue]?.[recipe.id];
+      if (sentToday === "sent" || sentToday === "received") return;
+
       // 🛑 Skip if marked received
       if (data.receivedPars?.[venue]?.[recipe.id]) return;
 
@@ -1563,7 +1577,6 @@ window.renderMainKitchenPars = function () {
         <td><button onclick="sendSingleStartingPar('${recipe.id}', '${venue}', this)">Send</button></td>
       `;
 
-      // 💾 Save input to input cache only
       const input = row.querySelector(".add-send-qty");
       if (input) {
         input.addEventListener("input", () => {
@@ -1581,6 +1594,7 @@ window.renderMainKitchenPars = function () {
 
   console.log(`✅ Rendered ${totalRows} rows based on filters`);
 };
+
 
 
 window.addToSendQty = function (button) {
