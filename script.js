@@ -89,6 +89,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // Change screen on selection
   viewSelect.addEventListener("change", () => {
     showScreen(viewSelect.value);
+    updateCurrentVenueFromSelect(); // ✅ Ensure currentVenue updates on change
   });
 
   console.log("✅ PCC KDS App Loaded");
@@ -97,34 +98,38 @@ document.addEventListener("DOMContentLoaded", () => {
   listenToAlohaOrders?.();      
   listenToGatewayOrders?.();    
   listenToOhanaOrders?.();      
+  listenToConcessionOrders?.(); // ✅ Concession listener added
   listenToAddonOrders?.();
   loadGuestCounts?.();            
 
   // 🔽 Apply category filter on load for all venues
-  applyCategoryFilter?.("aloha");
-  applyCategoryFilter?.("gateway");
-  applyCategoryFilter?.("ohana");
-  applyCategoryFilter?.("concession");
+  ["aloha", "gateway", "ohana", "concession"].forEach(area => {
+    applyCategoryFilter?.(area);
+  });
 
   // 🚀 Start listeners for each station
   ["Wok", "Fryer", "Grill", "Oven", "Pantry", "Pastry"].forEach(station => {
     listenToStationOrders?.(station);
   });
 
-  // 💰 Delay for cost summary input listeners
-  setTimeout(() => {
-    ["Aloha", "Gateway", "Ohana"].forEach(venue => {
-      listenToVenueOrdersAndUpdateCost?.(venue);
+  // 💰 Delay for cost summary input listeners (includes Concessions)
+ setTimeout(() => {
+  ["Aloha", "Gateway", "Ohana"].forEach(venue => { // ❌ Removed "Concessions"
+    listenToVenueOrdersAndUpdateCost?.(venue);
 
-      const guestInput = document.getElementById(`guestInput${venue === "Aloha" ? "" : venue}`);
-      if (guestInput) {
-        guestInput.addEventListener("input", () => {
-          updateCostSummaryForVenue?.(venue);
-        });
-      }
-    });
-  }, 250);
+    const inputId = `guestInput${venue === "Aloha" ? "" : venue}`;
+    const guestInput = document.getElementById(inputId);
+
+    if (guestInput) {
+      guestInput.addEventListener("input", () => {
+        updateCostSummaryForVenue?.(venue);
+      });
+    }
+  });
+}, 250);
+
 });
+
 
 
 // 🔁 Live Firestore snapshot listener
@@ -3318,18 +3323,21 @@ const qty = parseFloat(qtyInput.value || 0);
       return;
     }
 
-    const order = {
-      item: recipeData.description || recipeNo,
-      qty: qty,
-      status: "open",
-      venue: "Concession",
-      station: recipeData.station || "Unknown",
-      recipeNo: recipeNo,
-      cookTime: recipeData.cookTime || 0,
-      notes: notes,
-      uom: recipeData.uom || "ea",
-      timestamp: serverTimestamp(),
-    };
+const order = {
+  item: recipeData.description || recipeNo,
+  qty: qty,
+  status: "open",
+  venue: "Concessions",
+  station: recipeData.station || "Unknown",
+  recipeNo: recipeNo,
+  cookTime: recipeData.cookTime || 0,
+  notes: notes,
+  uom: recipeData.uom || "ea",
+  timestamp: serverTimestamp(),
+  date: getTodayDate(),
+  type: "addon", // ✅ REQUIRED for main kitchen to see it
+};
+
 
     await addDoc(collection(db, "orders"), order);
 
@@ -3349,8 +3357,9 @@ function listenToConcessionOrders() {
   const ordersRef = collection(db, "orders");
   const queryRef = query(
     ordersRef,
-    where("venue", "==", "Concession"),
-    where("status", "in", ["open", "Ready to Send", "sent"])
+    where("venue", "==", "Concessions"), // ✅ Matches Firestore
+    where("status", "in", ["open", "Ready to Send", "sent"]),
+    where("date", "==", getTodayDate()) // ✅ CRITICAL
   );
 
   onSnapshot(queryRef, (snapshot) => {
@@ -3358,9 +3367,11 @@ function listenToConcessionOrders() {
       .map((doc) => ({ id: doc.id, ...doc.data() }))
       .filter((order) => order.type !== "starting-par");
 
+    console.log("📡 Concession open orders found:", orders.length); // ✅ Debug
     renderConcessionTable(orders);
   });
 }
+
 
 // ✅ Render open orders table for concession
 function renderConcessionTable(orders) {
