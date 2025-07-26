@@ -309,7 +309,32 @@ window.filterKitchenOrders = function () {
   renderKitchen(filtered, { skipCache: true });
 };
 
+function showMainKitchenNotif(message, duration = 3000, type = "info") {
+  const notif = document.getElementById("mainKitchenNotif");
+  if (!notif) {
+    console.warn("❌ Tried to notify Main Kitchen but notif element doesn't exist.");
+    return;
+  }
 
+  notif.textContent = message;
+
+  const styles = {
+    success: { background: "#2e7d32", border: "#1b5e20" },
+    error: { background: "#c62828", border: "#b71c1c" },
+    info: { background: "#1565c0", border: "#0d47a1" }
+  };
+
+  const { background, border } = styles[type] || styles.info;
+  notif.style.background = background;
+  notif.style.border = `1px solid ${border}`;
+  notif.style.display = "block";
+
+  setTimeout(() => {
+    notif.style.display = "none";
+  }, duration);
+}
+
+let previousAddonOrders = [];
 
 function listenToAddonOrders() {
   const ordersRef = collection(db, "orders");
@@ -322,9 +347,33 @@ function listenToAddonOrders() {
 
   onSnapshot(addonQuery, (snapshot) => {
     const orders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    console.log("📦 Snapshot received:", orders.length, "orders");
 
-    // ✅ Reuse your existing render function
+    // ✅ Render all orders for the kitchen
     renderKitchen(orders);
+
+    const currentIds = orders.map(o => o.id);
+    const deletedOrders = previousAddonOrders.filter(o => !currentIds.includes(o.id));
+
+    if (deletedOrders.length > 0) {
+      console.log("🗑️ Deleted orders detected:", deletedOrders.map(o => o.item));
+    }
+
+    deletedOrders.forEach(deleted => {
+      console.log("🔔 Notifying deletion of:", deleted.item);
+      showMainKitchenNotif(`🗑️ Order deleted: ${deleted.item}`, 3000, "info");
+    });
+
+    snapshot.docChanges().forEach(change => {
+      const data = change.doc.data();
+      if (change.type === "modified") {
+        console.log("✏️ Order updated:", data.item);
+        showMainKitchenNotif(`✏️ Order updated: ${data.item}`, 3000, "info");
+      }
+    });
+
+    // ✅ Update cache after everything
+    previousAddonOrders = orders;
   });
 }
 
@@ -879,7 +928,7 @@ window.showEditModal = function(order) {
   document.getElementById("editModal").style.display = "flex";
 };
 
-window.closeEditModal = function() {
+window.closeEditModal = function () {
   orderToEdit = null;
   document.getElementById("editModal").style.display = "none";
 };
@@ -901,36 +950,32 @@ document.getElementById("confirmEditBtn").addEventListener("click", async () => 
       notes: newNotes,
       updatedAt: serverTimestamp()
     });
-    alert("✅ Order updated.");
+
+    // ✅ Only notify Main Kitchen screen to avoid errors
+    if (orderToEdit.venue === "Main Kitchen") {
+      showMainKitchenNotif("✅ Order updated.", 3000, "success");
+    }
   } catch (err) {
     console.error("❌ Failed to update order:", err);
-    alert("❌ Failed to update order.");
+    if (orderToEdit.venue === "Main Kitchen") {
+      showMainKitchenNotif("❌ Failed to update order.", 3000, "error");
+    }
   }
 
   closeEditModal();
 });
 
-
-window.deleteAddonOrder = async function(orderId) {
-  if (!confirm("Are you sure you want to delete this order?")) return;
-
-  try {
-    await deleteDoc(doc(db, "orders", orderId));
-    alert("🗑️ Order deleted.");
-  } catch (err) {
-    console.error("❌ Failed to delete order:", err);
-    alert("❌ Failed to delete order.");
-  }
-};
 let orderIdToDelete = null;
+let deletedOrderData = null; // Save order info for notification
 
 window.showDeleteModal = function(orderId) {
   orderIdToDelete = orderId;
   document.getElementById("deleteModal").style.display = "flex";
 };
 
-window.closeDeleteModal = function() {
+window.closeDeleteModal = function () {
   orderIdToDelete = null;
+  deletedOrderData = null;
   document.getElementById("deleteModal").style.display = "none";
 };
 
@@ -938,17 +983,27 @@ document.getElementById("confirmDeleteBtn").addEventListener("click", async () =
   if (!orderIdToDelete) return;
 
   try {
-    await deleteDoc(doc(db, "orders", orderIdToDelete));
-    alert("🗑️ Order deleted.");
+    const orderRef = doc(db, "orders", orderIdToDelete);
+    const orderSnap = await getDoc(orderRef);
+
+    if (orderSnap.exists()) {
+      deletedOrderData = orderSnap.data();
+    }
+
+    await deleteDoc(orderRef);
+
+    if (deletedOrderData?.venue === "Main Kitchen") {
+      showMainKitchenNotif("🗑️ Order deleted.", 3000, "info");
+    }
   } catch (err) {
     console.error("❌ Failed to delete order:", err);
-    alert("❌ Failed to delete order.");
+    if (deletedOrderData?.venue === "Main Kitchen") {
+      showMainKitchenNotif("❌ Failed to delete order.", 3000, "error");
+    }
   }
 
   closeDeleteModal();
 });
-
-
 
 //**aloha starting screen */
 window.loadAlohaStartingPar = async function () {
@@ -2581,11 +2636,10 @@ function renderGatewayTable(orders) {
     tbody.appendChild(row);
   });
 
-  // 👥 Display total guest count
+  // ✅ Show total guest count
   const totalGuests = window.guestCounts?.Gateway || 0;
-  document.getElementById("gatewayTotalGuests").textContent = totalGuests;
-
-  // 🚫 Do not touch the remaining guests — let user enter it manually
+  const guestEl = document.getElementById("gatewayTotalGuests");
+  if (guestEl) guestEl.textContent = totalGuests;
 }
 
 
