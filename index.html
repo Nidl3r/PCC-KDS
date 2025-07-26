@@ -631,25 +631,41 @@
 
   <!-- 📦 add on -->
   <div class="main-kitchen-section order-section" data-sec="order">
-    <h3>Open Orders</h3>
-    <table id="kitchenTable">
-      <thead>
-        <tr>
-          <th>Time</th>
-          <th>Due</th>
-          <th>Area</th>
-          <th>Item</th>
-          <th>Notes</th>
-          <th>Qty</th>
-          <th>Status</th>
-          <th>Send Qty</th>
-          <th>UOM</th>
-          <th>Send</th>
-        </tr>
-      </thead>
-      <tbody></tbody>
-    </table>
+  <h3>Open Orders</h3>
+
+  <!-- 🔍 Search Bar -->
+  <div style="margin-bottom: 1em;">
+    <label for="kitchenSearchInput">
+      Search Item:
+      <input
+        type="text"
+        id="kitchenSearchInput"
+        placeholder="Search by item name..."
+        oninput="filterKitchenOrders()"
+        style="padding: 6px; border-radius: 4px; border: 1px solid #ccc;"
+      />
+    </label>
   </div>
+
+  <!-- 📋 Orders Table -->
+  <table id="kitchenTable">
+    <thead>
+      <tr>
+        <th>Time</th>
+        <th>Due</th>
+        <th>Area</th>
+        <th>Item</th>
+        <th>Notes</th>
+        <th>Qty</th>
+        <th>Status</th>
+        <th>Send Qty</th>
+        <th>UOM</th>
+        <th>Send</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
 
 <!-- 🥄 Starting Pars Section -->
 <div class="main-kitchen-section starting-section" data-sec="starting" style="display: none;">

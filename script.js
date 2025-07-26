@@ -204,11 +204,19 @@ window.showAccountingTab = showAccountingTab;
 // ✅ Render kitchen add ons
 const kitchenSendQtyCache = {};
 
-function renderKitchen(orders) {
+function renderKitchen(orders, { skipCache = false } = {}) {
+  // ✅ Only cache the full list if not skipping
+  if (!skipCache) {
+    window.kitchenFullOrderList = [...orders]; // preserve original
+  }
+
+  window.kitchenOrderCache = orders;
+
   const container = document.getElementById("kitchenTable").querySelector("tbody");
   if (!container) return;
 
   container.innerHTML = "";
+
 
   // Sort by priority and time
   orders.sort((a, b) => {
@@ -282,7 +290,24 @@ function renderKitchen(orders) {
       }
     });
   });
+
 }
+
+window.filterKitchenOrders = function () {
+  const searchValue = document.getElementById("kitchenSearchInput").value.trim().toLowerCase();
+
+  // ✅ If search is empty, restore full list
+  if (!searchValue) {
+    renderKitchen(window.kitchenFullOrderList, { skipCache: true });
+    return;
+  }
+
+  const filtered = window.kitchenFullOrderList.filter(order =>
+    order.item?.toLowerCase().includes(searchValue)
+  );
+
+  renderKitchen(filtered, { skipCache: true });
+};
 
 
 
