@@ -572,7 +572,7 @@ window.sendAlohaOrder = async function(button) {
 
   const recipeNo = itemSelect.value;
   const notes = notesInput?.value?.trim() || "";
-  const qty = parseFloat(qtyInput.value || 0);
+  const qty = parseFloat(parseFloat(qtyInput.value || 0).toFixed(2));
 
   if (!recipeNo || isNaN(qty) || qty <= 0) {
     alert("Please select an item and enter a valid quantity.");
@@ -608,7 +608,8 @@ window.sendAlohaOrder = async function(button) {
     }
 
     const unitCost = Number(recipeData.cost || 0);
-    const totalCost = unitCost * qty;
+    const totalCost = parseFloat((unitCost * qty).toFixed(2));
+
 
     const order = {
       item: recipeData.description || recipeNo,
@@ -754,11 +755,13 @@ const costPerGuest = guestCount > 0 ? totalSpent / guestCount : 0;
 // next function
 function listenToAlohaOrders() {
   const ordersRef = collection(db, "orders");
-  const alohaQuery = query(
-    ordersRef,
-    where("venue", "==", "Aloha"),
-    where("status", "in", ["open", "Ready to Send", "sent"])
-  );
+const alohaQuery = query(
+  ordersRef,
+  where("venue", "==", "Aloha"),
+  where("status", "in", ["open", "Ready to Send", "sent", "received"]),
+  where("date", "==", getTodayDate())
+);
+
 
   onSnapshot(alohaQuery, (snapshot) => {
     // ❌ Filter out starting-par orders so they don't show in Aloha open orders
@@ -1345,8 +1348,9 @@ async function sendStationAddonOrder(stationName, order) {
     const panWeight = recipeData.panWeight || 0;
 
     // 🔁 Subtract pan weight
-    const netQty = parseFloat((sendQty - panWeight).toFixed(4));
-    const totalCost = parseFloat((netQty * costPerUOM).toFixed(4));
+    const netQty = parseFloat((sendQty - panWeight).toFixed(2));
+const totalCost = parseFloat((netQty * costPerUOM).toFixed(2));
+
 
     // 📦 Update Firestore
     const updateData = {
@@ -1418,7 +1422,7 @@ window.sendKitchenOrder = async function(orderId, button) {
             return;
           }
 
-          adjustedQty = parseFloat((sendQty - panWeight).toFixed(4));
+          adjustedQty = parseFloat((sendQty - panWeight).toFixed(2));
           console.log(`💡 Adjusted Qty for ${order.recipeNo}: ${adjustedQty} (panWeight: ${panWeight})`);
         } else {
           console.log(`ℹ️ UOM is '${uom}', skipping pan weight adjustment.`);
@@ -1429,11 +1433,12 @@ window.sendKitchenOrder = async function(orderId, button) {
     }
 
     await setDoc(orderRef, {
-      status: "sent",
-      sentAt: serverTimestamp(),
-      sendQty: adjustedQty,
-      qty: adjustedQty
-    }, { merge: true });
+  status: "sent",
+  sentAt: serverTimestamp(),
+  sendQty: adjustedQty,
+  qty: adjustedQty
+}, { merge: true });
+
 
     console.log(`✅ Sent order ${orderId} with sendQty: ${adjustedQty}`);
 
@@ -1677,24 +1682,26 @@ async function sendStartingPar(recipeId, venue, sendQty) {
   const costPerLb = Number(recipeData.cost || 0);
   const pans = recipeData.pars?.[venue]?.[guestCount] || 0;
 
-  const netWeight = Math.max(0, sendQty - (pans * panWeight));
-  const totalCost = netWeight * costPerLb;
+  const netWeight = parseFloat(Math.max(0, sendQty - (pans * panWeight)).toFixed(2));
+const totalCost = parseFloat((netWeight * costPerLb).toFixed(2));
+
 
   const orderData = {
-    type: "starting-par",
-    venue,
-    recipeId,
-    sendQty,         // ✅ use this instead of qty
-    pans,
-    panWeight,
-    netWeight,
-    costPerLb,
-    totalCost,
-    date: today,
-    status: "sent",
-    sentAt: Timestamp.now(),
-    timestamp: Timestamp.now()
-  };
+  type: "starting-par",
+  venue,
+  recipeId,
+  sendQty: parseFloat(sendQty.toFixed(2)),
+  pans,
+  panWeight,
+  netWeight: parseFloat(netWeight.toFixed(2)),
+  costPerLb,
+  totalCost: parseFloat(totalCost.toFixed(2)),
+  date: today,
+  status: "sent",
+  sentAt: Timestamp.now(),
+  timestamp: Timestamp.now()
+};
+
 
   await addDoc(collection(db, "orders"), orderData);
 
@@ -2418,7 +2425,8 @@ window.sendGatewayOrder = async function (button) {
 
   const recipeNo = itemSelect.value;
   const notes = notesInput?.value?.trim() || "";
-  const qty = parseFloat(qtyInput.value || 0);
+  const qty = parseFloat(parseFloat(qtyInput.value || 0).toFixed(2));
+
 
   if (!recipeNo || isNaN(qty) || qty <= 0) {
     alert("Please select an item and enter a valid quantity.");
@@ -2455,7 +2463,8 @@ window.sendGatewayOrder = async function (button) {
     }
 
     const unitCost = Number(recipeData.cost || 0);
-    const totalCost = unitCost * qty;
+    const totalCost = parseFloat((unitCost * qty).toFixed(2));
+
 
     const order = {
       item: recipeData.description || recipeNo,
@@ -2496,10 +2505,12 @@ window.sendGatewayOrder = async function (button) {
 function listenToGatewayOrders() {
   const ordersRef = collection(db, "orders");
   const gatewayQuery = query(
-    ordersRef,
-    where("venue", "==", "Gateway"),
-    where("status", "in", ["open", "Ready to Send", "sent"])
-  );
+  ordersRef,
+  where("venue", "==", "Gateway"),
+  where("status", "in", ["open", "Ready to Send", "sent", "received"]),
+  where("date", "==", getTodayDate())
+);
+
 
   onSnapshot(gatewayQuery, (snapshot) => {
     const orders = snapshot.docs
@@ -2521,10 +2532,7 @@ function renderGatewayTable(orders) {
     const statusOrder = { sent: 0, "Ready to Send": 1, open: 2 };
     const aPriority = statusOrder[a.status] ?? 3;
     const bPriority = statusOrder[b.status] ?? 3;
-
-    if (aPriority !== bPriority) {
-      return aPriority - bPriority;
-    }
+    if (aPriority !== bPriority) return aPriority - bPriority;
 
     const timeA = a.timestamp?.toDate?.()?.getTime?.() || 0;
     const timeB = b.timestamp?.toDate?.()?.getTime?.() || 0;
@@ -2547,12 +2555,10 @@ function renderGatewayTable(orders) {
     const createdFormatted = createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const dueFormatted = dueTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-    const isLate = dueTime < now;
-    if (isLate) {
+    if (dueTime < now) {
       row.style.backgroundColor = "rgba(255, 0, 0, 0.15)";
     }
 
-    // 🔧 Show Edit/Delete buttons only for open add-ons
     let actionsHTML = "";
     if (order.status === "open" && order.type === "addon") {
       actionsHTML = `
@@ -2574,7 +2580,14 @@ function renderGatewayTable(orders) {
 
     tbody.appendChild(row);
   });
+
+  // 👥 Display total guest count
+  const totalGuests = window.guestCounts?.Gateway || 0;
+  document.getElementById("gatewayTotalGuests").textContent = totalGuests;
+
+  // 🚫 Do not touch the remaining guests — let user enter it manually
 }
+
 
 
 window.markOrderReceived = async function (orderId, button) {
@@ -3036,7 +3049,8 @@ window.sendOhanaOrder = async function (button) {
 
   const recipeNo = itemSelect.value;
   const notes = notesInput?.value?.trim() || "";
-  const qty = parseFloat(qtyInput.value || 0);
+  const qty = parseFloat(parseFloat(qtyInput.value || 0).toFixed(2));
+
 
   if (!recipeNo || isNaN(qty) || qty <= 0) {
     alert("Please select an item and enter a valid quantity.");
@@ -3072,7 +3086,8 @@ window.sendOhanaOrder = async function (button) {
     }
 
     const unitCost = Number(recipeData.cost || 0);
-    const totalCost = unitCost * qty;
+    const totalCost = parseFloat((unitCost * qty).toFixed(2));
+
 
     const order = {
       item: recipeData.description || recipeNo,
@@ -3112,11 +3127,13 @@ window.sendOhanaOrder = async function (button) {
 // Realtime listener for Ohana
 function listenToOhanaOrders() {
   const ordersRef = collection(db, "orders");
-  const ohanaQuery = query(
-    ordersRef,
-    where("venue", "==", "Ohana"),
-    where("status", "in", ["open", "Ready to Send", "sent"])
-  );
+ const ohanaQuery = query(
+  ordersRef,
+  where("venue", "==", "Ohana"),
+  where("status", "in", ["open", "Ready to Send", "sent", "received"]),
+  where("date", "==", getTodayDate())
+);
+
 
   onSnapshot(ohanaQuery, (snapshot) => {
     const orders = snapshot.docs

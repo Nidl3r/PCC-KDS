@@ -136,12 +136,25 @@
   <div style="display: flex; align-items: center; gap: 2rem; justify-content: space-between; margin-top: 1rem;">
     <h3>Open Orders</h3>
     <div id="alohaCostSummary" style="font-size: 1rem; display: flex; align-items: center; gap: 1.5rem;">
-      <div><strong>Total Spent:</strong> $<span id="totalSpent">0.00</span></div>
       <div>
-        <strong>Guests:</strong>
-        <input type="number" id="guestInput" value="1" min="1" style="width: 60px;" />
+        <strong>Total Spent:</strong>
+        $<span id="totalSpent">0.00</span>
       </div>
-      <div><strong>Cost per Guest:</strong> $<span id="costPerGuest">0.00</span></div>
+
+      <div style="display: flex; flex-direction: column;">
+        <label for="alohaRemainingGuestsInput"><strong>Remaining Guests:</strong></label>
+        <input id="alohaRemainingGuestsInput" type="number" min="0" value="0" style="width: 5.5rem; padding: 4px 8px;" />
+      </div>
+
+      <div style="display: flex; flex-direction: column;">
+        <label for="guestInput"><strong>Total Guests:</strong></label>
+        <input type="number" id="guestInput" value="1" min="1" style="width: 5.5rem; padding: 4px 8px;" />
+      </div>
+
+      <div>
+        <strong>Cost per Guest:</strong>
+        $<span id="costPerGuest">0.00</span>
+      </div>
     </div>
   </div>
 
@@ -287,18 +300,31 @@
     <button onclick="sendOhanaOrder(this)">Send</button>
   </div>
 
-<div style="display: flex; align-items: center; gap: 2rem; justify-content: space-between; margin-top: 1rem;">
-  <h3>Open Orders</h3>
-  <div id="ohanaCostSummary" style="font-size: 1rem; display: flex; align-items: center; gap: 1.5rem;">
-    <div><strong>Total Spent:</strong> $<span id="totalSpentOhana">0.00</span></div>
-    <div>
-      <strong>Guests:</strong>
-      <input id="guestInputOhana" type="number" min="1" value="1" style="width: 4rem;" />
-    </div>
-    <div><strong>Cost per Guest:</strong> $<span id="costPerGuestOhana">0.00</span></div>
-  </div>
-</div>
+  <div style="display: flex; align-items: center; gap: 2rem; justify-content: space-between; margin-top: 1rem;">
+    <h3>Open Orders</h3>
 
+    <div id="ohanaCostSummary" style="font-size: 1rem; display: flex; align-items: center; gap: 1.5rem;">
+      <div>
+        <strong>Total Spent:</strong>
+        $<span id="totalSpentOhana">0.00</span>
+      </div>
+
+      <div style="display: flex; flex-direction: column;">
+        <label for="ohanaRemainingGuestsInput"><strong>Remaining Guests:</strong></label>
+        <input id="ohanaRemainingGuestsInput" type="number" min="0" value="0" style="width: 5.5rem; padding: 4px 8px;" />
+      </div>
+
+      <div style="display: flex; flex-direction: column;">
+        <label for="guestInputOhana"><strong>Total Guests:</strong></label>
+        <input id="guestInputOhana" type="number" min="1" value="1" style="width: 5.5rem; padding: 4px 8px;" />
+      </div>
+
+      <div>
+        <strong>Cost per Guest:</strong>
+        $<span id="costPerGuestOhana">0.00</span>
+      </div>
+    </div>
+  </div>
 
   <table id="ohanaTable">
     <thead>
@@ -314,6 +340,7 @@
     <tbody></tbody>
   </table>
 </div>
+
 
 
   <!-- ➋ Starting Par -->
@@ -432,18 +459,34 @@
     <input id="gatewayNotes" type="text" placeholder="Notes (e.g. no tomato)" />
     <button onclick="sendGatewayOrder(this)">Send</button>
   </div>
-<div style="display: flex; align-items: center; gap: 2rem; justify-content: space-between; margin-top: 1rem;">
-  <h3>Open Orders</h3>
-  <div id="gatewayCostSummary" style="font-size: 1rem; display: flex; align-items: center; gap: 1.5rem;">
-    <div><strong>Total Spent:</strong> $<span id="totalSpentGateway">0.00</span></div>
-    <div>
-      <strong>Guests:</strong>
-      <input id="guestInputGateway" type="number" min="1" value="1" style="width: 4rem;" />
-    </div>
-    <div><strong>Cost per Guest:</strong> $<span id="costPerGuestGateway">0.00</span></div>
+
+  <div style="display: flex; align-items: center; gap: 2rem; justify-content: space-between; margin-top: 1rem;">
+    <h3>Open Orders</h3>
+
+<div id="gatewayCostSummary" style="font-size: 1rem; display: flex; align-items: center; gap: 1.5rem;">
+  <div>
+    <strong>Total Spent:</strong>
+    $<span id="totalSpentGateway">0.00</span>
+  </div>
+
+  <div style="display: flex; flex-direction: column;">
+    <label for="gatewayRemainingGuestsInput"><strong>Remaining Guests:</strong></label>
+    <input id="gatewayRemainingGuestsInput" type="number" min="0" value="0" style="width: 5.5rem; padding: 4px 8px;" />
+  </div>
+
+  <div style="display: flex; flex-direction: column;">
+    <label for="guestInputGateway"><strong>Total Guests:</strong></label>
+    <input id="guestInputGateway" type="number" min="1" value="1" style="width: 5.5rem; padding: 4px 8px;" />
+  </div>
+
+  <div>
+    <strong>Cost per Guest:</strong>
+    $<span id="costPerGuestGateway">0.00</span>
   </div>
 </div>
 
+
+  </div>
 
   <table id="gatewayTable">
     <thead>
@@ -459,6 +502,7 @@
     <tbody></tbody>
   </table>
 </div>
+
 
 
   <!-- ➋ Starting Par -->
