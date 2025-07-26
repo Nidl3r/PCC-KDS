@@ -829,6 +829,9 @@ function renderAlohaTable(orders) {
   const tbody = document.querySelector("#alohaTable tbody");
   if (!tbody) return;
 
+  // 🧼 Remove received items
+  orders = orders.filter(order => order.status !== "received");
+
   tbody.innerHTML = ""; // Clear existing rows
 
   // 🧠 Sort by status, then by timestamp ascending
@@ -867,20 +870,16 @@ function renderAlohaTable(orders) {
     const createdFormatted = createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const dueFormatted = dueTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-    // Highlight row red if past due
     const isLate = dueTime < now;
     if (isLate) {
       row.style.backgroundColor = "rgba(255, 0, 0, 0.15)";
     }
 
-    // 🛠️ Build the edit/delete buttons if order is open and an addon
     let actionsHTML = "";
     if (order.status === "open" && order.type === "addon") {
       actionsHTML = `
         <button onclick='showEditModal(${JSON.stringify(order).replace(/"/g, "&quot;")})'>✏️</button>
-
         <button onclick="showDeleteModal('${order.id}')">🗑️</button>
-
       `;
     } else if (order.status === "sent") {
       actionsHTML = `<button onclick="markOrderReceived('${order.id}', this)">✓ Receive</button>`;
@@ -898,6 +897,7 @@ function renderAlohaTable(orders) {
     tbody.appendChild(row);
   });
 }
+
 
 window.editAddonOrder = async function(order) {
   const newQty = prompt("Enter new quantity:", order.qty);
@@ -2576,10 +2576,12 @@ function listenToGatewayOrders() {
   });
 }
 
-// ✅ Render Gateway open order table
 function renderGatewayTable(orders) {
   const tbody = document.querySelector("#gatewayTable tbody");
   if (!tbody) return;
+
+  // 🧼 Filter out received orders
+  orders = orders.filter(order => order.status !== "received");
 
   tbody.innerHTML = "";
 
@@ -2636,7 +2638,6 @@ function renderGatewayTable(orders) {
     tbody.appendChild(row);
   });
 
-  // ✅ Show total guest count
   const totalGuests = window.guestCounts?.Gateway || 0;
   const guestEl = document.getElementById("gatewayTotalGuests");
   if (guestEl) guestEl.textContent = totalGuests;
@@ -3203,6 +3204,9 @@ function renderOhanaTable(orders) {
   const tbody = document.querySelector("#ohanaTable tbody");
   if (!tbody) return;
 
+  // 🧼 Filter out received orders
+  orders = orders.filter(order => order.status !== "received");
+
   tbody.innerHTML = "";
 
   orders.sort((a, b) => {
@@ -3240,7 +3244,6 @@ function renderOhanaTable(orders) {
       row.style.backgroundColor = "rgba(255, 0, 0, 0.15)";
     }
 
-    // 🔧 Show Edit/Delete buttons only for open add-ons
     let actionsHTML = "";
     if (order.status === "open" && order.type === "addon") {
       actionsHTML = `
@@ -3263,6 +3266,7 @@ function renderOhanaTable(orders) {
     tbody.appendChild(row);
   });
 }
+
 
 // Expose listener globally
 window.listenToOhanaOrders = listenToOhanaOrders;
