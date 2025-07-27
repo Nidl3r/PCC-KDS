@@ -1103,8 +1103,9 @@ ordersSnapshot.docs.forEach(doc => {
     const row = document.createElement("tr");
     row.innerHTML = `
       <td>${recipe.description}</td>
-      <td>${parQty}</td>
-      <td>${sentQty}</td>
+      <td>${parQty.toFixed(2)}</td>
+<td>${sentQty.toFixed(2)}</td>
+
       <td>
         ${showReceiveBtn ? `<button class="receive-btn" data-recipe-id="${recipeId}">Receive</button>` : ''}
       </td>
