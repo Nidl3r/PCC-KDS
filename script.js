@@ -709,7 +709,7 @@ window.sendAlohaOrder = async function(button) {
 
 
 async function updateCostSummaryForVenue(venueName) {
-  const today = getTodayDate(); // e.g., "2025-07-17"
+  const today = getTodayDate();
   const ordersRef = collection(db, "orders");
 
   const q = query(
@@ -720,50 +720,17 @@ async function updateCostSummaryForVenue(venueName) {
   const snapshot = await getDocs(q);
 
   let totalSpent = 0;
-  const recipeQtyMap = {}; // recipeNo => qty for starting-par
-  const recipeNosToFetch = new Set();
 
   snapshot.forEach(doc => {
     const data = doc.data();
 
-    if (data.type === "addon") {
+    // ✅ Sum totalCost for both addon and starting-par orders
+    if (["addon", "starting-par"].includes(data.type)) {
       totalSpent += Number(data.totalCost || 0);
-    } else if (data.type === "starting-par") {
-      const recipeNo = (data.recipeId || "").toUpperCase();
-      if (recipeNo && !isNaN(data.qty)) {
-        recipeNosToFetch.add(recipeNo);
-        if (!recipeQtyMap[recipeNo]) {
-          recipeQtyMap[recipeNo] = 0;
-        }
-        recipeQtyMap[recipeNo] += Number(data.qty);
-      }
     }
   });
 
-  // 🔍 Fetch recipe costs for starting-par
-  if (recipeNosToFetch.size > 0) {
-    const recipeNos = Array.from(recipeNosToFetch);
-    const recipeDocs = [];
-    const chunkSize = 10;
-
-    for (let i = 0; i < recipeNos.length; i += chunkSize) {
-      const chunk = recipeNos.slice(i, i + chunkSize);
-      const recipeQuery = query(collection(db, "recipes"), where("recipeNo", "in", chunk));
-      const snap = await getDocs(recipeQuery);
-      recipeDocs.push(...snap.docs);
-    }
-
-    recipeDocs.forEach(doc => {
-      const recipe = doc.data();
-      const recipeNo = recipe.recipeNo;
-      const qty = recipeQtyMap[recipeNo] || 0;
-      const unitCost = Number(recipe.cost || 0);
-      totalSpent += unitCost * qty;
-    });
-  }
-
-  // 👥 Get guest count and element IDs
-  let guestCount = 0;
+  // 👥 Determine which HTML elements to update
   let guestInputId = "";
   let spentDisplayId = "";
   let costDisplayId = "";
@@ -786,31 +753,26 @@ async function updateCostSummaryForVenue(venueName) {
       break;
   }
 
-  // 📥 Try to use input value, otherwise fallback to Firestore
-const guestInput = document.getElementById(guestInputId);
+  // 📥 Get guest count from input or fallback
+  let guestCount = 0;
+  const guestInput = document.getElementById(guestInputId);
 
-if (guestInput) {
-  const rawValue = guestInput.value.trim();
-
-  if (rawValue === "") {
-    // If input is empty, try to get value from Firestore
-    const guestSnap = await getDoc(doc(db, "guestCounts", venueName));
-    guestCount = guestSnap.exists() ? guestSnap.data().count : 0;
-    // Do NOT set guestInput.value — let it stay blank
-  } else {
-    const parsedValue = Number(rawValue);
-    guestCount = parsedValue > 0 ? parsedValue : 1; // fallback to 1 if invalid or 0
+  if (guestInput) {
+    const rawValue = guestInput.value.trim();
+    if (rawValue === "") {
+      const guestSnap = await getDoc(doc(db, "guestCounts", venueName));
+      guestCount = guestSnap.exists() ? guestSnap.data().count : 0;
+    } else {
+      const parsed = Number(rawValue);
+      guestCount = parsed > 0 ? parsed : 1;
+    }
   }
-}
 
-const costPerGuest = guestCount > 0 ? totalSpent / guestCount : 0;
+  const costPerGuest = guestCount > 0 ? totalSpent / guestCount : 0;
 
-
-  // 💰 Update cost display
   document.getElementById(spentDisplayId).textContent = totalSpent.toFixed(2);
   document.getElementById(costDisplayId).textContent = costPerGuest.toFixed(2);
 }
-
 
 
 // next function
