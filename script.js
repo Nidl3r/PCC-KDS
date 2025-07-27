@@ -890,14 +890,14 @@ function renderAlohaTable(orders) {
       actionsHTML = `<button onclick="markOrderReceived('${order.id}', this)">✓ Receive</button>`;
     }
 
-    row.innerHTML = `
-      <td>${createdFormatted}</td>
-      <td>${dueFormatted}</td>
-      <td>${order.item}</td>
-      <td>${order.qty}</td>
-      <td>${order.status}</td>
-      <td>${actionsHTML}</td>
-    `;
+ row.innerHTML = `
+  <td data-label="Created">${createdFormatted}</td>
+  <td data-label="Due">${dueFormatted}</td>
+  <td data-label="Item">${order.item}</td>
+  <td data-label="Qty">${order.qty}</td>
+  <td data-label="Status">${order.status}</td>
+  <td data-label="Actions">${actionsHTML}</td>
+`;
 
     tbody.appendChild(row);
   });
@@ -1446,10 +1446,8 @@ window.sendKitchenOrder = async function(orderId, button) {
 
     const order = orderSnap.data();
     const row = button.closest("tr");
-
     const sendQtyInput = row.querySelector(".send-qty-input");
 
-    // ✅ Strict input-only check
     if (!sendQtyInput || sendQtyInput.value.trim() === "") {
       alert("⚠️ Please input a quantity before sending.");
       return;
@@ -1477,12 +1475,13 @@ window.sendKitchenOrder = async function(orderId, button) {
         const uom = (recipeData.uom || "").toLowerCase();
 
         if (uom === "lb") {
-          if (panWeight > 0 && sendQty < panWeight) {
-            alert(`⚠️ Send Qty must be greater than pan weight (${panWeight}) for weight-based items.`);
+          adjustedQty = parseFloat((sendQty - panWeight).toFixed(2));
+
+          if (adjustedQty < 0) {
+            alert(`❌ Cannot send this quantity. Adjusted weight (${adjustedQty}) is less than 0 after subtracting pan weight (${panWeight}).`);
             return;
           }
 
-          adjustedQty = parseFloat((sendQty - panWeight).toFixed(2));
           console.log(`💡 Adjusted Qty for ${order.recipeNo}: ${adjustedQty} (panWeight: ${panWeight})`);
         } else {
           console.log(`ℹ️ UOM is '${uom}', skipping pan weight adjustment.`);
@@ -1493,12 +1492,11 @@ window.sendKitchenOrder = async function(orderId, button) {
     }
 
     await setDoc(orderRef, {
-  status: "sent",
-  sentAt: serverTimestamp(),
-  sendQty: adjustedQty,
-  qty: adjustedQty
-}, { merge: true });
-
+      status: "sent",
+      sentAt: serverTimestamp(),
+      sendQty: adjustedQty,
+      qty: adjustedQty
+    }, { merge: true });
 
     console.log(`✅ Sent order ${orderId} with sendQty: ${adjustedQty}`);
 
@@ -2631,15 +2629,14 @@ function renderGatewayTable(orders) {
       actionsHTML = `<button onclick="markOrderReceived('${order.id}', this)">✓ Receive</button>`;
     }
 
-    row.innerHTML = `
-      <td>${createdFormatted}</td>
-      <td>${dueFormatted}</td>
-      <td>${order.item}</td>
-      <td>${order.qty}</td>
-      <td>${order.status}</td>
-      <td>${actionsHTML}</td>
-    `;
-
+   row.innerHTML = `
+  <td data-label="Created">${createdFormatted}</td>
+  <td data-label="Due">${dueFormatted}</td>
+  <td data-label="Item">${order.item}</td>
+  <td data-label="Qty">${order.qty}</td>
+  <td data-label="Status">${order.status}</td>
+  <td data-label="Actions">${actionsHTML}</td>
+`;
     tbody.appendChild(row);
   });
 
@@ -3259,15 +3256,14 @@ function renderOhanaTable(orders) {
       actionsHTML = `<button onclick="markOrderReceived('${order.id}', this)">✓ Receive</button>`;
     }
 
-    row.innerHTML = `
-      <td>${createdFormatted}</td>
-      <td>${dueFormatted}</td>
-      <td>${order.item}</td>
-      <td>${order.qty}</td>
-      <td>${order.status}</td>
-      <td>${actionsHTML}</td>
-    `;
-
+   row.innerHTML = `
+  <td data-label="Created">${createdFormatted}</td>
+  <td data-label="Due">${dueFormatted}</td>
+  <td data-label="Item">${order.item}</td>
+  <td data-label="Qty">${order.qty}</td>
+  <td data-label="Status">${order.status}</td>
+  <td data-label="Actions">${actionsHTML}</td>
+`;
     tbody.appendChild(row);
   });
 }
