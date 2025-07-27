@@ -366,14 +366,14 @@ function listenToAddonOrders() {
 
     deletedOrders.forEach(deleted => {
       console.log("🔔 Notifying deletion of:", deleted.item);
-      showMainKitchenNotif(`🗑️ Order deleted: ${deleted.item}`, 3000, "info");
+      showMainKitchenNotif(`🗑️ Order deleted: ${deleted.item}`, 4000, "info");
     });
 
     snapshot.docChanges().forEach(change => {
       const data = change.doc.data();
       if (change.type === "modified") {
         console.log("✏️ Order updated:", data.item);
-        showMainKitchenNotif(`✏️ Order updated: ${data.item}`, 3000, "info");
+        showMainKitchenNotif(`✏️ Order updated: ${data.item}`, 4000, "info");
       }
     });
 
@@ -2627,7 +2627,7 @@ function renderGatewayTable(orders) {
         <button onclick='showEditModal(${JSON.stringify(order).replace(/"/g, "&quot;")})'>✏️</button>
         <button onclick="showDeleteModal('${order.id}')">🗑️</button>
       `;
-    } else if (["sent", "Ready to Send"].includes(order.status)) {
+    } else if (["sent"].includes(order.status)) {
       actionsHTML = `<button onclick="markOrderReceived('${order.id}', this)">✓ Receive</button>`;
     }
 
@@ -3255,7 +3255,7 @@ function renderOhanaTable(orders) {
         <button onclick='showEditModal(${JSON.stringify(order).replace(/"/g, "&quot;")})'>✏️</button>
         <button onclick="showDeleteModal('${order.id}')">🗑️</button>
       `;
-    } else if (["sent", "Ready to Send"].includes(order.status)) {
+    } else if (["sent"].includes(order.status)) {
       actionsHTML = `<button onclick="markOrderReceived('${order.id}', this)">✓ Receive</button>`;
     }
 
@@ -3323,21 +3323,18 @@ const qty = parseFloat(qtyInput.value || 0);
       return;
     }
 
-const order = {
-  item: recipeData.description || recipeNo,
-  qty: qty,
-  status: "open",
-  venue: "Concessions",
-  station: recipeData.station || "Unknown",
-  recipeNo: recipeNo,
-  cookTime: recipeData.cookTime || 0,
-  notes: notes,
-  uom: recipeData.uom || "ea",
-  timestamp: serverTimestamp(),
-  date: getTodayDate(),
-  type: "addon", // ✅ REQUIRED for main kitchen to see it
-};
-
+    const order = {
+      item: recipeData.description || recipeNo,
+      qty: qty,
+      status: "open",
+      venue: "Concessions",
+      station: recipeData.station || "Unknown",
+      recipeNo: recipeNo,
+      cookTime: recipeData.cookTime || 0,
+      notes: notes,
+      uom: recipeData.uom || "ea",
+      timestamp: serverTimestamp(),
+    };
 
     await addDoc(collection(db, "orders"), order);
 
