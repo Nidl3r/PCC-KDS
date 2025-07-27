@@ -236,6 +236,13 @@ function renderKitchen(orders, { skipCache = false } = {}) {
     return timeA - timeB;
   });
 
+  // ❌ Filter out grill items from Gateway only
+  orders = orders.filter(order => {
+    const isGatewayGrill = order.venue === "Gateway" && order.station === "Grill";
+    return !isGatewayGrill;
+  });
+
+
   orders.forEach(order => {
     const row = document.createElement("tr");
 
