@@ -172,6 +172,8 @@ input:focus, textarea:focus {
   white-space: nowrap;
 }
 
+
+
 /* Responsive fallback for small screens */
 @media (max-width: 600px) {
   .order-controls {
