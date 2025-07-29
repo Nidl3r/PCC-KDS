@@ -4050,7 +4050,7 @@ window.sendChatMessage = async function () {
 window.loadProductionSummary = async function () {
   const tbody = document.querySelector("#productionTable tbody");
 
-  // 🌀 Show loading immediately
+  // 🌀 Show loading spinner
   tbody.innerHTML = `
     <tr>
       <td colspan="5" style="text-align:center; padding: 10px;">
@@ -4068,29 +4068,26 @@ window.loadProductionSummary = async function () {
   const dd = String(today.getDate()).padStart(2, '0');
   const todayStr = `${yyyy}-${mm}-${dd}`;
 
-  const snapshot = await getDocs(query(
+  const summaryMap = new Map();
+  const recipeKeyList = [];
+
+  // 🔄 Load ORDERS
+  const orderSnapshot = await getDocs(query(
     collection(db, "orders"),
     where("date", "==", todayStr)
   ));
 
-  const summaryMap = new Map();
-  const recipeKeyList = [];
-
-  for (const doc of snapshot.docs) {
+  for (const doc of orderSnapshot.docs) {
     const data = doc.data();
     const type = data.type || "";
-
     let recipeNo = (data.recipeNo || data.recipeId || "").toUpperCase();
     if (!recipeNo) continue;
 
     const submenuCode = data.submenuCode || "";
 
-    let qty = 0;
-    if (type === "starting-par") {
-      qty = Number(data.netWeight ?? 0);
-    } else {
-      qty = Number(data.sendQty ?? data.qty ?? 0);
-    }
+    let qty = (type === "starting-par") 
+      ? Number(data.netWeight ?? 0)
+      : Number(data.sendQty ?? data.qty ?? 0);
 
     if (qty <= 0) {
       console.warn(`🚫 Skipping ${recipeNo} due to zero quantity`, data);
@@ -4111,7 +4108,61 @@ window.loadProductionSummary = async function () {
     summaryMap.get(recipeNo).total += qty;
   }
 
-  // ✅ Load recipe descriptions
+  // 🔄 Load WASTE from Main Kitchen for today
+  const wasteSnapshot = await getDocs(query(
+    collection(db, "waste"),
+    where("venue", "==", "Main Kitchen"),
+    where("date", "==", todayStr)
+  ));
+
+  for (const doc of wasteSnapshot.docs) {
+    const data = doc.data();
+    const itemName = (data.item || "").trim();
+    const qty = Number(data.qty || 0);
+    if (!itemName || qty <= 0) continue;
+
+    // Check if this is already in the summary map
+    let matchingRecipeNo = null;
+
+    // Try to find recipeNo by matching description
+    for (const [recipeNo, item] of summaryMap.entries()) {
+      if (item.description === itemName) {
+        matchingRecipeNo = recipeNo;
+        break;
+      }
+    }
+
+    // If not found, try to lookup by recipe name in the recipes collection
+    if (!matchingRecipeNo) {
+      const recipesQuery = query(
+        collection(db, "recipes"),
+        where("description", "==", itemName)
+      );
+      const recipesSnap = await getDocs(recipesQuery);
+      if (!recipesSnap.empty) {
+        const recipeDoc = recipesSnap.docs[0];
+        matchingRecipeNo = (recipeDoc.data().recipeNo || recipeDoc.id).toUpperCase();
+
+        if (!summaryMap.has(matchingRecipeNo)) {
+          summaryMap.set(matchingRecipeNo, {
+            submenuCode: "",
+            dishCode: "",
+            recipeNo: matchingRecipeNo,
+            description: itemName,
+            total: 0,
+          });
+          recipeKeyList.push(matchingRecipeNo);
+        }
+      }
+    }
+
+    // Add waste qty to the matching recipe
+    if (matchingRecipeNo) {
+      summaryMap.get(matchingRecipeNo).total += qty;
+    }
+  }
+
+  // 🧾 Load Descriptions from Recipes
   const recipeDescMap = new Map();
   for (let i = 0; i < recipeKeyList.length; i += 10) {
     const batch = recipeKeyList.slice(i, i + 10);
@@ -4125,12 +4176,12 @@ window.loadProductionSummary = async function () {
     });
   }
 
-  // ✅ Apply descriptions
+  // 🏷️ Apply Descriptions
   for (const [recipeNo, item] of summaryMap.entries()) {
-    item.description = recipeDescMap.get(recipeNo) || "No Description";
+    item.description = recipeDescMap.get(recipeNo) || item.description;
   }
 
-  // 🏷️ Assign dish codes
+  // 🏷️ Assign Dish Codes
   recipeKeyList.forEach((recipeNo, index) => {
     const dishCode = `PCC${String(index + 1).padStart(3, "0")}`;
     if (summaryMap.has(recipeNo)) {
@@ -4138,7 +4189,7 @@ window.loadProductionSummary = async function () {
     }
   });
 
-  // ✅ Render table
+  // 📋 Render Table
   tbody.innerHTML = "";
 
   if (summaryMap.size === 0) {
