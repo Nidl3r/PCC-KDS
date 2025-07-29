@@ -2906,61 +2906,69 @@ window.loadGatewayReturns = async function () {
     });
 
   const returnsSnapshot = await getDocs(
-    query(
-      collection(db, "returns"),
-      where("venue", "==", "Gateway")
-    )
+    query(collection(db, "returns"), where("venue", "==", "Gateway"))
   );
 
   const excludedRecipeIds = new Set();
   returnsSnapshot.forEach(doc => {
-    const status = doc.data().status;
-    const recipeId = doc.data().recipeId;
-    if (status === "returned" || status === "received") {
+    const { status, recipeId } = doc.data();
+    if ((status === "returned" || status === "received") && recipeId) {
       excludedRecipeIds.add(recipeId);
     }
   });
 
   console.log(`📦 Found ${todayOrders.length} Gateway orders received today`);
-
   if (todayOrders.length === 0) return;
 
-const recipeQtyMap = {};
-todayOrders.forEach(order => {
-  const recipeNo = order.recipeNo || order.recipeId;
-  const qty = Number(order.qty) || 0;
+  const recipeQtyMap = {};
+  todayOrders.forEach(order => {
+    const recipeKey = order.recipeNo || order.recipeId;
+    const qty = Number(order.qty ?? order.sendQty ?? 0);
 
-  if (!recipeNo) return;
+    if (!recipeKey) return;
 
-  recipeQtyMap[recipeNo] = (recipeQtyMap[recipeNo] || 0) + qty;
-});
-
+    recipeQtyMap[recipeKey] = (recipeQtyMap[recipeKey] || 0) + qty;
+  });
 
   const validRecipes = [];
 
-  for (const recipeNo in recipeQtyMap) {
+  for (const recipeKey in recipeQtyMap) {
+    let recipeDoc = null;
+
     const recipeQuery = query(
-  collection(db, "recipes"),
-  where("recipeNo", "==", recipeNo)
-);
-const recipeSnapshot = await getDocs(recipeQuery);
+      collection(db, "recipes"),
+      where("recipeNo", "==", recipeKey)
+    );
+    const recipeSnapshot = await getDocs(recipeQuery);
 
-if (!recipeSnapshot.empty) {
-  const recipeDoc = recipeSnapshot.docs[0];
-  const recipe = recipeDoc.data();
+    if (!recipeSnapshot.empty) {
+      recipeDoc = recipeSnapshot.docs[0];
+    } else {
+      const fallbackDoc = await getDoc(doc(db, "recipes", recipeKey));
+      if (fallbackDoc.exists()) {
+        recipeDoc = fallbackDoc;
+      }
+    }
 
-  if (
-    recipe.returns?.toLowerCase() === "yes" &&
-    !excludedRecipeIds.has(recipeDoc.id)
-  ) {
-    validRecipes.push({
-      id: recipeDoc.id,
-      name: recipe.description,
-      uom: recipe.uom || "ea",
-      qty: recipeQtyMap[recipeNo]
-    });
-  }
-}
+    if (!recipeDoc) {
+      console.warn("❌ Could not find recipe for", recipeKey);
+      continue;
+    }
+
+    if (excludedRecipeIds.has(recipeDoc.id)) {
+      continue;
+    }
+
+    const recipe = recipeDoc.data();
+
+    if (String(recipe.returns || "").toLowerCase() === "yes") {
+      validRecipes.push({
+        id: recipeDoc.id,
+        name: recipe.description,
+        uom: recipe.uom || "ea",
+        qty: recipeQtyMap[recipeKey]
+      });
+    }
   }
 
   if (validRecipes.length === 0) {
@@ -2988,6 +2996,7 @@ if (!recipeSnapshot.empty) {
 
   console.log(`✅ Loaded ${validRecipes.length} returnable recipes`);
 };
+
 
 window.sendSingleGatewayReturn = async function (btn, recipeId) {
   const row = btn.closest("tr");
