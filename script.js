@@ -3689,23 +3689,47 @@ window.sendSingleOhanaWaste = async function (button, recipeId) {
   setTimeout(() => confirm.remove(), 2000);
 };
 async function checkIfEnoughReceived(recipeId, wasteQty, venue) {
+  const today = getTodayDate(); // e.g., "2025-07-28"
+
+  // 🔎 Fetch all received orders for today
   const ordersRef = collection(db, "orders");
   const ordersQuery = query(
     ordersRef,
     where("recipeId", "==", recipeId),
-    where("venue", "==", venue)
+    where("venue", "==", venue),
+    where("status", "==", "received"),
+    where("date", "==", today)
   );
   const ordersSnap = await getDocs(ordersQuery);
 
-  let totalOrdered = 0;
+  let totalReceived = 0;
   ordersSnap.forEach(doc => {
     const data = doc.data();
-    totalOrdered += Number(data.qty || 0);
+    totalReceived += Number(data.sendQty || 0);
   });
 
-  return wasteQty <= totalOrdered;
-}
+  // 🗑️ Fetch all waste already recorded for this recipe today
+  const recipes = window.alohaWasteRecipeList || [];
+  const matchedRecipe = recipes.find(r => r.id === recipeId);
+  const recipeDescription = matchedRecipe?.description || "";
 
+  const wasteRef = collection(db, "waste");
+  const wasteQuery = query(
+    wasteRef,
+    where("venue", "==", venue),
+    where("item", "==", recipeDescription),
+    where("date", "==", today)
+  );
+  const wasteSnap = await getDocs(wasteQuery);
+
+  let alreadyWasted = 0;
+  wasteSnap.forEach(doc => {
+    alreadyWasted += Number(doc.data().qty || 0);
+  });
+
+  // ✅ Check if waste would exceed what was received
+  return wasteQty <= (totalReceived - alreadyWasted);
+}
 
 //OHANA RETURNS
 window.loadOhanaReturns = async function () {
