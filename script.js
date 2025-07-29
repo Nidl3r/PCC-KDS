@@ -2169,7 +2169,6 @@ window.loadAlohaReturns = async function () {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  // 🔍 Get today's received orders for Aloha
   const ordersRef = collection(db, "orders");
   const q = query(
     ordersRef,
@@ -2183,7 +2182,6 @@ window.loadAlohaReturns = async function () {
     return;
   }
 
-  // 🔎 Filter orders by today's date
   const todayOrders = snapshot.docs
     .map(doc => ({ id: doc.id, ...doc.data() }))
     .filter(order => {
@@ -2191,61 +2189,71 @@ window.loadAlohaReturns = async function () {
       return receivedAt && receivedAt.toDateString() === today.toDateString();
     });
 
-  // 🔍 Get recipeIds that have already been returned OR received
   const returnsSnapshot = await getDocs(
-    query(
-      collection(db, "returns"),
-      where("venue", "==", "Aloha")
-    )
+    query(collection(db, "returns"), where("venue", "==", "Aloha"))
   );
 
   const excludedRecipeIds = new Set();
   returnsSnapshot.forEach(doc => {
-    const status = doc.data().status;
-    const recipeId = doc.data().recipeId;
-    if (status === "returned" || status === "received") {
+    const { status, recipeId } = doc.data();
+    if ((status === "returned" || status === "received") && recipeId) {
       excludedRecipeIds.add(recipeId);
     }
   });
 
   console.log(`📦 Found ${todayOrders.length} Aloha orders received today`);
-
   if (todayOrders.length === 0) return;
 
-  // 🔢 Map recipeNo => total qty received
   const recipeQtyMap = {};
   todayOrders.forEach(order => {
-    const recipeNo = order.recipeNo;
+    const recipeKey = order.recipeNo || order.recipeId;
     const qty = Number(order.qty) || 0;
-    if (!recipeQtyMap[recipeNo]) {
-      recipeQtyMap[recipeNo] = 0;
-    }
-    recipeQtyMap[recipeNo] += qty;
+
+    if (!recipeKey) return;
+
+    recipeQtyMap[recipeKey] = (recipeQtyMap[recipeKey] || 0) + qty;
   });
 
   const validRecipes = [];
 
-  for (const recipeNo in recipeQtyMap) {
-    const recipeQuery = query(
-  collection(db, "recipes"),
-  where("recipeNo", "==", recipeNo)
-);
-const recipeSnapshot = await getDocs(recipeQuery);
-const recipeDoc = recipeSnapshot.docs[0]; // ✅ This gives you the right recipe
+  for (const recipeKey in recipeQtyMap) {
+    let recipeDoc = null;
 
-    if (
-      recipeDoc.exists() &&
-      !excludedRecipeIds.has(recipeDoc.id)
-    ) {
-      const recipe = recipeDoc.data();
-      if (recipe.returns?.toLowerCase() === "yes") {
-        validRecipes.push({
-          id: recipeDoc.id,
-          name: recipe.description,
-          uom: recipe.uom || "ea",
-          qty: recipeQtyMap[recipeNo]
-        });
+    // Try to find by recipeNo
+    const recipeQuery = query(
+      collection(db, "recipes"),
+      where("recipeNo", "==", recipeKey)
+    );
+    const recipeSnapshot = await getDocs(recipeQuery);
+
+    if (!recipeSnapshot.empty) {
+      recipeDoc = recipeSnapshot.docs[0];
+    } else {
+      // Try to get by ID
+      const fallbackDoc = await getDoc(doc(db, "recipes", recipeKey));
+      if (fallbackDoc.exists()) {
+        recipeDoc = fallbackDoc;
       }
+    }
+
+    if (!recipeDoc) {
+      console.warn("❌ Could not find recipe for", recipeKey);
+      continue;
+    }
+
+    if (excludedRecipeIds.has(recipeDoc.id)) {
+      continue;
+    }
+
+    const recipe = recipeDoc.data();
+
+    if (String(recipe.returns || "").toLowerCase() === "yes") {
+      validRecipes.push({
+        id: recipeDoc.id,
+        name: recipe.description,
+        uom: recipe.uom || "ea",
+        qty: recipeQtyMap[recipeKey]
+      });
     }
   }
 
@@ -2254,7 +2262,6 @@ const recipeDoc = recipeSnapshot.docs[0]; // ✅ This gives you the right recipe
     return;
   }
 
-  // 🧾 Render the table
   validRecipes.forEach(recipe => {
     const row = document.createElement("tr");
     row.dataset.recipeId = recipe.id;
@@ -2275,6 +2282,8 @@ const recipeDoc = recipeSnapshot.docs[0]; // ✅ This gives you the right recipe
 
   console.log(`✅ Loaded ${validRecipes.length} returnable recipes`);
 };
+
+
 
 window.sendSingleReturn = async function (btn, recipeId) {
   const row = btn.closest("tr");
@@ -2915,15 +2924,16 @@ window.loadGatewayReturns = async function () {
 
   if (todayOrders.length === 0) return;
 
-  const recipeQtyMap = {};
-  todayOrders.forEach(order => {
-    const recipeNo = order.recipeNo;
-    const qty = Number(order.qty) || 0;
-    if (!recipeQtyMap[recipeNo]) {
-      recipeQtyMap[recipeNo] = 0;
-    }
-    recipeQtyMap[recipeNo] += qty;
-  });
+const recipeQtyMap = {};
+todayOrders.forEach(order => {
+  const recipeNo = order.recipeNo || order.recipeId;
+  const qty = Number(order.qty) || 0;
+
+  if (!recipeNo) return;
+
+  recipeQtyMap[recipeNo] = (recipeQtyMap[recipeNo] || 0) + qty;
+});
+
 
   const validRecipes = [];
 
@@ -2933,23 +2943,23 @@ window.loadGatewayReturns = async function () {
   where("recipeNo", "==", recipeNo)
 );
 const recipeSnapshot = await getDocs(recipeQuery);
-const recipeDoc = recipeSnapshot.docs[0]; // ✅ This gives you the right recipe
 
-    if (
-      recipeDoc.exists() &&
-      !excludedRecipeIds.has(recipeDoc.id)
-    ) {
-      const recipe = recipeDoc.data();
-      if ((recipe.returns + "").toLowerCase() === "yes") {
+if (!recipeSnapshot.empty) {
+  const recipeDoc = recipeSnapshot.docs[0];
+  const recipe = recipeDoc.data();
 
-        validRecipes.push({
-          id: recipeDoc.id,
-          name: recipe.description,
-          uom: recipe.uom || "ea",
-          qty: recipeQtyMap[recipeNo]
-        });
-      }
-    }
+  if (
+    recipe.returns?.toLowerCase() === "yes" &&
+    !excludedRecipeIds.has(recipeDoc.id)
+  ) {
+    validRecipes.push({
+      id: recipeDoc.id,
+      name: recipe.description,
+      uom: recipe.uom || "ea",
+      qty: recipeQtyMap[recipeNo]
+    });
+  }
+}
   }
 
   if (validRecipes.length === 0) {
@@ -3706,7 +3716,6 @@ window.loadOhanaReturns = async function () {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  // 🔍 Get today's received orders for Ohana
   const ordersRef = collection(db, "orders");
   const q = query(
     ordersRef,
@@ -3734,47 +3743,62 @@ window.loadOhanaReturns = async function () {
   const excludedRecipeIds = new Set();
   returnsSnapshot.forEach(doc => {
     const { status, recipeId } = doc.data();
-    if (status === "returned" || status === "received") {
+    if ((status === "returned" || status === "received") && recipeId) {
       excludedRecipeIds.add(recipeId);
     }
   });
 
   console.log(`📦 Found ${todayOrders.length} Ohana orders received today`);
-
   if (todayOrders.length === 0) return;
 
   const recipeQtyMap = {};
   todayOrders.forEach(order => {
-    const recipeNo = order.recipeNo;
+    const recipeKey = order.recipeNo || order.recipeId;
     const qty = Number(order.qty) || 0;
-    if (!recipeQtyMap[recipeNo]) {
-      recipeQtyMap[recipeNo] = 0;
-    }
-    recipeQtyMap[recipeNo] += qty;
+
+    if (!recipeKey) return;
+
+    recipeQtyMap[recipeKey] = (recipeQtyMap[recipeKey] || 0) + qty;
   });
 
   const validRecipes = [];
 
-  for (const recipeNo in recipeQtyMap) {
+  for (const recipeKey in recipeQtyMap) {
+    let recipeDoc = null;
+
     const recipeQuery = query(
       collection(db, "recipes"),
-      where("recipeNo", "==", recipeNo)
+      where("recipeNo", "==", recipeKey)
     );
     const recipeSnapshot = await getDocs(recipeQuery);
+
     if (!recipeSnapshot.empty) {
-      const doc = recipeSnapshot.docs[0];
-      const recipe = doc.data();
-      if (
-        recipe.returns?.toLowerCase() === "yes" &&
-        !excludedRecipeIds.has(doc.id)
-      ) {
-        validRecipes.push({
-          id: doc.id,
-          name: recipe.description,
-          uom: recipe.uom || "ea",
-          qty: recipeQtyMap[recipeNo]
-        });
+      recipeDoc = recipeSnapshot.docs[0];
+    } else {
+      const fallbackDoc = await getDoc(doc(db, "recipes", recipeKey));
+      if (fallbackDoc.exists()) {
+        recipeDoc = fallbackDoc;
       }
+    }
+
+    if (!recipeDoc) {
+      console.warn("❌ Could not find recipe for", recipeKey);
+      continue;
+    }
+
+    if (excludedRecipeIds.has(recipeDoc.id)) {
+      continue;
+    }
+
+    const recipe = recipeDoc.data();
+
+    if (String(recipe.returns || "").toLowerCase() === "yes") {
+      validRecipes.push({
+        id: recipeDoc.id,
+        name: recipe.description,
+        uom: recipe.uom || "ea",
+        qty: recipeQtyMap[recipeKey]
+      });
     }
   }
 
@@ -3803,6 +3827,7 @@ window.loadOhanaReturns = async function () {
 
   console.log(`✅ Loaded ${validRecipes.length} returnable recipes`);
 };
+
 window.sendOhanaReturn = async function (btn, recipeId) {
   const row = btn.closest("tr");
   const qtyInput = row.querySelector(".return-input");
