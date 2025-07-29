@@ -1705,30 +1705,40 @@ async function sendStartingPar(recipeId, venue, sendQty) {
     return;
   }
 
-  const recipeData = recipeSnap.data();
-  const panWeight = Number(recipeData.panWeight || 0);
-  const costPerLb = Number(recipeData.cost || 0);
-  const pans = recipeData.pars?.[venue]?.[guestCount] || 0;
+const recipeData = recipeSnap.data();
+const panWeight = Number(recipeData.panWeight || 0);
+const costPerLb = Number(recipeData.cost || 0);
+const pans = recipeData.pars?.[venue]?.[guestCount] || 0;
 
-  const netWeight = parseFloat(Math.max(0, sendQty - (pans * panWeight)).toFixed(2));
+// ✅ Calculate net weight
+const netWeightRaw = sendQty - (pans * panWeight);
+if (netWeightRaw <= 0) {
+  alert(`❌ Cannot send: Net weight would be ${netWeightRaw.toFixed(2)} lbs.`);
+  return;
+}
+const netWeight = parseFloat(netWeightRaw.toFixed(2));
 const totalCost = parseFloat((netWeight * costPerLb).toFixed(2));
 
+// ✅ Ensure recipeNo is saved for accounting queries
+const recipeNo = (recipeData.recipeNo || recipeId).toUpperCase();
 
-  const orderData = {
+const orderData = {
   type: "starting-par",
   venue,
   recipeId,
+  recipeNo, // ✅ now added
   sendQty: parseFloat(sendQty.toFixed(2)),
   pans,
   panWeight,
-  netWeight: parseFloat(netWeight.toFixed(2)),
+  netWeight,
   costPerLb,
-  totalCost: parseFloat(totalCost.toFixed(2)),
+  totalCost,
   date: today,
   status: "sent",
   sentAt: Timestamp.now(),
   timestamp: Timestamp.now()
 };
+
 
 
   await addDoc(collection(db, "orders"), orderData);
@@ -4007,7 +4017,6 @@ window.loadProductionSummary = async function () {
   const dd = String(today.getDate()).padStart(2, '0');
   const todayStr = `${yyyy}-${mm}-${dd}`;
 
-  // ✅ Filter only today's orders
   const snapshot = await getDocs(query(
     collection(db, "orders"),
     where("date", "==", todayStr)
@@ -4018,9 +4027,9 @@ window.loadProductionSummary = async function () {
 
   for (const doc of snapshot.docs) {
     const data = doc.data();
-
     const type = data.type || "";
-    const recipeNo = (data.recipeNo || data.recipeId || "").toUpperCase();
+
+    let recipeNo = (data.recipeNo || data.recipeId || "").toUpperCase();
     if (!recipeNo) continue;
 
     const submenuCode = data.submenuCode || "";
@@ -4032,7 +4041,10 @@ window.loadProductionSummary = async function () {
       qty = Number(data.sendQty ?? data.qty ?? 0);
     }
 
-    if (qty <= 0) continue;
+    if (qty <= 0) {
+      console.warn(`🚫 Skipping ${recipeNo} due to zero quantity`, data);
+      continue;
+    }
 
     if (!summaryMap.has(recipeNo)) {
       summaryMap.set(recipeNo, {
@@ -4048,7 +4060,7 @@ window.loadProductionSummary = async function () {
     summaryMap.get(recipeNo).total += qty;
   }
 
-  // ✅ Batch load recipe descriptions
+  // ✅ Load recipe descriptions
   const recipeDescMap = new Map();
   for (let i = 0; i < recipeKeyList.length; i += 10) {
     const batch = recipeKeyList.slice(i, i + 10);
@@ -4057,7 +4069,8 @@ window.loadProductionSummary = async function () {
     );
     snap.forEach(doc => {
       const data = doc.data();
-      recipeDescMap.set(data.recipeNo.toUpperCase(), data.description || "No Description");
+      const key = (data.recipeNo || doc.id).toUpperCase();
+      recipeDescMap.set(key, data.description || "No Description");
     });
   }
 
@@ -4074,7 +4087,7 @@ window.loadProductionSummary = async function () {
     }
   });
 
-  // ✅ Clear loading
+  // ✅ Render table
   tbody.innerHTML = "";
 
   if (summaryMap.size === 0) {
@@ -4084,7 +4097,6 @@ window.loadProductionSummary = async function () {
     return;
   }
 
-  // ✅ Render table
   for (const recipeNo of recipeKeyList) {
     const item = summaryMap.get(recipeNo);
     const tr = document.createElement("tr");
