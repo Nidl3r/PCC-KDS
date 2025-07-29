@@ -2207,7 +2207,8 @@ window.loadAlohaReturns = async function () {
   const recipeQtyMap = {};
   todayOrders.forEach(order => {
     const recipeKey = order.recipeNo || order.recipeId;
-    const qty = Number(order.qty) || 0;
+    const qty = Number(order.qty ?? order.sendQty ?? 0);
+
 
     if (!recipeKey) return;
 
@@ -3754,7 +3755,8 @@ window.loadOhanaReturns = async function () {
   const recipeQtyMap = {};
   todayOrders.forEach(order => {
     const recipeKey = order.recipeNo || order.recipeId;
-    const qty = Number(order.qty) || 0;
+    const qty = Number(order.qty ?? order.sendQty ?? 0);
+
 
     if (!recipeKey) return;
 
