@@ -1858,57 +1858,6 @@ window.addToWasteQty = function (button) {
 
 
 
-window.sendSingleWaste = async function (button, recipeId) {
-  const row = button.closest("tr");
-  const span = row.querySelector(".waste-total");
-  const input = row.querySelector(".waste-input");
-  const qty = Number(span.textContent);
-
-  const recipe = window.alohaWasteRecipeList.find(r => r.id === recipeId);
-  if (!recipe) {
-    alert("❌ Recipe not found.");
-    return;
-  }
-
-  // Check HOTFOODS rule
-  if (qty > 1 && recipe.category?.toUpperCase() === "HOTFOODS") {
-    alert("⚠️ HOTFOODS items must be wasted one at a time.");
-    return;
-  }
-
-  // Check if waste exceeds received
-  const hasEnough = await checkIfEnoughReceived(recipeId, qty, "Aloha");
-  if (!hasEnough) {
-    alert(`🚫 Cannot waste ${qty} of "${recipe.description}" — more than received.`);
-    return;
-  }
-
-  const today = getTodayDate();
-  const wasteData = {
-    item: recipe.description,
-    venue: "Aloha",
-    qty,
-    uom: recipe.uom || "ea",
-    date: today,
-    timestamp: serverTimestamp()
-  };
-
-  await addDoc(collection(db, "waste"), wasteData);
-
-  console.log(`✅ Sent waste to 'waste': ${qty} of ${recipe.description}`);
-
-  // Reset
-  span.textContent = "0";
-  input.value = "0";
-
-  const confirm = document.createElement("span");
-  confirm.textContent = "Sent";
-  confirm.style.color = "green";
-  confirm.style.marginLeft = "8px";
-  button.parentNode.appendChild(confirm);
-  setTimeout(() => confirm.remove(), 2000);
-};
-
 window.sendAllWaste = async function () {
   const rows = document.querySelectorAll(".waste-table tbody tr");
   console.log("🧪 Found rows:", rows.length);
@@ -1925,11 +1874,6 @@ window.sendAllWaste = async function () {
       const recipe = window.alohaWasteRecipeList.find(r => r.id === recipeId);
       if (!recipe) {
         console.warn(`⚠️ Recipe not found for ID: ${recipeId}`);
-        continue;
-      }
-
-      if (qty > 1 && recipe.category?.toUpperCase() === "HOTFOODS") {
-        alert(`⚠️ Cannot waste more than 1 of HOTFOODS item: "${recipe.description}"`);
         continue;
       }
 
@@ -1952,7 +1896,6 @@ window.sendAllWaste = async function () {
       console.log(`✅ Sent waste to 'waste': ${qty} of ${recipe.description}`);
       sentCount++;
 
-      // Reset input and UI if needed
       if (span) span.textContent = "0";
       if (input) input.value = "0";
 
@@ -1970,6 +1913,49 @@ window.sendAllWaste = async function () {
   } else {
     alert("⚠️ No valid waste entries sent.");
   }
+};
+
+window.sendSingleWaste = async function (button, recipeId) {
+  const row = button.closest("tr");
+  const span = row.querySelector(".waste-total");
+  const input = row.querySelector(".waste-input");
+  const qty = Number(span.textContent);
+
+  const recipe = window.alohaWasteRecipeList.find(r => r.id === recipeId);
+  if (!recipe) {
+    alert("❌ Recipe not found.");
+    return;
+  }
+
+  const hasEnough = await checkIfEnoughReceived(recipeId, qty, "Aloha");
+  if (!hasEnough) {
+    alert(`🚫 Cannot waste ${qty} of "${recipe.description}" — more than received.`);
+    return;
+  }
+
+  const today = getTodayDate();
+  const wasteData = {
+    item: recipe.description,
+    venue: "Aloha",
+    qty,
+    uom: recipe.uom || "ea",
+    date: today,
+    timestamp: serverTimestamp()
+  };
+
+  await addDoc(collection(db, "waste"), wasteData);
+
+  console.log(`✅ Sent waste to 'waste': ${qty} of ${recipe.description}`);
+
+  span.textContent = "0";
+  input.value = "0";
+
+  const confirm = document.createElement("span");
+  confirm.textContent = "Sent";
+  confirm.style.color = "green";
+  confirm.style.marginLeft = "8px";
+  button.parentNode.appendChild(confirm);
+  setTimeout(() => confirm.remove(), 2000);
 };
 
 
@@ -2775,7 +2761,7 @@ window.sendSingleGatewayWaste = async function (button, recipeId) {
   const qty = Number(span.textContent);
 
   if (qty <= 0) {
-    alert("Please add a quantity first.");
+    alert("⚠️ Please add a quantity first.");
     return;
   }
 
@@ -2785,7 +2771,7 @@ window.sendSingleGatewayWaste = async function (button, recipeId) {
     return;
   }
 
-  // ✅ Check if wasting more than received
+  // ✅ Validate against received total
   const hasEnough = await checkIfEnoughReceived(recipeId, qty, "Gateway");
   if (!hasEnough) {
     alert(`🚫 Cannot waste ${qty} of "${recipe.description}" — more than received.`);
@@ -2802,19 +2788,25 @@ window.sendSingleGatewayWaste = async function (button, recipeId) {
     timestamp: serverTimestamp()
   };
 
-  await addDoc(collection(db, "waste"), wasteData);
+  try {
+    await addDoc(collection(db, "waste"), wasteData);
+    console.log(`✅ Sent Gateway waste: ${qty} of ${recipe.description}`);
+    
+    span.textContent = "0";
+    input.value = "0";
 
-  console.log(`✅ Sent Gateway waste: ${qty} of ${recipe.description}`);
-  span.textContent = "0";
-  input.value = "0";
-
-  const confirm = document.createElement("span");
-  confirm.textContent = "Sent";
-  confirm.style.color = "green";
-  confirm.style.marginLeft = "8px";
-  button.parentNode.appendChild(confirm);
-  setTimeout(() => confirm.remove(), 2000);
+    const confirm = document.createElement("span");
+    confirm.textContent = "Sent";
+    confirm.style.color = "green";
+    confirm.style.marginLeft = "8px";
+    button.parentNode.appendChild(confirm);
+    setTimeout(() => confirm.remove(), 2000);
+  } catch (err) {
+    console.error("❌ Failed to record waste:", err);
+    alert("❌ Failed to record waste. Please try again.");
+  }
 };
+
 
 window.sendAllGatewayWaste = async function () {
   const rows = document.querySelectorAll("#gateway .waste-table tbody tr");
