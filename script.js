@@ -2166,8 +2166,7 @@ window.loadAlohaReturns = async function () {
 
   console.log("🔁 Loading Aloha Returns...");
 
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  const todayStr = getTodayDate(); // "YYYY-MM-DD"
 
   const ordersRef = collection(db, "orders");
   const q = query(
@@ -2178,40 +2177,37 @@ window.loadAlohaReturns = async function () {
   const snapshot = await getDocs(q);
 
   if (snapshot.empty) {
-    console.log("📭 No orders received today for Aloha");
+    console.log("📭 No orders received for Aloha");
     return;
   }
 
   const todayOrders = snapshot.docs
     .map(doc => ({ id: doc.id, ...doc.data() }))
-    .filter(order => {
-      const receivedAt = order.receivedAt?.toDate?.();
-      return receivedAt && receivedAt.toDateString() === today.toDateString();
-    });
+    .filter(order => order.date === todayStr);
 
   const returnsSnapshot = await getDocs(
     query(collection(db, "returns"), where("venue", "==", "Aloha"))
   );
 
-  const excludedRecipeIds = new Set();
+  const excludedRecipeKeys = new Set();
   returnsSnapshot.forEach(doc => {
-    const { status, recipeId } = doc.data();
-    if ((status === "returned" || status === "received") && recipeId) {
-      excludedRecipeIds.add(recipeId);
+    const data = doc.data();
+    const key = (data.recipeNo || data.recipeId || "").toUpperCase();
+    const returnDate = data.date;
+    if (data.status === "returned" && key && returnDate === todayStr) {
+      excludedRecipeKeys.add(key);
     }
   });
 
+  console.log("🚫 Excluded keys (from today's returns):", Array.from(excludedRecipeKeys));
   console.log(`📦 Found ${todayOrders.length} Aloha orders received today`);
   if (todayOrders.length === 0) return;
 
   const recipeQtyMap = {};
   todayOrders.forEach(order => {
-    const recipeKey = order.recipeNo || order.recipeId;
+    const recipeKey = (order.recipeNo || order.recipeId || "").toUpperCase();
     const qty = Number(order.qty ?? order.sendQty ?? 0);
-
-
     if (!recipeKey) return;
-
     recipeQtyMap[recipeKey] = (recipeQtyMap[recipeKey] || 0) + qty;
   });
 
@@ -2242,7 +2238,8 @@ window.loadAlohaReturns = async function () {
       continue;
     }
 
-    if (excludedRecipeIds.has(recipeDoc.id)) {
+    if (excludedRecipeKeys.has(recipeKey)) {
+      console.log(`⛔ Skipping already returned recipe: ${recipeKey}`);
       continue;
     }
 
@@ -2255,6 +2252,8 @@ window.loadAlohaReturns = async function () {
         uom: recipe.uom || "ea",
         qty: recipeQtyMap[recipeKey]
       });
+    } else {
+      console.log(`⛔ Not marked returnable: ${recipeKey}`);
     }
   }
 
@@ -2283,7 +2282,6 @@ window.loadAlohaReturns = async function () {
 
   console.log(`✅ Loaded ${validRecipes.length} returnable recipes`);
 };
-
 
 
 window.sendSingleReturn = async function (btn, recipeId) {
@@ -2882,14 +2880,14 @@ window.loadGatewayReturns = async function () {
 
   console.log("🔁 Loading Gateway Returns...");
 
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  const todayStr = getTodayDate(); // "YYYY-MM-DD"
 
   const ordersRef = collection(db, "orders");
   const q = query(
     ordersRef,
     where("venue", "==", "Gateway"),
-    where("status", "==", "received")
+    where("status", "==", "received"),
+    where("date", "==", todayStr)
   );
   const snapshot = await getDocs(q);
 
@@ -2898,35 +2896,31 @@ window.loadGatewayReturns = async function () {
     return;
   }
 
-  const todayOrders = snapshot.docs
-    .map(doc => ({ id: doc.id, ...doc.data() }))
-    .filter(order => {
-      const receivedAt = order.receivedAt?.toDate?.();
-      return receivedAt && receivedAt.toDateString() === today.toDateString();
-    });
+  const todayOrders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
   const returnsSnapshot = await getDocs(
     query(collection(db, "returns"), where("venue", "==", "Gateway"))
   );
 
-  const excludedRecipeIds = new Set();
+  const excludedRecipeKeys = new Set();
   returnsSnapshot.forEach(doc => {
-    const { status, recipeId } = doc.data();
-    if ((status === "returned" || status === "received") && recipeId) {
-      excludedRecipeIds.add(recipeId);
+    const data = doc.data();
+    const key = (data.recipeNo || data.recipeId || "").toUpperCase();
+    const returnDate = data.date;
+    if (data.status === "returned" && key && returnDate === todayStr) {
+      excludedRecipeKeys.add(key);
     }
   });
 
+  console.log("🚫 Excluded keys (from today's returns):", Array.from(excludedRecipeKeys));
   console.log(`📦 Found ${todayOrders.length} Gateway orders received today`);
   if (todayOrders.length === 0) return;
 
   const recipeQtyMap = {};
   todayOrders.forEach(order => {
-    const recipeKey = order.recipeNo || order.recipeId;
+    const recipeKey = (order.recipeNo || order.recipeId || "").toUpperCase();
     const qty = Number(order.qty ?? order.sendQty ?? 0);
-
     if (!recipeKey) return;
-
     recipeQtyMap[recipeKey] = (recipeQtyMap[recipeKey] || 0) + qty;
   });
 
@@ -2955,7 +2949,8 @@ window.loadGatewayReturns = async function () {
       continue;
     }
 
-    if (excludedRecipeIds.has(recipeDoc.id)) {
+    if (excludedRecipeKeys.has(recipeKey)) {
+      console.log(`⛔ Skipping already returned recipe: ${recipeKey}`);
       continue;
     }
 
@@ -2968,6 +2963,8 @@ window.loadGatewayReturns = async function () {
         uom: recipe.uom || "ea",
         qty: recipeQtyMap[recipeKey]
       });
+    } else {
+      console.log(`⛔ Not marked returnable: ${recipeKey}`);
     }
   }
 
@@ -2996,7 +2993,6 @@ window.loadGatewayReturns = async function () {
 
   console.log(`✅ Loaded ${validRecipes.length} returnable recipes`);
 };
-
 
 window.sendSingleGatewayReturn = async function (btn, recipeId) {
   const row = btn.closest("tr");
@@ -3747,14 +3743,14 @@ window.loadOhanaReturns = async function () {
 
   console.log("🔁 Loading Ohana Returns...");
 
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  const todayStr = getTodayDate(); // "YYYY-MM-DD"
 
   const ordersRef = collection(db, "orders");
   const q = query(
     ordersRef,
     where("venue", "==", "Ohana"),
-    where("status", "==", "received")
+    where("status", "==", "received"),
+    where("date", "==", todayStr)
   );
   const snapshot = await getDocs(q);
 
@@ -3763,36 +3759,31 @@ window.loadOhanaReturns = async function () {
     return;
   }
 
-  const todayOrders = snapshot.docs
-    .map(doc => ({ id: doc.id, ...doc.data() }))
-    .filter(order => {
-      const receivedAt = order.receivedAt?.toDate?.();
-      return receivedAt && receivedAt.toDateString() === today.toDateString();
-    });
+  const todayOrders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
   const returnsSnapshot = await getDocs(
     query(collection(db, "returns"), where("venue", "==", "Ohana"))
   );
 
-  const excludedRecipeIds = new Set();
+  const excludedRecipeKeys = new Set();
   returnsSnapshot.forEach(doc => {
-    const { status, recipeId } = doc.data();
-    if ((status === "returned" || status === "received") && recipeId) {
-      excludedRecipeIds.add(recipeId);
+    const data = doc.data();
+    const key = (data.recipeNo || data.recipeId || "").toUpperCase();
+    const returnDate = data.date;
+    if (data.status === "returned" && key && returnDate === todayStr) {
+      excludedRecipeKeys.add(key);
     }
   });
 
+  console.log("🚫 Excluded keys (from today's returns):", Array.from(excludedRecipeKeys));
   console.log(`📦 Found ${todayOrders.length} Ohana orders received today`);
   if (todayOrders.length === 0) return;
 
   const recipeQtyMap = {};
   todayOrders.forEach(order => {
-    const recipeKey = order.recipeNo || order.recipeId;
+    const recipeKey = (order.recipeNo || order.recipeId || "").toUpperCase();
     const qty = Number(order.qty ?? order.sendQty ?? 0);
-
-
     if (!recipeKey) return;
-
     recipeQtyMap[recipeKey] = (recipeQtyMap[recipeKey] || 0) + qty;
   });
 
@@ -3821,7 +3812,8 @@ window.loadOhanaReturns = async function () {
       continue;
     }
 
-    if (excludedRecipeIds.has(recipeDoc.id)) {
+    if (excludedRecipeKeys.has(recipeKey)) {
+      console.log(`⛔ Skipping already returned recipe: ${recipeKey}`);
       continue;
     }
 
@@ -3834,6 +3826,8 @@ window.loadOhanaReturns = async function () {
         uom: recipe.uom || "ea",
         qty: recipeQtyMap[recipeKey]
       });
+    } else {
+      console.log(`⛔ Not marked returnable: ${recipeKey}`);
     }
   }
 
