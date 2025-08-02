@@ -40,13 +40,17 @@ function updateCurrentVenueFromSelect() {
   if (selectedScreen) selectedScreen.style.display = "block";
 
   // Set current venue display name
-  const map = {
-    aloha: "Aloha",
-    ohana: "Ohana",
-    gateway: "Gateway",
-    concession: "Concessions",
-    "main-kitchen": "Main Kitchen"
-  };
+const map = {
+  "guest-count": "Guest Count",
+  aloha: "Aloha",
+  ohana: "Ohana",
+  gateway: "Gateway",
+  concession: "Concessions",
+  "main-kitchen": "Main Kitchen",
+  stations: "Stations",
+  accounting: "Accounting"
+};
+
   window.currentVenue = map[val] || "Main Kitchen";
   document.getElementById("currentVenueLabel").innerText = window.currentVenue;
 
