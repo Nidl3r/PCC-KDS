@@ -4475,7 +4475,30 @@ window.loadAccountingWaste = async function () {
   const dd = String(today.getDate()).padStart(2, '0');
   const localToday = `${yyyy}-${mm}-${dd}`;
 
-  const wasteSnapshot = await getDocs(query(collection(db, "waste"), orderBy("timestamp", "desc")));
+  // 🔄 1. Load all recipes and store in a map
+  const recipesSnapshot = await getDocs(collection(db, "recipes"));
+  const recipeMap = new Map();
+  recipesSnapshot.forEach(doc => {
+    const data = doc.data();
+    if (data.description) {
+      recipeMap.set(data.description.toLowerCase(), data.recipeNo);
+    }
+  });
+
+  // 🔄 2. Load all ingredients and store in a map
+  const ingredientsSnapshot = await getDocs(collection(db, "ingredients"));
+  const ingredientMap = new Map();
+  ingredientsSnapshot.forEach(doc => {
+    const data = doc.data();
+    if (data.itemName) {
+      ingredientMap.set(data.itemName.toLowerCase(), data.itemNo);
+    }
+  });
+
+  // 📦 3. Load waste entries for today
+  const wasteSnapshot = await getDocs(
+    query(collection(db, "waste"), orderBy("timestamp", "desc"))
+  );
 
   for (const doc of wasteSnapshot.docs) {
     const data = doc.data();
@@ -4488,25 +4511,14 @@ window.loadAccountingWaste = async function () {
     const description = data.item || "";
     const quantity = data.qty || 0;
 
-    let recipeNo = "";
-    try {
-      const recipeQuery = query(
-        collection(db, "recipes"),
-        where("description", "==", description)
-      );
-      const recipeSnapshot = await getDocs(recipeQuery);
-      if (!recipeSnapshot.empty) {
-        recipeNo = recipeSnapshot.docs[0].data().recipeNo || "";
-      }
-    } catch (err) {
-      console.error("Error finding recipe for:", description, err);
-    }
+    const descKey = description.toLowerCase();
+    let recipeNoOrItemNo = recipeMap.get(descKey) || ingredientMap.get(descKey) || "";
 
     const row = document.createElement("tr");
     row.innerHTML = `
       <td>${formattedDate}</td>
       <td>${locationCode}</td>
-      <td>${recipeNo}</td>
+      <td>${recipeNoOrItemNo}</td>
       <td>${description}</td>
       <td>${quantity}</td>
     `;
@@ -4545,30 +4557,56 @@ async function loadLunchAccountingTable() {
   const tbody = document.querySelector("#lunchTable tbody");
   tbody.innerHTML = "";
 
+  // 🥄 Preload recipes and ingredients
+  const recipeSnapshot = await getDocs(collection(db, "recipes"));
+  const recipeMap = new Map();
+  recipeSnapshot.forEach(doc => {
+    const data = doc.data();
+    if (data.description) {
+      recipeMap.set(data.description.toLowerCase(), data.recipeNo);
+    }
+  });
+
+  const ingredientSnapshot = await getDocs(collection(db, "ingredients"));
+  const ingredientMap = new Map();
+  ingredientSnapshot.forEach(doc => {
+    const data = doc.data();
+    if (data.itemName) {
+      ingredientMap.set(data.itemName.toLowerCase(), data.itemNo);
+    }
+  });
+
+  // 🥗 Load lunch entries
   const snapshot = await getDocs(collection(db, "lunch"));
   const entries = snapshot.docs.map(doc => doc.data());
 
   entries.forEach(entry => {
+    // 🗓 Format date
     let formattedDate = "";
     if (typeof entry.date === "string") {
-      formattedDate = formatDateLocal(entry.date); // ✅ use custom function
+      formattedDate = formatDateLocal(entry.date);
     } else if (entry.date instanceof Timestamp || (entry.date?.seconds && entry.date?.nanoseconds)) {
       const jsDate = entry.date.toDate ? entry.date.toDate() : new Date(entry.date.seconds * 1000);
       formattedDate = `${jsDate.getMonth() + 1}/${jsDate.getDate()}/${jsDate.getFullYear()}`;
     }
 
-    let venueCode = entry.venue === "Main Kitchen" ? "w002" : entry.venue;
+    // 🆔 Get recipeNo or itemNo
+    const description = entry.item || "";
+    const descKey = description.toLowerCase();
+    const itemNo = recipeMap.get(descKey) || ingredientMap.get(descKey) || "";
 
     const row = document.createElement("tr");
     row.innerHTML = `
       <td>${formattedDate}</td>
-      <td>${entry.item || ""}</td>
+      <td>${itemNo}</td>
+      <td>${description}</td>
       <td>${entry.qty || 0}</td>
       <td>${entry.uom || "ea"}</td>
     `;
     tbody.appendChild(row);
   });
 }
+
 function formatDateLocal(dateStr) {
   // Split the YYYY-MM-DD string manually
   const parts = dateStr.split("-");
