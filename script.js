@@ -1894,7 +1894,8 @@ window.sendSingleStartingPar = async function (recipeId, venue, button) {
 
 //**WASTE aloha */
 // 🧠 Store waste totals between filter switches
-window.alohaWasteTotals = {}; 
+// Keep this cache
+window.alohaWasteTotals = window.alohaWasteTotals || {};
 
 window.loadAlohaWaste = async function (filteredList = null) {
   const tableBody = document.querySelector(".aloha-section[data-sec='waste'] .waste-table tbody");
@@ -1916,21 +1917,46 @@ window.loadAlohaWaste = async function (filteredList = null) {
     const row = document.createElement("tr");
     row.dataset.recipeId = recipe.id;
 
-    const savedQty = window.alohaWasteTotals?.[recipe.id] || 0;
+    const cached = window.alohaWasteTotals?.[recipe.id];
+    const val = (cached ?? "").toString();
 
     row.innerHTML = `
       <td>${recipe.description}</td>
       <td>${recipe.uom || "ea"}</td>
       <td>
-        <span class="waste-total">${savedQty}</span>
-        <input class="waste-input" type="number" min="0" value="0" style="width: 60px; margin-left: 6px;" />
-        <button onclick="addToWasteQty(this)" style="margin-left: 6px;">Add</button>
+        <input
+          class="waste-input"
+          type="text"
+          inputmode="decimal"
+          value="${val}"
+          data-recipe-id="${recipe.id}"
+          style="width: 80px; margin-left: 6px; text-align: right;"
+          placeholder="0"
+        />
       </td>
       <td><button onclick="sendSingleWaste(this, '${recipe.id}')">Send</button></td>
     `;
 
+    // Save to cache on Enter/blur (handles "1+1", "2*3", etc.)
+    const input = row.querySelector(".waste-input");
+    const updateCacheFromInput = () => {
+      const v = normalizeQtyInputValue(input); // math eval + normalization
+      window.alohaWasteTotals[recipe.id] = Number.isFinite(v) ? v : "";
+    };
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        updateCacheFromInput();
+        input.select?.();
+      }
+    });
+    input.addEventListener("blur", updateCacheFromInput);
+
     tableBody.appendChild(row);
   });
+
+  // 🔌 Enable math on these inputs
+  enableMathOnInputs(".aloha-section[data-sec='waste'] .waste-input", document);
 };
 
 window.filterAlohaWaste = function () {
@@ -1950,75 +1976,54 @@ window.filterAlohaWaste = function () {
   window.loadAlohaWaste(filtered);
 };
 
-
-window.addToWasteQty = function (button) {
-  const row = button.closest("tr");
-  const input = row.querySelector(".waste-input");
-  const span = row.querySelector(".waste-total");
-
-  const addQty = Number(input.value);
-  const currentQty = Number(span.textContent);
-  const newQty = currentQty + addQty;
-
-  if (!isNaN(addQty) && addQty > 0) {
-    span.textContent = newQty;
-    input.value = "0";
-
-    const recipeId = row.dataset.recipeId;
-    window.alohaWasteTotals[recipeId] = newQty;
-  }
-};
-
-
+// ❌ Remove the old addToWasteQty (no longer needed)
+// window.addToWasteQty = ...  ← delete this function
 
 window.sendAllWaste = async function () {
-  const rows = document.querySelectorAll(".waste-table tbody tr");
-  console.log("🧪 Found rows:", rows.length);
+  // Scope to Aloha section only
+  const rows = document.querySelectorAll(".aloha-section[data-sec='waste'] .waste-table tbody tr");
+  console.log("🧪 Found Aloha rows:", rows.length);
   const today = getTodayDate();
   let sentCount = 0;
 
   for (const row of rows) {
     const recipeId = row.dataset.recipeId;
-    const span = row.querySelector(".waste-total");
-    const qty = Number(span?.textContent || 0);
     const input = row.querySelector(".waste-input");
 
-    if (qty > 0) {
-      const recipe = window.alohaWasteRecipeList.find(r => r.id === recipeId);
-      if (!recipe) {
-        console.warn(`⚠️ Recipe not found for ID: ${recipeId}`);
-        continue;
-      }
+    // Normalize latest input value (handles unblurred math)
+    const v = normalizeQtyInputValue(input);
+    const qty = Number.isFinite(v) ? v : Number(window.alohaWasteTotals?.[recipeId] || 0);
 
-      const hasEnough = await checkIfEnoughReceived(recipeId, qty, "Aloha");
-      if (!hasEnough) {
-        alert(`🚫 Cannot waste ${qty} of "${recipe.description}" — more than received.`);
-        continue;
-      }
+    if (!Number.isFinite(qty) || qty <= 0) continue;
 
-      const wasteData = {
-        item: recipe.description,
-        venue: "Aloha",
-        qty,
-        uom: recipe.uom || "ea",
-        date: today,
-        timestamp: serverTimestamp()
-      };
-
-      await addDoc(collection(db, "waste"), wasteData);
-      console.log(`✅ Sent waste to 'waste': ${qty} of ${recipe.description}`);
-      sentCount++;
-
-      if (span) span.textContent = "0";
-      if (input) input.value = "0";
-
-      const confirm = document.createElement("span");
-      confirm.textContent = "Sent";
-      confirm.style.color = "green";
-      confirm.style.marginLeft = "8px";
-      row.querySelector("td:last-child").appendChild(confirm);
-      setTimeout(() => confirm.remove(), 2000);
+    const recipe = window.alohaWasteRecipeList.find(r => r.id === recipeId);
+    if (!recipe) {
+      console.warn(`⚠️ Recipe not found for ID: ${recipeId}`);
+      continue;
     }
+
+    const hasEnough = await checkIfEnoughReceived(recipeId, qty, "Aloha");
+    if (!hasEnough) {
+      alert(`🚫 Cannot waste ${qty} of "${recipe.description}" — more than received.`);
+      continue;
+    }
+
+    const wasteData = {
+      item: recipe.description,
+      venue: "Aloha",
+      qty,
+      uom: recipe.uom || "ea",
+      date: today,
+      timestamp: serverTimestamp()
+    };
+
+    await addDoc(collection(db, "waste"), wasteData);
+    console.log(`✅ Sent Aloha waste: ${qty} of ${recipe.description}`);
+    sentCount++;
+
+    // Clear UI + cache
+    input.value = "";
+    window.alohaWasteTotals[recipeId] = "";
   }
 
   if (sentCount > 0) {
@@ -2030,9 +2035,16 @@ window.sendAllWaste = async function () {
 
 window.sendSingleWaste = async function (button, recipeId) {
   const row = button.closest("tr");
-  const span = row.querySelector(".waste-total");
   const input = row.querySelector(".waste-input");
-  const qty = Number(span.textContent);
+
+  // Normalize last-second (handles unblurred "1+1")
+  const v = normalizeQtyInputValue(input);
+  const qty = Number.isFinite(v) ? v : Number(window.alohaWasteTotals?.[recipeId] || 0);
+
+  if (!Number.isFinite(qty) || qty <= 0) {
+    alert("Please enter a valid quantity first.");
+    return;
+  }
 
   const recipe = window.alohaWasteRecipeList.find(r => r.id === recipeId);
   if (!recipe) {
@@ -2057,11 +2069,11 @@ window.sendSingleWaste = async function (button, recipeId) {
   };
 
   await addDoc(collection(db, "waste"), wasteData);
-
   console.log(`✅ Sent waste to 'waste': ${qty} of ${recipe.description}`);
 
-  span.textContent = "0";
-  input.value = "0";
+  // Clear UI + cache
+  input.value = "";
+  window.alohaWasteTotals[recipeId] = "";
 
   const confirm = document.createElement("span");
   confirm.textContent = "Sent";
@@ -2071,6 +2083,66 @@ window.sendSingleWaste = async function (button, recipeId) {
   setTimeout(() => confirm.remove(), 2000);
 };
 
+
+async function checkIfEnoughReceived(recipeId, wasteQty, venue) {
+  const today = getTodayDate();
+
+  // 🔎 How much was received today?
+  const ordersRef = collection(db, "orders");
+  const ordersQuery = query(
+    ordersRef,
+    where("recipeId", "==", recipeId),
+    where("venue", "==", venue),
+    where("status", "==", "received"),
+    where("date", "==", today)
+  );
+  const ordersSnap = await getDocs(ordersQuery);
+
+  let totalReceived = 0;
+  ordersSnap.forEach(doc => {
+    const data = doc.data();
+    totalReceived += Number(data.sendQty || 0);
+  });
+
+  // 🧭 Resolve the recipe description (use the correct list for the venue)
+  let recipeDescription = "";
+  const venueList =
+    venue === "Aloha" ? window.alohaWasteRecipeList :
+    venue === "Gateway" ? window.gatewayWasteRecipeList :
+    venue === "Ohana" ? window.ohanaWasteRecipeList : null;
+
+  const listsToCheck = [venueList, window.cachedAlohaWasteRecipes, window.cachedGatewayWasteRecipes, window.cachedOhanaWasteRecipes]
+    .filter(Boolean);
+
+  for (const list of listsToCheck) {
+    const match = list.find(r => r.id === recipeId);
+    if (match) { recipeDescription = match.description || ""; break; }
+  }
+
+  // Fallback fetch if still unknown
+  if (!recipeDescription) {
+    const snap = await getDoc(doc(db, "recipes", recipeId));
+    if (snap.exists()) recipeDescription = snap.data().description || "";
+  }
+
+  // 🗑️ Sum waste already recorded today for this item
+  const wasteRef = collection(db, "waste");
+  const wasteQuery = query(
+    wasteRef,
+    where("venue", "==", venue),
+    where("item", "==", recipeDescription),
+    where("date", "==", today)
+  );
+  const wasteSnap = await getDocs(wasteQuery);
+
+  let alreadyWasted = 0;
+  wasteSnap.forEach(doc => {
+    alreadyWasted += Number(doc.data().qty || 0);
+  });
+
+  // ✅ Don’t exceed what was received
+  return wasteQty <= (totalReceived - alreadyWasted);
+}
 
 //**Main kitchen waste */
 // 🧠 Persist totals by itemId
@@ -2805,6 +2877,9 @@ window.markOrderReceived = async function (orderId, button) {
 // 🔁 Load Gateway Waste Items
 window.gatewayWasteTotals = window.gatewayWasteTotals || {};
 
+// Ensure memory exists
+window.gatewayWasteTotals = window.gatewayWasteTotals || {};
+
 window.loadGatewayWaste = async function (filteredList = null) {
   const tableBody = document.querySelector(".gateway-section[data-sec='waste'] .waste-table tbody");
   if (!tableBody) return;
@@ -2826,22 +2901,48 @@ window.loadGatewayWaste = async function (filteredList = null) {
     const row = document.createElement("tr");
     row.dataset.recipeId = recipe.id;
 
-    const savedQty = window.gatewayWasteTotals?.[recipe.id] || 0;
+    const savedQty = window.gatewayWasteTotals?.[recipe.id];
+    const val = (savedQty ?? "").toString();
 
     row.innerHTML = `
       <td>${recipe.description}</td>
       <td>${recipe.uom || "ea"}</td>
       <td>
-        <span class="waste-total">${savedQty}</span>
-        <input class="waste-input" type="number" min="0" value="0" style="width: 60px; margin-left: 6px;" />
-        <button onclick="addToGatewayWasteQty(this)" style="margin-left: 6px;">Add</button>
+        <input
+          class="waste-input"
+          type="text"
+          inputmode="decimal"
+          value="${val}"
+          data-recipe-id="${recipe.id}"
+          style="width: 80px; margin-left: 6px; text-align: right;"
+          placeholder="0"
+        />
       </td>
       <td><button onclick="sendSingleGatewayWaste(this, '${recipe.id}')">Send</button></td>
     `;
 
+    // Normalize on Enter/blur and save to cache
+    const input = row.querySelector(".waste-input");
+    const updateCacheFromInput = () => {
+      const v = normalizeQtyInputValue(input); // math eval + normalization
+      window.gatewayWasteTotals[recipe.id] = Number.isFinite(v) ? v : "";
+    };
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        updateCacheFromInput();
+        input.select?.();
+      }
+    });
+    input.addEventListener("blur", updateCacheFromInput);
+
     tableBody.appendChild(row);
   });
+
+  // 🔌 Enable math (1+1, 2*3, 10/4, etc.)
+  enableMathOnInputs(".gateway-section[data-sec='waste'] .waste-input", document);
 };
+
 window.filterGatewayWaste = function () {
   const searchValue = document.getElementById("gatewayWasteSearch")?.value?.trim().toLowerCase() || "";
   const selectedCategory = document.getElementById("gateway-waste-category")?.value?.toLowerCase() || "";
@@ -2859,37 +2960,20 @@ window.filterGatewayWaste = function () {
   window.loadGatewayWaste(filtered);
 };
 
+// ❌ Remove the old addToGatewayWasteQty — no longer needed
+// window.addToGatewayWasteQty = ...  ← delete this function
 
-
-
-window.addToGatewayWasteQty = function (button) {
-  const row = button.closest("tr");
-  const input = row.querySelector(".waste-input");
-  const span = row.querySelector(".waste-total");
-
-  const addQty = Number(input.value);
-  const currentQty = Number(span.textContent);
-  const newQty = currentQty + addQty;
-
-  if (!isNaN(addQty) && addQty > 0) {
-    span.textContent = newQty;
-    input.value = "0";
-
-    const recipeId = row.dataset.recipeId;
-    window.gatewayWasteTotals[recipeId] = newQty;
-  }
-};
-
-
-// 🔘 Single waste sender for Gateway
+// 🔘 Single waste sender for Gateway (math-enabled)
 window.sendSingleGatewayWaste = async function (button, recipeId) {
   const row = button.closest("tr");
-  const span = row.querySelector(".waste-total");
   const input = row.querySelector(".waste-input");
-  const qty = Number(span.textContent);
 
-  if (qty <= 0) {
-    alert("⚠️ Please add a quantity first.");
+  // Normalize last-second (handles unblurred "1+1")
+  const v = normalizeQtyInputValue(input);
+  const qty = Number.isFinite(v) ? v : Number(window.gatewayWasteTotals?.[recipeId] || 0);
+
+  if (!Number.isFinite(qty) || qty <= 0) {
+    alert("⚠️ Please enter a valid quantity first.");
     return;
   }
 
@@ -2919,9 +3003,10 @@ window.sendSingleGatewayWaste = async function (button, recipeId) {
   try {
     await addDoc(collection(db, "waste"), wasteData);
     console.log(`✅ Sent Gateway waste: ${qty} of ${recipe.description}`);
-    
-    span.textContent = "0";
-    input.value = "0";
+
+    // Clear UI + cache
+    input.value = "";
+    window.gatewayWasteTotals[recipeId] = "";
 
     const confirm = document.createElement("span");
     confirm.textContent = "Sent";
@@ -2935,7 +3020,6 @@ window.sendSingleGatewayWaste = async function (button, recipeId) {
   }
 };
 
-
 window.sendAllGatewayWaste = async function () {
   const rows = document.querySelectorAll("#gateway .waste-table tbody tr");
   console.log("🧪 Found Gateway rows:", rows.length);
@@ -2945,54 +3029,48 @@ window.sendAllGatewayWaste = async function () {
 
   for (const row of rows) {
     const recipeId = row.dataset.recipeId;
-    const span = row.querySelector(".waste-total");
     const input = row.querySelector(".waste-input");
-    const qty = Number(span?.textContent || 0);
 
-    if (qty > 0) {
-      const recipe = window.gatewayWasteRecipeList.find(r => r.id === recipeId);
-      if (!recipe) {
-        console.warn(`⚠️ Gateway recipe not found for ID: ${recipeId}`);
-        continue;
-      }
+    const v = normalizeQtyInputValue(input);
+    const qty = Number.isFinite(v) ? v : Number(window.gatewayWasteTotals?.[recipeId] || 0);
 
-      // ✅ Check waste vs. total ordered
-      const hasEnough = await checkIfEnoughReceived(recipeId, qty, "Gateway");
-      if (!hasEnough) {
-        alert(`🚫 Cannot waste ${qty} of "${recipe.description}" — more than received.`);
-        continue;
-      }
+    if (!Number.isFinite(qty) || qty <= 0) continue;
 
-      const wasteData = {
-        item: recipe.description,
-        venue: "Gateway",
-        qty,
-        uom: recipe.uom || "ea",
-        date: today,
-        timestamp: serverTimestamp()
-      };
-
-      await addDoc(collection(db, "waste"), wasteData);
-      console.log(`✅ Sent Gateway waste: ${qty} of ${recipe.description}`);
-      sentCount++;
-
-      // Reset
-      span.textContent = "0";
-      if (input) input.value = "0";
-
-      const confirm = document.createElement("span");
-      confirm.textContent = "Sent";
-      confirm.style.color = "green";
-      confirm.style.marginLeft = "8px";
-      row.querySelector("td:last-child").appendChild(confirm);
-      setTimeout(() => confirm.remove(), 2000);
+    const recipe = window.gatewayWasteRecipeList.find(r => r.id === recipeId);
+    if (!recipe) {
+      console.warn(`⚠️ Gateway recipe not found for ID: ${recipeId}`);
+      continue;
     }
+
+    // ✅ Check waste vs. total ordered
+    const hasEnough = await checkIfEnoughReceived(recipeId, qty, "Gateway");
+    if (!hasEnough) {
+      alert(`🚫 Cannot waste ${qty} of "${recipe.description}" — more than received.`);
+      continue;
+    }
+
+    const wasteData = {
+      item: recipe.description,
+      venue: "Gateway",
+      qty,
+      uom: recipe.uom || "ea",
+      date: today,
+      timestamp: serverTimestamp()
+    };
+
+    await addDoc(collection(db, "waste"), wasteData);
+    console.log(`✅ Sent Gateway waste: ${qty} of ${recipe.description}`);
+    sentCount++;
+
+    // Clear UI + cache for this row
+    input.value = "";
+    window.gatewayWasteTotals[recipeId] = "";
   }
 
   if (sentCount > 0) {
     alert(`✅ ${sentCount} Gateway waste entr${sentCount === 1 ? "y" : "ies"} sent.`);
   } else {
-    alert("⚠️ No Gateway waste entries with quantity greater than 0.");
+    alert("⚠️ No Gateway waste entries with valid quantities.");
   }
 };
 
@@ -3677,6 +3755,7 @@ window.receiveConcessionItem = async function (recipeId, qty, button) {
 
 //OHANA WASTE
 // Initialize memory for totals if not already set
+// Keep/ensure this exists
 window.ohanaWasteTotals = window.ohanaWasteTotals || {};
 
 window.loadOhanaWaste = async function (filteredList = null) {
@@ -3699,21 +3778,46 @@ window.loadOhanaWaste = async function (filteredList = null) {
     const row = document.createElement("tr");
     row.dataset.recipeId = recipe.id;
 
-    const savedQty = window.ohanaWasteTotals?.[recipe.id] || 0;
+    const savedQty = window.ohanaWasteTotals?.[recipe.id];
+    const val = (savedQty ?? "").toString();
 
     row.innerHTML = `
       <td>${recipe.description}</td>
       <td>${recipe.uom || "ea"}</td>
       <td>
-        <span class="waste-total">${savedQty}</span>
-        <input class="waste-input" type="number" min="0" value="0" style="width: 60px; margin-left: 6px;" />
-        <button onclick="addToOhanaWasteQty(this)" style="margin-left: 6px;">Add</button>
+        <input
+          class="waste-input"
+          type="text"
+          inputmode="decimal"
+          value="${val}"
+          data-recipe-id="${recipe.id}"
+          style="width: 80px; margin-left: 6px; text-align: right;"
+          placeholder="0"
+        />
       </td>
       <td><button onclick="sendSingleOhanaWaste(this, '${recipe.id}')">Send</button></td>
     `;
 
+    // Normalize on Enter/blur and save to cache
+    const input = row.querySelector(".waste-input");
+    const updateCacheFromInput = () => {
+      const v = normalizeQtyInputValue(input); // math eval + normalization
+      window.ohanaWasteTotals[recipe.id] = Number.isFinite(v) ? v : "";
+    };
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        updateCacheFromInput();
+        input.select?.();
+      }
+    });
+    input.addEventListener("blur", updateCacheFromInput);
+
     tableBody.appendChild(row);
   });
+
+  // 🔌 Enable math (1+1, 2*3, 10/4, etc.)
+  enableMathOnInputs(".ohana-section[data-sec='waste'] .waste-input", document);
 };
 
 window.filterOhanaWaste = function () {
@@ -3733,99 +3837,27 @@ window.filterOhanaWaste = function () {
   window.loadOhanaWaste(filtered);
 };
 
-
-window.addToOhanaWasteQty = function (button) {
-  const row = button.closest("tr");
-  const input = row.querySelector(".waste-input");
-  const span = row.querySelector(".waste-total");
-
-  const addQty = Number(input.value);
-  const currentQty = Number(span.textContent);
-  const newQty = currentQty + addQty;
-
-  if (!isNaN(addQty) && addQty > 0) {
-    span.textContent = newQty;
-    input.value = "0";
-
-    const recipeId = row.dataset.recipeId;
-    window.ohanaWasteTotals[recipeId] = newQty;
-  }
-};
-
-
-
-window.sendAllOhanaWaste = async function () {
-  const rows = document.querySelectorAll("#ohana .waste-table tbody tr");
-  console.log("🧪 Found Ohana rows:", rows.length);
-
-  const today = getTodayDate();
-  let sentCount = 0;
-
-  for (const row of rows) {
-    const recipeId = row.dataset.recipeId;
-    const span = row.querySelector(".waste-total");
-    const input = row.querySelector(".waste-input");
-    const qty = Number(span?.textContent || 0);
-
-    if (qty > 0) {
-      const recipe = window.ohanaWasteRecipeList.find(r => r.id === recipeId);
-      if (!recipe) {
-        console.warn(`⚠️ Ohana recipe not found for ID: ${recipeId}`);
-        continue;
-      }
-
-      const hasEnough = await checkIfEnoughReceived(recipeId, qty, "Ohana");
-      if (!hasEnough) {
-        alert(`🚫 Cannot waste ${qty} of "${recipe.description}" — more than received.`);
-        continue;
-      }
-
-      const wasteData = {
-        item: recipe.description,
-        venue: "Ohana",
-        qty,
-        uom: recipe.uom || "ea",
-        date: today,
-        timestamp: serverTimestamp()
-      };
-
-      await addDoc(collection(db, "waste"), wasteData);
-      console.log(`✅ Sent Ohana waste: ${qty} of ${recipe.description}`);
-      sentCount++;
-
-      // Reset waste qty after sending
-      span.textContent = "0";
-      if (input) input.value = "0";
-
-      const confirm = document.createElement("span");
-      confirm.textContent = "Sent";
-      confirm.style.color = "green";
-      confirm.style.marginLeft = "8px";
-      row.querySelector("td:last-child").appendChild(confirm);
-      setTimeout(() => confirm.remove(), 2000);
-    }
-  }
-
-  if (sentCount > 0) {
-    alert(`✅ ${sentCount} Ohana waste entr${sentCount === 1 ? "y" : "ies"} sent.`);
-  } else {
-    alert("⚠️ No Ohana waste entries with quantity greater than 0.");
-  }
-};
+// ❌ Remove the old addToOhanaWasteQty — it’s not used anymore
+// window.addToOhanaWasteQty = ...  ← delete this function
 
 window.sendSingleOhanaWaste = async function (button, recipeId) {
   const row = button.closest("tr");
-  const span = row.querySelector(".waste-total");
   const input = row.querySelector(".waste-input");
-  const qty = Number(span.textContent);
 
-  if (qty <= 0) {
-    alert("Please add a quantity first.");
+  // Normalize last-second (handles unblurred "1+1")
+  const v = normalizeQtyInputValue(input);
+  const qty = Number.isFinite(v) ? v : Number(window.ohanaWasteTotals?.[recipeId] || 0);
+
+  if (!Number.isFinite(qty) || qty <= 0) {
+    alert("Please enter a valid quantity first.");
     return;
   }
 
   const recipe = window.ohanaWasteRecipeList.find(r => r.id === recipeId);
-  const today = getTodayDate();
+  if (!recipe) {
+    alert("❌ Recipe not found.");
+    return;
+  }
 
   const hasEnough = await checkIfEnoughReceived(recipeId, qty, "Ohana");
   if (!hasEnough) {
@@ -3833,6 +3865,7 @@ window.sendSingleOhanaWaste = async function (button, recipeId) {
     return;
   }
 
+  const today = getTodayDate();
   const wasteData = {
     item: recipe.description,
     venue: "Ohana",
@@ -3845,58 +3878,71 @@ window.sendSingleOhanaWaste = async function (button, recipeId) {
   await addDoc(collection(db, "waste"), wasteData);
   console.log(`✅ Sent Ohana waste: ${qty} of ${recipe.description}`);
 
-  span.textContent = "0";
-  input.value = "0";
+  // Clear UI + cache
+  input.value = "";
+  window.ohanaWasteTotals[recipeId] = "";
 
   const confirm = document.createElement("span");
   confirm.textContent = "Sent";
   confirm.style.color = "green";
   confirm.style.marginLeft = "8px";
-  row.querySelector("td:last-child").appendChild(confirm);
+  button.parentNode.appendChild(confirm);
   setTimeout(() => confirm.remove(), 2000);
 };
-async function checkIfEnoughReceived(recipeId, wasteQty, venue) {
-  const today = getTodayDate(); // e.g., "2025-07-28"
 
-  // 🔎 Fetch all received orders for today
-  const ordersRef = collection(db, "orders");
-  const ordersQuery = query(
-    ordersRef,
-    where("recipeId", "==", recipeId),
-    where("venue", "==", venue),
-    where("status", "==", "received"),
-    where("date", "==", today)
-  );
-  const ordersSnap = await getDocs(ordersQuery);
+window.sendAllOhanaWaste = async function () {
+  const rows = document.querySelectorAll("#ohana .waste-table tbody tr");
+  console.log("🧪 Found Ohana rows:", rows.length);
 
-  let totalReceived = 0;
-  ordersSnap.forEach(doc => {
-    const data = doc.data();
-    totalReceived += Number(data.sendQty || 0);
-  });
+  const today = getTodayDate();
+  let sentCount = 0;
 
-  // 🗑️ Fetch all waste already recorded for this recipe today
-  const recipes = window.alohaWasteRecipeList || [];
-  const matchedRecipe = recipes.find(r => r.id === recipeId);
-  const recipeDescription = matchedRecipe?.description || "";
+  for (const row of rows) {
+    const recipeId = row.dataset.recipeId;
+    const input = row.querySelector(".waste-input");
 
-  const wasteRef = collection(db, "waste");
-  const wasteQuery = query(
-    wasteRef,
-    where("venue", "==", venue),
-    where("item", "==", recipeDescription),
-    where("date", "==", today)
-  );
-  const wasteSnap = await getDocs(wasteQuery);
+    const v = normalizeQtyInputValue(input);
+    const qty = Number.isFinite(v) ? v : Number(window.ohanaWasteTotals?.[recipeId] || 0);
 
-  let alreadyWasted = 0;
-  wasteSnap.forEach(doc => {
-    alreadyWasted += Number(doc.data().qty || 0);
-  });
+    if (!Number.isFinite(qty) || qty <= 0) continue;
 
-  // ✅ Check if waste would exceed what was received
-  return wasteQty <= (totalReceived - alreadyWasted);
-}
+    const recipe = window.ohanaWasteRecipeList.find(r => r.id === recipeId);
+    if (!recipe) {
+      console.warn(`⚠️ Ohana recipe not found for ID: ${recipeId}`);
+      continue;
+    }
+
+    const hasEnough = await checkIfEnoughReceived(recipeId, qty, "Ohana");
+    if (!hasEnough) {
+      alert(`🚫 Cannot waste ${qty} of "${recipe.description}" — more than received.`);
+      continue;
+    }
+
+    const wasteData = {
+      item: recipe.description,
+      venue: "Ohana",
+      qty,
+      uom: recipe.uom || "ea",
+      date: today,
+      timestamp: serverTimestamp()
+    };
+
+    await addDoc(collection(db, "waste"), wasteData);
+    console.log(`✅ Sent Ohana waste: ${qty} of ${recipe.description}`);
+    sentCount++;
+
+    // Clear UI + cache for this row
+    input.value = "";
+    window.ohanaWasteTotals[recipeId] = "";
+  }
+
+  if (sentCount > 0) {
+    alert(`✅ ${sentCount} Ohana waste entr${sentCount === 1 ? "y" : "ies"} sent.`);
+  } else {
+    alert("⚠️ No Ohana waste entries with valid quantities.");
+  }
+};
+
 
 //OHANA RETURNS
 window.loadOhanaReturns = async function () {
