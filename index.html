@@ -802,33 +802,37 @@
     </table>
   </div>
 
-  <!-- 🔁 Returns Section -->
-  <div class="main-kitchen-section returns-section" data-sec="returns" style="display: none;">
-    <h3>Main Kitchen Returns</h3>
-    <div style="margin-bottom: 10px;">
-      <label>
-        Filter by Venue:
-        <select id="mainReturnsVenueFilter" onchange="filterMainKitchenReturns()" style="padding: 4px;">
-          <option value="">All Venues</option>
-          <option value="Aloha">Aloha</option>
-          <option value="Ohana">Ohana</option>
-          <option value="Gateway">Gateway</option>
-          <option value="Concession">Concession</option>
-        </select>
-      </label>
-    </div>
-    <table class="main-returns-table">
-      <thead>
-        <tr>
-          <th>Item</th>
-          <th>Venue</th>
-          <th>Qty</th>
-          <th>Receive</th>
-        </tr>
-      </thead>
-      <tbody></tbody>
-    </table>
+<!-- 🔁 Returns Section -->
+<div class="main-kitchen-section returns-section" data-sec="returns" style="display: none;">
+  <h3>Main Kitchen Returns</h3>
+  <div style="margin-bottom: 10px;">
+    <label>
+      Filter by Venue:
+      <select id="mainReturnsVenueFilter" onchange="filterMainKitchenReturns()" style="padding: 4px;">
+        <option value="">All Venues</option>
+        <option value="Aloha">Aloha</option>
+        <option value="Ohana">Ohana</option>
+        <option value="Gateway">Gateway</option>
+        <option value="Concession">Concession</option>
+      </select>
+    </label>
+    <!-- ✅ Receive All button -->
+    <button id="receiveAllMainReturns" onclick="receiveAllMainReturns()" disabled style="margin-left: 10px;">
+      Receive All
+    </button>
   </div>
+  <table class="main-returns-table">
+    <thead>
+      <tr>
+        <th>Item</th>
+        <th>Venue</th>
+        <th>Qty</th>
+        <th>Receive</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
 
   <!-- 🥗 Lunch Section -->
   <div class="main-kitchen-section lunch-section" data-sec="lunch" style="display: none;">

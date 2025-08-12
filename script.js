@@ -2665,65 +2665,119 @@ window.sendSingleReturn = async function (btn, recipeId) {
 };
 
 //** main kitchen return */
-async function loadMainKitchenReturns() {
-  console.log("🔄 Loading Main Kitchen Returns...");
-
+// 🔁 Main Kitchen Returns — only today's (HST) without composite index
+window.loadMainKitchenReturns = async function () {
+  console.log("🔄 Loading Main Kitchen Returns (today only, HST)...");
   const tableBody = document.querySelector(".main-returns-table tbody");
+  if (!tableBody) return;
   tableBody.innerHTML = "";
 
   try {
-    const snapshot = await getDocs(collection(db, "returns"));
-    const recipeMap = new Map();
+    const { start, end } = getHawaiiTimestampRange(); // returns Firestore Timestamps for HST day
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const tomorrow = new Date(today);
-    tomorrow.setDate(today.getDate() + 1);
+    // ✅ No 'status' filter here → no composite index needed
+    const q = query(
+      collection(db, "returns"),
+      where("returnedAt", ">=", start),
+      where("returnedAt", "<", end),
+      orderBy("returnedAt", "desc")
+    );
+
+    const snapshot = await getDocs(q);
+
+    // cache for recipe names
+    const recipeNameCache = new Map();
+    let rows = 0;
 
     for (const docSnap of snapshot.docs) {
-      const returnData = docSnap.data();
+      const data = docSnap.data();
 
-      // Only process if status is "returned"
-      if (returnData.status !== "returned") continue;
-
-      // Only include if returnedAt is today
-      const returnedAt = returnData.returnedAt?.toDate();
-      if (!returnedAt || returnedAt < today || returnedAt >= tomorrow) continue;
+      // filter 'returned' client-side
+      if (data.status !== "returned") continue;
 
       const returnId = docSnap.id;
-      const recipeId = returnData.recipeId;
-      const qty = returnData.qty;
-
-      // Get recipe name from cache or fetch from Firestore
-      let recipeName = recipeMap.get(recipeId);
+      const recipeId = data.recipeId;
+      let recipeName = recipeNameCache.get(recipeId);
       if (!recipeName) {
         const recipeDoc = await getDoc(doc(db, "recipes", recipeId));
-        recipeName = recipeDoc.exists() ? recipeDoc.data().description : "Unknown Item";
-        recipeMap.set(recipeId, recipeName);
+        recipeName = recipeDoc.exists() ? (recipeDoc.data().description || "Unknown Item") : "Unknown Item";
+        recipeNameCache.set(recipeId, recipeName);
       }
+
+      const returnedAt = data.returnedAt?.toDate?.() || new Date();
 
       const row = document.createElement("tr");
       row.setAttribute("data-return-id", returnId);
-      row.setAttribute("data-venue", returnData.venue);
+      row.setAttribute("data-venue", data.venue || "");
       row.setAttribute("data-returned-at", returnedAt.toISOString());
 
       row.innerHTML = `
         <td>${recipeName}</td>
-        <td>${returnData.venue}</td>
-        <td>${qty}</td>
+        <td>${data.venue || ""}</td>
+        <td>${data.qty}</td>
         <td><button onclick="receiveMainReturn('${returnId}', this)">Receive</button></td>
       `;
-
       tableBody.appendChild(row);
+      rows++;
     }
 
-    console.log(`✅ Rendered ${tableBody.children.length} return rows`);
+    // toggle Receive All
+    const btnAll = document.getElementById("receiveAllMainReturns");
+    if (btnAll) btnAll.disabled = rows === 0;
+
+    console.log(`✅ Rendered ${rows} return rows (today only).`);
   } catch (error) {
     console.error("❌ Failed to load returns:", error);
   }
-}
+};
 
 
+
+// ✅ Receive one
+window.receiveMainReturn = async function (returnId, button) {
+  const row = button.closest("tr");
+  try {
+    const returnRef = doc(db, "returns", returnId);
+    await updateDoc(returnRef, {
+      status: "received",
+      receivedAt: serverTimestamp()
+    });
+    button.parentElement.innerHTML = `<span style="color: green;">Received</span>`;
+    setTimeout(() => row.remove(), 800);
+    console.log(`📦 Marked main kitchen return ${returnId} as received.`);
+    // toggle Receive All if table empties
+    const btnAll = document.getElementById("receiveAllMainReturns");
+    if (btnAll) btnAll.disabled = document.querySelectorAll(".main-returns-table tbody tr").length === 0;
+  } catch (error) {
+    console.error("❌ Error receiving return:", error);
+    alert("Failed to receive item. Try again.");
+  }
+};
+
+// ✅ Receive all visible (today's) rows
+window.receiveAllMainReturns = async function () {
+  const rows = Array.from(document.querySelectorAll(".main-returns-table tbody tr"));
+  if (rows.length === 0) return;
+
+  try {
+    // Update all in parallel (safe enough here)
+    await Promise.all(rows.map(async (row) => {
+      const id = row.getAttribute("data-return-id");
+      const ref = doc(db, "returns", id);
+      await updateDoc(ref, { status: "received", receivedAt: serverTimestamp() });
+    }));
+
+    // Quick UI sweep
+    rows.forEach(row => row.remove());
+    const btnAll = document.getElementById("receiveAllMainReturns");
+    if (btnAll) btnAll.disabled = true;
+
+    console.log(`📦 Received all (${rows.length}) returns for today.`);
+  } catch (err) {
+    console.error("❌ Error receiving all returns:", err);
+    alert("Failed to receive all. Some items may still be pending.");
+  }
+};
 
 
 window.receiveReturn = async function (btn, returnId) {
