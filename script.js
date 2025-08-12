@@ -1741,15 +1741,17 @@ window.renderMainKitchenPars = function () {
 
       // 3) Remaining pans to send
       const remainingPans = Math.max(0, parPans - sentPans);
-      if (remainingPans <= 0) return; // nothing left to send, keep the row hidden like before
+      if (remainingPans <= 0) return; // nothing left to send
 
       // Load cached input (leave blank by default; input is lbs to send)
       const cacheKey = `${venue}|${recipe.id}`;
       const cachedValue = (window.mainStartingQtyCache[cacheKey] ?? "").toString();
 
-      // Build row to match the OLD layout:
-      // Area | Item | Par Qty | UOM | Send Qty | Action
+      // Build row
       const row = document.createElement("tr");
+      row.dataset.recipeId = recipe.id;   // 👈 for Send All
+      row.dataset.venue    = venue;       // 👈 for Send All
+
       row.innerHTML = `
         <td>${venue}</td>
         <td>${recipe.description}</td>
@@ -1801,7 +1803,6 @@ window.renderMainKitchenPars = function () {
   console.log(`✅ Rendered ${totalRows} rows based on filters`);
 };
 
-
 document.getElementById("starting-filter-venue").addEventListener("change", () => {
   renderMainKitchenPars();
 });
@@ -1810,57 +1811,68 @@ document.getElementById("starting-filter-station").addEventListener("change", ()
 });
 
 
-// 🔁 Shared function to send a starting par order
-async function sendStartingPar(recipeId, venue, sendQty) {
-  const today = getTodayDate();
+// 🌋 Send-all for Main Kitchen Starting Par
+// 🌋 Send-all for Main Kitchen Starting Par
+window.sendAllMainKitchenStartingPar = async function () {
+  const tbody = document.querySelector("#startingParsTable tbody");
+  if (!tbody) return;
 
-  const guestCountDoc = await getDoc(doc(db, "guestCounts", today));
-  const guestCount = guestCountDoc.exists() ? Number(guestCountDoc.data()?.[venue] || 0) : 0;
-
-  const recipeSnap = await getDoc(doc(db, "recipes", recipeId));
-  if (!recipeSnap.exists()) {
-    console.warn(`❌ Recipe ${recipeId} not found`);
+  const rows = Array.from(tbody.querySelectorAll("tr"));
+  if (rows.length === 0) {
+    alert("⚠️ Nothing to send.");
     return;
   }
 
-  const recipeData = recipeSnap.data();
-  const panWeight = Number(recipeData.panWeight || 0);
-  const costPerLb = Number(recipeData.cost || 0);
-  const pans = Number(recipeData.pars?.[venue]?.[String(guestCount)] || 0);
+  let sent = 0;
 
-  // ✅ Calculate net weight
-  const netWeightRaw = Number(sendQty) - (pans * panWeight);
-  if (!Number.isFinite(netWeightRaw) || netWeightRaw <= 0) {
-    alert(`❌ Cannot send: Net weight would be ${Number.isFinite(netWeightRaw) ? netWeightRaw.toFixed(2) : "NaN"} lbs.`);
+  for (const row of rows) {
+    const recipeId = row.dataset.recipeId;
+    const venue    = row.dataset.venue;
+    const input    = row.querySelector(".send-qty-input");
+
+    const v = normalizeQtyInputValue?.(input);
+    const qty = Number.isFinite(v) ? v : NaN;
+
+    if (!recipeId || !venue || !Number.isFinite(qty) || qty <= 0) continue;
+
+    await window.sendStartingPar(recipeId, venue, qty); // 👈
+
+    const cacheKey = input?.getAttribute("data-cache-key");
+    if (cacheKey && window.mainStartingQtyCache) delete window.mainStartingQtyCache[cacheKey];
+
+    row.remove();
+    sent++;
+  }
+
+  alert(sent > 0
+    ? `✅ Sent ${sent} starting par item${sent === 1 ? "" : "s"} from Main Kitchen.`
+    : "⚠️ No valid quantities to send."
+  );
+};
+
+window.sendSingleStartingPar = async function (recipeId, venue, button) {
+  const row = button.closest("tr");
+  const input = row.querySelector(".send-qty-input");
+  const cacheKey = input?.getAttribute("data-cache-key");
+
+  const v = normalizeQtyInputValue(input);
+  const qtyFromInput = Number.isFinite(v) ? v : NaN;
+  const qtyFromCache = cacheKey != null ? Number(window.mainStartingQtyCache?.[cacheKey]) : NaN;
+  const sendQty = Number.isFinite(qtyFromInput) ? qtyFromInput : qtyFromCache;
+
+  if (!Number.isFinite(sendQty) || sendQty <= 0) {
+    alert("Please enter a valid quantity > 0.");
     return;
   }
 
-  const netWeight = parseFloat(netWeightRaw.toFixed(2));
-  const totalCost = parseFloat((netWeight * costPerLb).toFixed(2));
+  await window.sendStartingPar(recipeId, venue, sendQty); // 👈
 
-  // ✅ Ensure recipeNo is saved for accounting queries
-  const recipeNo = (recipeData.recipeNo || recipeId).toUpperCase();
+  if (cacheKey && window.mainStartingQtyCache) delete window.mainStartingQtyCache[cacheKey];
+  if (window.mainStartingInputCache) delete window.mainStartingInputCache[cacheKey];
+  row.remove();
+};
 
-  const orderData = {
-    type: "starting-par",
-    venue,
-    recipeId,
-    recipeNo,
-    sendQty: parseFloat(Number(sendQty).toFixed(2)),
-    pans,
-    panWeight,
-    netWeight,
-    costPerLb,
-    totalCost,
-    date: today,
-    status: "sent",
-    sentAt: Timestamp.now(),
-    timestamp: Timestamp.now()
-  };
 
-  await addDoc(collection(db, "orders"), orderData);
-  console.log(`✅ Sent ${sendQty} lbs for ${recipeId} to ${venue} → Net: ${netWeight} lbs, Cost: $${totalCost.toFixed(2)}`);
-}
 
 window.sendSingleStartingPar = async function (recipeId, venue, button) {
   const row = button.closest("tr");
@@ -1888,6 +1900,57 @@ window.sendSingleStartingPar = async function (recipeId, venue, button) {
   if (cacheKey && window.mainStartingQtyCache) delete window.mainStartingQtyCache[cacheKey];
   if (window.mainStartingInputCache) delete window.mainStartingInputCache[cacheKey]; // legacy cleanup
   row.remove();
+};
+
+
+// ✅ Global so Send + Send All can call it
+window.sendStartingPar = async function (recipeId, venue, sendQty) {
+  const today = getTodayDate();
+
+  const guestCountDoc = await getDoc(doc(db, "guestCounts", today));
+  const guestCount = guestCountDoc.exists() ? Number(guestCountDoc.data()?.[venue] || 0) : 0;
+
+  const recipeSnap = await getDoc(doc(db, "recipes", recipeId));
+  if (!recipeSnap.exists()) {
+    console.warn(`❌ Recipe ${recipeId} not found`);
+    return;
+  }
+
+  const recipeData = recipeSnap.data();
+  const panWeight = Number(recipeData.panWeight || 0);
+  const costPerLb = Number(recipeData.cost || 0);
+  const pans = Number(recipeData.pars?.[venue]?.[String(guestCount)] || 0);
+
+  // net = entered lbs - (pans * panWeight)
+  const netWeightRaw = Number(sendQty) - (pans * panWeight);
+  if (!Number.isFinite(netWeightRaw) || netWeightRaw <= 0) {
+    alert(`❌ Cannot send: Net weight would be ${Number.isFinite(netWeightRaw) ? netWeightRaw.toFixed(2) : "NaN"} lbs.`);
+    return;
+  }
+
+  const netWeight = parseFloat(netWeightRaw.toFixed(2));
+  const totalCost = parseFloat((netWeight * costPerLb).toFixed(2));
+  const recipeNo = (recipeData.recipeNo || recipeId).toUpperCase();
+
+  const orderData = {
+    type: "starting-par",
+    venue,
+    recipeId,
+    recipeNo,
+    sendQty: parseFloat(Number(sendQty).toFixed(2)),
+    pans,
+    panWeight,
+    netWeight,
+    costPerLb,
+    totalCost,
+    date: today,
+    status: "sent",
+    sentAt: Timestamp.now(),
+    timestamp: Timestamp.now()
+  };
+
+  await addDoc(collection(db, "orders"), orderData);
+  console.log(`✅ Sent ${sendQty} lbs for ${recipeId} to ${venue} → Net: ${netWeight} lbs, Cost: $${totalCost.toFixed(2)}`);
 };
 
 
