@@ -1,0 +1,13 @@
+{
+  "github.codespaces.defaultPortVisibility": "public",
+  // legacy / alt key some workspaces still honor:
+  "remote.portsAttributes": {
+    "4000": { "label": "Firebase UI", "visibility": "public", "onAutoForward": "openBrowser" },
+    "8080": { "label": "Firestore",   "visibility": "public" },
+    "9099": { "label": "Auth",        "visibility": "public" },
+    "5000": { "label": "Hosting",     "visibility": "public" },
+    "5001": { "label": "Functions",   "visibility": "public" },
+    "9150": { "label": "Firestore WS","visibility": "public" },
+    "4400": { "label": "Emulator Hub","visibility": "public" }
+  }
+}

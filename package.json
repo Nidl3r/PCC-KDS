@@ -4,12 +4,25 @@
   "description": "",
   "main": "firebaseConfig.js",
   "scripts": {
-  "start": "live-server"
-},
+    "start": "live-server",
+    "emu": "firebase emulators:start --import=./.emulator-data --export-on-exit",
+    "emu:clean": "rimraf ./.emulator-data && mkdir -p ./.emulator-data",
+    "seed": "node scripts/seed-local.js",
+    "dev:local": "concurrently \"npm:emu\" \"wait-on tcp:8080 && npm run seed && npm run start\""
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "devDependencies": {
-    "live-server": "^1.2.2"
+    "concurrently": "^9.2.0",
+    "firebase-tools": "^14.12.0",
+    "live-server": "^1.2.2",
+    "rimraf": "^6.0.1",
+    "wait-on": "^8.0.4"
+  },
+  "dependencies": {
+    "@firebase/rules-unit-testing": "^5.0.0",
+    "firebase": "^12.1.0",
+    "firebase-admin": "^13.4.0"
   }
 }

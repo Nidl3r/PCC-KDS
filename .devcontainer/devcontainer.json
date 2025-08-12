@@ -1,0 +1,13 @@
+{
+  "name": "PCC-KDS",
+  "forwardPorts": [4000, 8080, 9099, 5000, 5001, 9150, 4400],
+  "portsAttributes": {
+    "4000": { "label": "Firebase UI", "visibility": "public", "onAutoForward": "openBrowser", "protocol": "http" },
+    "8080": { "label": "Firestore",   "visibility": "public", "protocol": "http" },
+    "9099": { "label": "Auth",        "visibility": "public", "protocol": "http" },
+    "5000": { "label": "Hosting",     "visibility": "public", "protocol": "http" },
+    "5001": { "label": "Functions",   "visibility": "public", "protocol": "http" },
+    "9150": { "label": "Firestore WS","visibility": "public", "protocol": "http" },
+    "4400": { "label": "Emulator Hub","visibility": "public", "protocol": "http" }
+  }
+}
