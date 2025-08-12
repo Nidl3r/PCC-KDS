@@ -68,6 +68,76 @@ const map = {
   }
 }
 
+// --- Math helpers for qty inputs ---
+function evaluateMathExpression(raw) {
+  if (typeof raw !== "string") raw = String(raw ?? "");
+  const expr = raw
+    .replace(/,/g, "")        // remove commas
+    .replace(/×|x/gi, "*")    // support x / ×
+    .replace(/÷/g, "/")       // support ÷
+    .trim();
+
+  // allow only digits, operators, parentheses, dot, spaces
+  if (!/^[\d+\-*/().\s]+$/.test(expr)) return NaN;
+
+  try {
+    const val = Function(`"use strict"; return (${expr})`)();
+    // only finite numbers
+    return Number.isFinite(val) ? val : NaN;
+  } catch {
+    return NaN;
+  }
+}
+
+/**
+ * Evaluates the value already in an <input>, then writes the numeric result back.
+ * Returns the numeric result (or NaN if invalid).
+ */
+function normalizeQtyInputValue(input) {
+  if (!input) return NaN;
+  const result = evaluateMathExpression(input.value);
+  if (Number.isFinite(result)) {
+    // respect step if present (e.g., "0.01" => 2 decimals)
+    const step = input.getAttribute("step");
+    if (step && step.includes(".")) {
+      const decimals = step.split(".")[1].length;
+      input.value = result.toFixed(decimals);
+    } else {
+      // no explicit step => keep a reasonable precision
+      const rounded = Math.round(result * 100) / 100;
+      input.value = String(rounded);
+    }
+    return parseFloat(input.value);
+  }
+  return NaN;
+}
+
+/**
+ * Attach Enter/blur handlers that evaluate math expressions for matching inputs.
+ * Call this after you render rows that include those inputs.
+ */
+function enableMathOnInputs(selector, scope = document) {
+  const inputs = scope.querySelectorAll(selector);
+  inputs.forEach((input) => {
+    if (input.dataset.mathEnabled === "1") return;
+
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        const v = normalizeQtyInputValue(input);
+        // prevent form submits / accidental reloads
+        e.preventDefault();
+        // keep focus to mirror "enter" behavior users expect
+        input.select?.();
+      }
+    });
+
+    input.addEventListener("blur", () => {
+      normalizeQtyInputValue(input);
+    });
+
+    input.dataset.mathEnabled = "1";
+  });
+}
 
 
 // Update on change
@@ -211,188 +281,6 @@ window.showAccountingTab = showAccountingTab;
 
 
 // ✅ Render kitchen add ons
-const kitchenSendQtyCache = {};
-
-function renderKitchen(orders, { skipCache = false } = {}) {
-  // ✅ Only cache the full list if not skipping
-  if (!skipCache) {
-    window.kitchenFullOrderList = [...orders]; // preserve original
-  }
-
-  window.kitchenOrderCache = orders;
-
-  const container = document.getElementById("kitchenTable").querySelector("tbody");
-  if (!container) return;
-
-  container.innerHTML = "";
-
-
-  // Sort by priority and time
-  orders.sort((a, b) => {
-    const priority = { "Ready to Send": 0, "open": 1 };
-    const aPriority = priority[a.status] ?? 2;
-    const bPriority = priority[b.status] ?? 2;
-
-    if (aPriority !== bPriority) return aPriority - bPriority;
-
-    const timeA = a.timestamp?.toDate?.() || new Date(0);
-    const timeB = b.timestamp?.toDate?.() || new Date(0);
-    return timeA - timeB;
-  });
-
-  // ❌ Filter out grill items from Gateway only
-  orders = orders.filter(order => {
-    const isGatewayGrill = order.venue === "Gateway" && order.station === "Grill";
-    return !isGatewayGrill;
-  });
-
-
-  orders.forEach(order => {
-    const row = document.createElement("tr");
-
-    const createdAt = order.timestamp?.toDate?.() || new Date();
-    const cookTime = order.cookTime || 0;
-    const dueTime = new Date(createdAt.getTime() + cookTime * 60000);
-    const now = new Date();
-
-    const timeFormatted = createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const dueFormatted = dueTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-
-    const isLate = dueTime < now;
-    if (isLate) row.style.backgroundColor = "rgba(255, 0, 0, 0.15)";
-
-    const cachedQty = kitchenSendQtyCache[order.id] ?? "";
-
-    row.innerHTML = `
-      <td>${timeFormatted}</td>
-      <td>${dueFormatted}</td>
-      <td>${order.venue || ""}</td>
-      <td>${order.item}</td>
-      <td>${order.notes || ""}</td>
-      <td>${order.qty}</td>
-      <td>${order.status}</td>
-      <td>
-        <input
-          type="number"
-          min="0.01"
-          step="0.01"
-          value="${cachedQty}"
-          class="send-qty-input"
-          data-order-id="${order.id}"
-        />
-      </td>
-      <td>${order.uom || "ea"}</td>
-      <td>
-        <button onclick="sendKitchenOrder('${order.id}', this)" disabled>Send</button>
-      </td>
-    `;
-
-    container.appendChild(row);
-  });
-
-  // 🔄 Add input listeners to enable/disable send buttons
-  container.querySelectorAll(".send-qty-input").forEach(input => {
-    input.addEventListener("input", () => {
-      const id = input.getAttribute("data-order-id");
-      const sendBtn = input.closest("tr")?.querySelector("button");
-
-      const val = parseFloat(input.value);
-      const isValid = !isNaN(val) && val > 0;
-
-      kitchenSendQtyCache[id] = isValid ? val : 0;
-
-      if (sendBtn) {
-        sendBtn.disabled = !isValid;
-      }
-    });
-  });
-
-}
-
-window.filterKitchenOrders = function () {
-  const searchValue = document.getElementById("kitchenSearchInput").value.trim().toLowerCase();
-
-  // ✅ If search is empty, restore full list
-  if (!searchValue) {
-    renderKitchen(window.kitchenFullOrderList, { skipCache: true });
-    return;
-  }
-
-  const filtered = window.kitchenFullOrderList.filter(order =>
-    order.item?.toLowerCase().includes(searchValue)
-  );
-
-  renderKitchen(filtered, { skipCache: true });
-};
-
-function showMainKitchenNotif(message, duration = 3000, type = "info") {
-  const notif = document.getElementById("mainKitchenNotif");
-  if (!notif) {
-    console.warn("❌ Tried to notify Main Kitchen but notif element doesn't exist.");
-    return;
-  }
-
-  notif.textContent = message;
-
-  const styles = {
-    success: { background: "#2e7d32", border: "#1b5e20" },
-    error: { background: "#c62828", border: "#b71c1c" },
-    info: { background: "#1565c0", border: "#0d47a1" }
-  };
-
-  const { background, border } = styles[type] || styles.info;
-  notif.style.background = background;
-  notif.style.border = `1px solid ${border}`;
-  notif.style.display = "block";
-
-  setTimeout(() => {
-    notif.style.display = "none";
-  }, duration);
-}
-
-let previousAddonOrders = [];
-
-function listenToAddonOrders() {
-  const ordersRef = collection(db, "orders");
-
-  const addonQuery = query(
-    ordersRef,
-    where("type", "==", "addon"),
-    where("status", "in", ["open", "Ready to Send"])
-  );
-
-  onSnapshot(addonQuery, (snapshot) => {
-    const orders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    console.log("📦 Snapshot received:", orders.length, "orders");
-
-    // ✅ Render all orders for the kitchen
-    renderKitchen(orders);
-
-    const currentIds = orders.map(o => o.id);
-    const deletedOrders = previousAddonOrders.filter(o => !currentIds.includes(o.id));
-
-    if (deletedOrders.length > 0) {
-      console.log("🗑️ Deleted orders detected:", deletedOrders.map(o => o.item));
-    }
-
-    deletedOrders.forEach(deleted => {
-      console.log("🔔 Notifying deletion of:", deleted.item);
-      showMainKitchenNotif(`🗑️ Order deleted: ${deleted.item}`, 4000, "info");
-    });
-
-    snapshot.docChanges().forEach(change => {
-      const data = change.doc.data();
-      if (change.type === "modified") {
-        console.log("✏️ Order updated:", data.item);
-        showMainKitchenNotif(`✏️ Order updated: ${data.item}`, 4000, "info");
-      }
-    });
-
-    // ✅ Update cache after everything
-    previousAddonOrders = orders;
-  });
-}
-
 
 
 
@@ -517,6 +405,8 @@ window.showAreaSection = function (area, sectionId) {
 
 //*load kitchen 
 // window.showKitchenSection
+
+
 window.showKitchenSection = function (sectionId) {
   const mainKitchen = document.getElementById("main-kitchen");
 
@@ -560,6 +450,302 @@ window.showKitchenSection = function (sectionId) {
   }
 };
 
+
+//Kitchen add ons
+// Kitchen add ons
+const kitchenSendQtyCache = {};
+
+function renderKitchen(orders, { skipCache = false } = {}) {
+  // ✅ Only cache the full list if not skipping
+  if (!skipCache) {
+    window.kitchenFullOrderList = [...orders]; // preserve original
+  }
+
+  window.kitchenOrderCache = orders;
+
+  const container = document.getElementById("kitchenTable").querySelector("tbody");
+  if (!container) return;
+
+  container.innerHTML = "";
+
+  // Sort by priority and time
+  orders.sort((a, b) => {
+    const priority = { "Ready to Send": 0, "open": 1 };
+    const aPriority = priority[a.status] ?? 2;
+    const bPriority = priority[b.status] ?? 2;
+
+    if (aPriority !== bPriority) return aPriority - bPriority;
+
+    const timeA = a.timestamp?.toDate?.() || new Date(0);
+    const timeB = b.timestamp?.toDate?.() || new Date(0);
+    return timeA - timeB;
+  });
+
+  // ❌ Filter out grill items from Gateway only
+  orders = orders.filter(order => !(order.venue === "Gateway" && order.station === "Grill"));
+
+  orders.forEach(order => {
+    const row = document.createElement("tr");
+
+    const createdAt = order.timestamp?.toDate?.() || new Date();
+    const cookTime = order.cookTime || 0;
+    const dueTime = new Date(createdAt.getTime() + cookTime * 60000);
+    const now = new Date();
+
+    const timeFormatted = createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const dueFormatted = dueTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+    if (dueTime < now) row.style.backgroundColor = "rgba(255, 0, 0, 0.15)";
+
+    const cachedQty = kitchenSendQtyCache[order.id] ?? "";
+
+    row.innerHTML = `
+      <td>${timeFormatted}</td>
+      <td>${dueFormatted}</td>
+      <td>${order.venue || ""}</td>
+      <td>${order.item}</td>
+      <td>${order.notes || ""}</td>
+      <td>${order.qty}</td>
+      <td>${order.status}</td>
+      <td>
+        <input
+          type="text"
+          inputmode="decimal"
+          value="${cachedQty}"
+          class="send-qty-input"
+          data-order-id="${order.id}"
+          style="width: 80px; text-align: right;"
+          placeholder="0"
+        />
+      </td>
+      <td>${order.uom || "ea"}</td>
+      <td>
+        <button onclick="sendKitchenOrder('${order.id}', this)" disabled>Send</button>
+      </td>
+    `;
+
+    container.appendChild(row);
+  });
+
+  // 🔄 Add input listeners to enable/disable send buttons (live as you type)
+  container.querySelectorAll(".send-qty-input").forEach(input => {
+    const sendBtn = input.closest("tr")?.querySelector("button");
+    const id = input.getAttribute("data-order-id");
+
+    const setEnabledFromValue = () => {
+      // Evaluate math safely (requires evaluateMathExpression helper)
+      const v = evaluateMathExpression(input.value);
+      const isValid = Number.isFinite(v) && v > 0;
+      if (sendBtn) sendBtn.disabled = !isValid;
+    };
+
+    // Live enable/disable while typing
+    input.addEventListener("input", () => {
+      setEnabledFromValue();
+    });
+
+    // Normalize + cache on Enter
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const v = normalizeQtyInputValue(input); // writes normalized number back to input
+        kitchenSendQtyCache[id] = Number.isFinite(v) ? v : "";
+        setEnabledFromValue();
+        input.select?.();
+      }
+    });
+
+    // Normalize + cache on blur
+    input.addEventListener("blur", () => {
+      const v = normalizeQtyInputValue(input);
+      kitchenSendQtyCache[id] = Number.isFinite(v) ? v : "";
+      setEnabledFromValue();
+    });
+
+    // Set initial enabled state based on cached value
+    setEnabledFromValue();
+  });
+
+  // 🔌 math features (1+1, 2*3, 10/4, etc.)
+  enableMathOnInputs(".send-qty-input", container);
+}
+
+window.filterKitchenOrders = function () {
+  const searchValue = document.getElementById("kitchenSearchInput").value.trim().toLowerCase();
+
+  // ✅ If search is empty, restore full list
+  if (!searchValue) {
+    renderKitchen(window.kitchenFullOrderList, { skipCache: true });
+    return;
+  }
+
+  const filtered = window.kitchenFullOrderList.filter(order =>
+    order.item?.toLowerCase().includes(searchValue)
+  );
+
+  renderKitchen(filtered, { skipCache: true });
+};
+
+function showMainKitchenNotif(message, duration = 3000, type = "info") {
+  const notif = document.getElementById("mainKitchenNotif");
+  if (!notif) {
+    console.warn("❌ Tried to notify Main Kitchen but notif element doesn't exist.");
+    return;
+  }
+
+  notif.textContent = message;
+
+  const styles = {
+    success: { background: "#2e7d32", border: "#1b5e20" },
+    error: { background: "#c62828", border: "#b71c1c" },
+    info: { background: "#1565c0", border: "#0d47a1" }
+  };
+
+  const { background, border } = styles[type] || styles.info;
+  notif.style.background = background;
+  notif.style.border = `1px solid ${border}`;
+  notif.style.display = "block";
+
+  setTimeout(() => {
+    notif.style.display = "none";
+  }, duration);
+}
+
+let previousAddonOrders = [];
+
+function listenToAddonOrders() {
+  const ordersRef = collection(db, "orders");
+
+  const addonQuery = query(
+    ordersRef,
+    where("type", "==", "addon"),
+    where("status", "in", ["open", "Ready to Send"])
+  );
+
+  onSnapshot(addonQuery, (snapshot) => {
+    const orders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    console.log("📦 Snapshot received:", orders.length, "orders");
+
+    // ✅ Render all orders for the kitchen
+    renderKitchen(orders);
+
+    const currentIds = orders.map(o => o.id);
+    const deletedOrders = previousAddonOrders.filter(o => !currentIds.includes(o.id));
+
+    if (deletedOrders.length > 0) {
+      console.log("🗑️ Deleted orders detected:", deletedOrders.map(o => o.item));
+    }
+
+    deletedOrders.forEach(deleted => {
+      console.log("🔔 Notifying deletion of:", deleted.item);
+      showMainKitchenNotif(`🗑️ Order deleted: ${deleted.item}`, 4000, "info");
+    });
+
+    snapshot.docChanges().forEach(change => {
+      const data = change.doc.data();
+      if (change.type === "modified") {
+        console.log("✏️ Order updated:", data.item);
+        showMainKitchenNotif(`✏️ Order updated: ${data.item}`, 4000, "info");
+      }
+    });
+
+    // ✅ Update cache after everything
+    previousAddonOrders = orders;
+  });
+}
+
+window.sendKitchenOrder = async function(orderId, button) {
+  let rowRemoved = false;
+
+  try {
+    // Prevent double clicks
+    if (button) button.disabled = true;
+
+    const orderRef = doc(db, "orders", orderId);
+    const orderSnap = await getDoc(orderRef);
+
+    if (!orderSnap.exists()) {
+      alert("❌ Order not found.");
+      return;
+    }
+
+    const order = orderSnap.data();
+    const row = button?.closest("tr");
+    const sendQtyInput = row?.querySelector(".send-qty-input");
+
+    if (!sendQtyInput) {
+      alert("⚠️ Please input a quantity before sending.");
+      return;
+    }
+
+    // ✅ Normalize/evaluate math (e.g., "1+1") and write back to the input
+    const normalized = (typeof normalizeQtyInputValue === "function")
+      ? normalizeQtyInputValue(sendQtyInput)
+      : parseFloat(sendQtyInput.value);
+
+    let sendQty = Number.isFinite(normalized) ? normalized : NaN;
+
+    if (!Number.isFinite(sendQty) || sendQty <= 0) {
+      alert("⚠️ Please enter a valid quantity greater than 0.");
+      return;
+    }
+
+    // 🔧 Adjust for pan weight if addon with lb UOM
+    let adjustedQty = sendQty;
+
+    if (order.type === "addon" && order.recipeNo) {
+      const recipeQuery = query(
+        collection(db, "recipes"),
+        where("recipeNo", "==", order.recipeNo)
+      );
+      const recipeSnap = await getDocs(recipeQuery);
+
+      if (!recipeSnap.empty) {
+        const recipeData = recipeSnap.docs[0].data();
+        const panWeight = Number(recipeData.panWeight || 0);
+        const uom = (recipeData.uom || "").toLowerCase();
+
+        if (uom === "lb") {
+          adjustedQty = parseFloat((sendQty - panWeight).toFixed(2));
+          if (adjustedQty < 0) {
+            alert(`❌ Cannot send this quantity. Adjusted weight (${adjustedQty}) is less than 0 after subtracting pan weight (${panWeight}).`);
+            return;
+          }
+          console.log(`💡 Adjusted Qty for ${order.recipeNo}: ${adjustedQty} (panWeight: ${panWeight})`);
+        } else {
+          console.log(`ℹ️ UOM is '${uom}', skipping pan weight adjustment.`);
+        }
+      } else {
+        console.warn("⚠️ Recipe not found for", order.recipeNo);
+      }
+    }
+
+    await setDoc(orderRef, {
+      status: "sent",
+      sentAt: serverTimestamp(),
+      sendQty: adjustedQty,
+      qty: adjustedQty
+    }, { merge: true });
+
+    console.log(`✅ Sent order ${orderId} with sendQty: ${adjustedQty}`);
+
+    // 🧹 Clear cache + remove row
+    if (typeof kitchenSendQtyCache !== "undefined") {
+      delete kitchenSendQtyCache[orderId];
+    }
+    if (row) {
+      row.remove();
+      rowRemoved = true;
+    }
+
+  } catch (error) {
+    console.error("❌ Failed to send order:", error);
+    alert("❌ Failed to send order.");
+  } finally {
+    // Re-enable button only if we didn't remove the row (i.e., on failure)
+    if (button && !rowRemoved) button.disabled = false;
+  }
+};
 
 
 //**ALOHA*/
@@ -1000,16 +1186,16 @@ window.loadAlohaStartingPar = async function () {
   const guestData = guestSnap.data();
   console.log("🌺 Full guest data:", guestData);
 
-  const guestCount = guestData?.Aloha || 0;
+  const guestCount = Number(guestData?.Aloha || 0);
   document.getElementById("alohaGuestInfo").textContent = `👥 Guest Count: ${guestCount}`;
 
-  // Load recipes
+  // 🔍 Load recipes for Aloha (venueCode b001)
   const recipesRef = collection(db, "recipes");
-  const q = query(recipesRef, where("venueCodes", "array-contains", "b001")); // Aloha
+  const q = query(recipesRef, where("venueCodes", "array-contains", "b001"));
   const snapshot = await getDocs(q);
   const recipes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-  // Load today's sent orders
+  // 🔁 Load today's starting-par orders for Aloha
   const ordersQuery = query(
     collection(db, "orders"),
     where("type", "==", "starting-par"),
@@ -1018,26 +1204,45 @@ window.loadAlohaStartingPar = async function () {
   );
   const ordersSnap = await getDocs(ordersQuery);
 
-  const sentPars = {};
-  const receivedPars = {};
+  const sentPars = {};     // recipeId -> total pans sent today
+  const receivedPars = {}; // recipeId -> true if any received today
 
-  ordersSnap.forEach(doc => {
-    const order = doc.data();
-    if (!sentPars[order.recipeId]) sentPars[order.recipeId] = 0;
-    sentPars[order.recipeId] += order.qty;
+  ordersSnap.forEach(docSnap => {
+    const order = docSnap.data();
+    const recipeId = order.recipeId;
+    if (!recipeId) return;
 
-    if (order.received) {
-      receivedPars[order.recipeId] = true;
+    // ✅ Sum by PANS (par unit), not lbs
+    const pans = Number(order.pans ?? 0);
+    if (!sentPars[recipeId]) sentPars[recipeId] = 0;
+    sentPars[recipeId] += pans;
+
+    if (order.received || order.status === "received") {
+      receivedPars[recipeId] = true;
     }
   });
 
-  // ✅ Cache
-  if (!window.startingCache) window.startingCache = {};
-  window.startingCache["Aloha"] = { recipes, guestCount, sentPars, receivedPars };
+  // ✅ Build list with remaining par = targetPar - pansSent; hide when <= 0
+  const filteredRecipes = recipes
+    .map(recipe => {
+      const targetPar = Number(recipe.pars?.Aloha?.[guestCount] || 0);
+      const pansSent  = Number(sentPars[recipe.id] || 0);
+      const remainingPar = targetPar - pansSent;
+      return { ...recipe, parQty: remainingPar };
+    })
+    .filter(r => r.parQty > 0);
+
+  // ✅ Cache for renderStartingStatus (which now prefers recipe.parQty)
+  window.startingCache = window.startingCache || {};
+  window.startingCache["Aloha"] = {
+    recipes: filteredRecipes,
+    guestCount,
+    sentPars,
+    receivedPars
+  };
 
   renderStartingStatus("Aloha", window.startingCache["Aloha"]);
 };
-
 
 
 window.renderStartingStatus = async function (venue, data) {
@@ -1050,7 +1255,7 @@ window.renderStartingStatus = async function (venue, data) {
   const today = getTodayDate();
   const firestoreVenue = venue === "Concession" ? "Concessions" : venue;
 
-  // 🔄 Load all starting-par orders for this venue & day
+  // Load all starting-par orders for this venue & day
   const ordersSnapshot = await getDocs(query(
     collection(db, "orders"),
     where("type", "==", "starting-par"),
@@ -1058,71 +1263,64 @@ window.renderStartingStatus = async function (venue, data) {
     where("date", "==", today)
   ));
 
-  // 🧠 Track which recipes are sent and/or received
-// 🧠 Track sent and received status and quantities
-const sentButNotReceived = new Map(); // recipeId -> sendQty
-const fullyReceived = new Set();
-
-ordersSnapshot.docs.forEach(doc => {
-  const order = doc.data();
-  const recipeId = order.recipeId;
-  if (!recipeId) return;
-
-  if (order.received) {
-    fullyReceived.add(recipeId);
-  } else {
-    sentButNotReceived.set(recipeId, order.sendQty || 0);
-  }
-});
-
+  // Pending (sent but not received) in pans
+  const pendingPansByRecipe = new Map(); // recipeId -> pans
+  ordersSnapshot.forEach(docSnap => {
+    const o = docSnap.data();
+    const recipeId = o.recipeId;
+    if (!recipeId) return;
+    const pans = Number(o.pans ?? 0);
+    if (o.received || o.status === "received") return; // received doesn't count as pending
+    if (pans > 0) {
+      pendingPansByRecipe.set(recipeId, (pendingPansByRecipe.get(recipeId) || 0) + pans);
+    }
+  });
 
   data.recipes.forEach(recipe => {
     const recipeId = recipe.id;
 
-    // ❌ Always hide if fully received
-    if (fullyReceived.has(recipeId)) return;
-
-    // ❌ On Main Kitchen screen: hide if already sent
-    if (venue.replace(/\s/g, '') === "MainKitchen" && sentButNotReceived.has(recipeId)) return;
-
-
-    // ❌ Skip category if filtered out
+    // Category filter
     if (categoryFilter && recipe.category?.toLowerCase() !== categoryFilter.toLowerCase()) return;
 
-    // 🧮 Calculate par quantity
-    let parQty = 0;
-    if (venue === "Concession") {
-      parQty = recipe.pars?.Concession?.default || 0;
+    // 1) Prefer precomputed remaining par (from loader), else compute from recipe.pars
+    let baseParPans;
+    if (typeof recipe.parQty === "number") {
+      baseParPans = Number(recipe.parQty); // already (target - sent)
     } else {
-      parQty = recipe.pars?.[venue]?.[guestCount.toString()] || 0;
+      if (venue === "Concession") {
+        baseParPans = Number(recipe.pars?.Concession?.default || 0);
+      } else {
+        baseParPans = Number(recipe.pars?.[venue]?.[String(guestCount)] || 0);
+      }
     }
 
-    if (parQty <= 0) return;
+    // 2) Pending pans not yet received (for the "Sent" column)
+    const pendingPans = Number(pendingPansByRecipe.get(recipeId) || 0);
 
-    // 📦 Determine sent quantity
-   const sentQty = sentButNotReceived.get(recipeId) || 0;
+    // 3) If we DIDN'T get a precomputed remaining par, subtract pending now.
+    const displayParPans = (typeof recipe.parQty === "number")
+      ? baseParPans
+      : Math.max(0, baseParPans - pendingPans);
 
-    const showReceiveBtn = sentButNotReceived.has(recipeId);
+    // Hide if no par left to send
+    if (displayParPans <= 0) return;
 
     const row = document.createElement("tr");
     row.innerHTML = `
       <td>${recipe.description}</td>
-      <td>${parQty.toFixed(2)}</td>
-<td>${sentQty.toFixed(2)}</td>
-
+      <td>${displayParPans % 1 ? displayParPans.toFixed(2) : displayParPans}</td>
+      <td>${pendingPans % 1 ? pendingPans.toFixed(2) : pendingPans}</td>
       <td>
-        ${showReceiveBtn ? `<button class="receive-btn" data-recipe-id="${recipeId}">Receive</button>` : ''}
+        ${pendingPans > 0 ? `<button class="receive-btn" data-recipe-id="${recipeId}">Receive</button>` : ``}
       </td>
     `;
 
-    // 📌 Add receive listener
-    const receiveBtn = row.querySelector(".receive-btn");
-    if (receiveBtn) {
-      receiveBtn.addEventListener("click", async (e) => {
-  const btn = e.currentTarget;
-  await receiveStartingPar(venue, recipeId, btn);
-});
-
+    // Receive handler
+    if (pendingPans > 0) {
+      row.querySelector(".receive-btn").addEventListener("click", async (e) => {
+        const btn = e.currentTarget;
+        await receiveStartingPar(venue, recipeId, btn);
+      });
     }
 
     tbody.appendChild(row);
@@ -1131,6 +1329,7 @@ ordersSnapshot.docs.forEach(doc => {
 
   console.log(`✅ Rendered ${matchedCount} recipes for ${venue} with guest count ${guestCount}`);
 };
+
 
 
 
@@ -1408,84 +1607,10 @@ const totalCost = parseFloat((netQty * costPerUOM).toFixed(2));
 
 //** Kitchen functions */
 
-window.sendKitchenOrder = async function(orderId, button) {
-  try {
-    const orderRef = doc(db, "orders", orderId);
-    const orderSnap = await getDoc(orderRef);
-
-    if (!orderSnap.exists()) {
-      alert("❌ Order not found.");
-      return;
-    }
-
-    const order = orderSnap.data();
-    const row = button.closest("tr");
-    const sendQtyInput = row.querySelector(".send-qty-input");
-
-    if (!sendQtyInput || sendQtyInput.value.trim() === "") {
-      alert("⚠️ Please input a quantity before sending.");
-      return;
-    }
-
-    const sendQty = parseFloat(sendQtyInput.value);
-
-    if (isNaN(sendQty) || sendQty <= 0) {
-      alert("⚠️ Please enter a valid quantity greater than 0.");
-      return;
-    }
-
-    let adjustedQty = sendQty;
-
-    if (order.type === "addon" && order.recipeNo) {
-      const recipeQuery = query(
-        collection(db, "recipes"),
-        where("recipeNo", "==", order.recipeNo)
-      );
-      const recipeSnap = await getDocs(recipeQuery);
-
-      if (!recipeSnap.empty) {
-        const recipeData = recipeSnap.docs[0].data();
-        const panWeight = recipeData.panWeight || 0;
-        const uom = (recipeData.uom || "").toLowerCase();
-
-        if (uom === "lb") {
-          adjustedQty = parseFloat((sendQty - panWeight).toFixed(2));
-
-          if (adjustedQty < 0) {
-            alert(`❌ Cannot send this quantity. Adjusted weight (${adjustedQty}) is less than 0 after subtracting pan weight (${panWeight}).`);
-            return;
-          }
-
-          console.log(`💡 Adjusted Qty for ${order.recipeNo}: ${adjustedQty} (panWeight: ${panWeight})`);
-        } else {
-          console.log(`ℹ️ UOM is '${uom}', skipping pan weight adjustment.`);
-        }
-      } else {
-        console.warn("⚠️ Recipe not found for", order.recipeNo);
-      }
-    }
-
-    await setDoc(orderRef, {
-      status: "sent",
-      sentAt: serverTimestamp(),
-      sendQty: adjustedQty,
-      qty: adjustedQty
-    }, { merge: true });
-
-    console.log(`✅ Sent order ${orderId} with sendQty: ${adjustedQty}`);
-
-    if (row) row.remove();
-
-  } catch (error) {
-    console.error("❌ Failed to send order:", error);
-    alert("❌ Failed to send order.");
-  }
-};
 
 
 window.mainStartingQtyCache = {};      // already exists
 window.mainStartingInputCache = {};    // NEW — stores current input
-
 
 
 window.loadMainKitchenStartingPars = async function () {
@@ -1512,7 +1637,7 @@ window.loadMainKitchenStartingPars = async function () {
   const snapshot = await getDocs(qRecipes);
   const recipes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-  // 🔁 Fetch all today's orders from Firestore
+  // 🔁 Fetch all today's starting-par orders
   const ordersRef = collection(db, "orders");
   const q = query(
     ordersRef,
@@ -1521,44 +1646,48 @@ window.loadMainKitchenStartingPars = async function () {
   );
   const querySnap = await getDocs(q);
 
-   const sentParMap = {};     // sentParMap[venue][recipeId] = totalQty
+  // 📦 Aggregates (keyed by venue → recipeId)
+  const sentParMap = {};     // sentParMap[venue][recipeId] = totalPansSent
   const receivedParMap = {}; // receivedParMap[venue][recipeId] = true
-  const sentParStatus = {};  // sentParStatus[venue][recipeId] = status
+  const sentParStatus = {};  // sentParStatus[venue][recipeId] = last status seen
 
-  querySnap.forEach(doc => {
-    const { venue, recipeId, qty, status } = doc.data();
+  querySnap.forEach(docSnap => {
+    const data = docSnap.data();
+    const venue = data.venue;
+    const recipeId = data.recipeId;
+    const status = data.status;
+    // 🔁 CHANGED: use pans as the unit of “what we meant to start with”
+    const pans = Number(data.pans ?? 0);
+
     if (!venue || !recipeId) return;
 
-    // Track quantity
+    // Sum pans sent today per venue+recipe
     if (!sentParMap[venue]) sentParMap[venue] = {};
     if (!sentParMap[venue][recipeId]) sentParMap[venue][recipeId] = 0;
-    sentParMap[venue][recipeId] += qty;
+    sentParMap[venue][recipeId] += pans;
 
-    // Track received
+    // Track received flag
     if (status === "received") {
       if (!receivedParMap[venue]) receivedParMap[venue] = {};
       receivedParMap[venue][recipeId] = true;
     }
 
-    // Track sent/received status
+    // Track latest status we’ve seen
     if (!sentParStatus[venue]) sentParStatus[venue] = {};
-    sentParStatus[venue][recipeId] = status;
+    sentParStatus[venue][recipeId] = status || "sent";
   });
-
 
   // ✅ Cache everything
   window.startingCache["MainKitchenAll"] = {
     recipes,
     guestCounts,
-    sentPars: sentParMap,
+    sentPars: sentParMap,     // ← now tally of PANS
     receivedPars: receivedParMap,
-    sentParStatus: sentParStatus  // ✅ include this!
+    sentParStatus: sentParStatus
   };
-
 
   renderMainKitchenPars();
 };
-
 
 window.renderMainKitchenPars = function () {
   const data = window.startingCache?.MainKitchenAll;
@@ -1569,7 +1698,6 @@ window.renderMainKitchenPars = function () {
 
   // Make sure caches exist
   window.mainStartingQtyCache = window.mainStartingQtyCache || {};
-  window.mainStartingInputCache = window.mainStartingInputCache || {};
 
   const venueCodeMap = {
     b001: "Aloha",
@@ -1582,7 +1710,8 @@ window.renderMainKitchenPars = function () {
 
   const venueFilter = document.getElementById("starting-filter-venue").value;
   const stationFilter = document.getElementById("starting-filter-station").value;
-  const tbody = document.querySelector("#startingParsTable tbody");
+  const table = document.querySelector("#startingParsTable");
+  const tbody = table.querySelector("tbody");
   tbody.innerHTML = "";
 
   let totalRows = 0;
@@ -1597,56 +1726,68 @@ window.renderMainKitchenPars = function () {
       const venue = venueCodeMap[code] || "Unknown";
       if (venueFilter && venue !== venueFilter) return;
 
-      // 🛑 Skip if already sent or received today
-      const sentToday = data.sentParStatus?.[venue]?.[recipe.id];
-      if (sentToday === "sent" || sentToday === "received") return;
-
-      // 🛑 Skip if marked received
-      if (data.receivedPars?.[venue]?.[recipe.id]) return;
-
-      let parQty = 0;
+      // 1) Today’s PAR (in pans)
+      let parPans = 0;
       if (venue === "Concessions") {
-        parQty = recipe.pars?.Concession?.default || 0;
+        parPans = Number(recipe.pars?.Concession?.default || 0);
       } else {
-        const guestCount = data.guestCounts?.[venue] || 0;
-        parQty = recipe.pars?.[venue]?.[guestCount.toString()] || 0;
+        const guestCount = Number(data.guestCounts?.[venue] || 0);
+        parPans = Number(recipe.pars?.[venue]?.[String(guestCount)] || 0);
       }
+      if (parPans <= 0) return;
 
-      if (parQty <= 0) return;
+      // 2) Pans already sent today
+      const sentPans = Number(data.sentPars?.[venue]?.[recipe.id] ?? 0);
 
-      const sentQty = data.sentPars?.[venue]?.[recipe.id] || 0;
+      // 3) Remaining pans to send
+      const remainingPans = Math.max(0, parPans - sentPans);
+      if (remainingPans <= 0) return; // nothing left to send, keep the row hidden like before
 
-      // 🛑 Skip if fully sent
-      if (sentQty >= parQty) return;
-
-      // 🧠 Load from caches
+      // Load cached input (leave blank by default; input is lbs to send)
       const cacheKey = `${venue}|${recipe.id}`;
-      const cachedTotal = window.mainStartingQtyCache[cacheKey] ?? 0;
-      const cachedInput = window.mainStartingInputCache[cacheKey] ?? 0;
+      const cachedValue = (window.mainStartingQtyCache[cacheKey] ?? "").toString();
 
-      // ✅ Build row with correct values
+      // Build row to match the OLD layout:
+      // Area | Item | Par Qty | UOM | Send Qty | Action
       const row = document.createElement("tr");
       row.innerHTML = `
         <td>${venue}</td>
         <td>${recipe.description}</td>
-        <td>${parQty}</td>
+        <td>${remainingPans}</td>
         <td>${recipe.uom || "ea"}</td>
         <td>
-          <span class="total-send-qty">${cachedTotal}</span>
-          <input class="add-send-qty" type="number" min="0" value="${cachedInput}" data-cache-key="${cacheKey}" style="width: 60px; margin-left: 6px;" />
-          <button class="add-send-btn" onclick="addToSendQty(this)">Add</button>
+          <input
+            class="send-qty-input"
+            type="text"
+            inputmode="decimal"
+            value="${cachedValue}"
+            data-cache-key="${cacheKey}"
+            style="width: 80px; margin-left: 6px; text-align: right;"
+            placeholder="0"
+          />
         </td>
-        <td><button onclick="sendSingleStartingPar('${recipe.id}', '${venue}', this)">Send</button></td>
+        <td>
+          <button onclick="sendSingleStartingPar('${recipe.id}', '${venue}', this)">
+            Send
+          </button>
+        </td>
       `;
 
-      const input = row.querySelector(".add-send-qty");
+      // Cache normalization (supports math like "2*3")
+      const input = row.querySelector(".send-qty-input");
       if (input) {
-        input.addEventListener("input", () => {
-          const inputQty = Number(input.value);
-          if (!isNaN(inputQty) && inputQty >= 0) {
-            window.mainStartingInputCache[cacheKey] = inputQty;
+        const updateCacheFromInput = () => {
+          const v = normalizeQtyInputValue(input);
+          window.mainStartingQtyCache[cacheKey] = Number.isFinite(v) ? v : "";
+        };
+        input.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            updateCacheFromInput();
+            input.select?.();
           }
         });
+        input.addEventListener("blur", updateCacheFromInput);
       }
 
       tbody.appendChild(row);
@@ -1654,38 +1795,11 @@ window.renderMainKitchenPars = function () {
     });
   });
 
+  // Enable math expression entry
+  enableMathOnInputs(".send-qty-input", table);
+
   console.log(`✅ Rendered ${totalRows} rows based on filters`);
 };
-
-
-
-window.addToSendQty = function (button) {
-  const row = button.closest("tr");
-  const input = row.querySelector(".add-send-qty");
-  const totalSpan = row.querySelector(".total-send-qty");
-
-  if (!input || !totalSpan) return;
-
-  const addQty = Number(input.value);
-  const currentQty = Number(totalSpan.textContent);
-  const cacheKey = input.getAttribute("data-cache-key");
-
-  if (!isNaN(addQty) && addQty > 0) {
-    const newTotal = currentQty + addQty;
-    totalSpan.textContent = newTotal;
-    input.value = "0";
-    input.focus();
-
-    // ✅ Update both caches
-    window.mainStartingQtyCache[cacheKey] = newTotal;
-    window.mainStartingInputCache[cacheKey] = 0;
-
-    console.log(`📦 Added ${addQty} → Total now ${newTotal}`);
-  } else {
-    console.warn("⚠️ Enter a valid number greater than 0");
-  }
-};
-
 
 
 document.getElementById("starting-filter-venue").addEventListener("change", () => {
@@ -1701,7 +1815,7 @@ async function sendStartingPar(recipeId, venue, sendQty) {
   const today = getTodayDate();
 
   const guestCountDoc = await getDoc(doc(db, "guestCounts", today));
-  const guestCount = guestCountDoc.exists() ? guestCountDoc.data()[venue] : 0;
+  const guestCount = guestCountDoc.exists() ? Number(guestCountDoc.data()?.[venue] || 0) : 0;
 
   const recipeSnap = await getDoc(doc(db, "recipes", recipeId));
   if (!recipeSnap.exists()) {
@@ -1709,71 +1823,70 @@ async function sendStartingPar(recipeId, venue, sendQty) {
     return;
   }
 
-const recipeData = recipeSnap.data();
-const panWeight = Number(recipeData.panWeight || 0);
-const costPerLb = Number(recipeData.cost || 0);
-const pans = recipeData.pars?.[venue]?.[guestCount] || 0;
+  const recipeData = recipeSnap.data();
+  const panWeight = Number(recipeData.panWeight || 0);
+  const costPerLb = Number(recipeData.cost || 0);
+  const pans = Number(recipeData.pars?.[venue]?.[String(guestCount)] || 0);
 
-// ✅ Calculate net weight
-const netWeightRaw = sendQty - (pans * panWeight);
-if (netWeightRaw <= 0) {
-  alert(`❌ Cannot send: Net weight would be ${netWeightRaw.toFixed(2)} lbs.`);
-  return;
-}
-const netWeight = parseFloat(netWeightRaw.toFixed(2));
-const totalCost = parseFloat((netWeight * costPerLb).toFixed(2));
-
-// ✅ Ensure recipeNo is saved for accounting queries
-const recipeNo = (recipeData.recipeNo || recipeId).toUpperCase();
-
-const orderData = {
-  type: "starting-par",
-  venue,
-  recipeId,
-  recipeNo, // ✅ now added
-  sendQty: parseFloat(sendQty.toFixed(2)),
-  pans,
-  panWeight,
-  netWeight,
-  costPerLb,
-  totalCost,
-  date: today,
-  status: "sent",
-  sentAt: Timestamp.now(),
-  timestamp: Timestamp.now()
-};
-
-
-
-  await addDoc(collection(db, "orders"), orderData);
-
-  console.log(`✅ Sent ${sendQty} lbs for ${recipeId} to ${venue} → Net: ${netWeight} lbs, Cost: $${totalCost.toFixed(2)}`);
-}
-window.sendSingleStartingPar = async function (recipeId, venue, button) {
-  const row = button.closest("tr");
-  const totalSpan = row.querySelector(".total-send-qty");
-
-  if (!totalSpan) {
-    console.error("❌ Could not find .total-send-qty in row");
+  // ✅ Calculate net weight
+  const netWeightRaw = Number(sendQty) - (pans * panWeight);
+  if (!Number.isFinite(netWeightRaw) || netWeightRaw <= 0) {
+    alert(`❌ Cannot send: Net weight would be ${Number.isFinite(netWeightRaw) ? netWeightRaw.toFixed(2) : "NaN"} lbs.`);
     return;
   }
 
-  const sendQty = Number(totalSpan.textContent);
-  if (isNaN(sendQty) || sendQty <= 0) {
-    alert("Please add a quantity greater than 0.");
+  const netWeight = parseFloat(netWeightRaw.toFixed(2));
+  const totalCost = parseFloat((netWeight * costPerLb).toFixed(2));
+
+  // ✅ Ensure recipeNo is saved for accounting queries
+  const recipeNo = (recipeData.recipeNo || recipeId).toUpperCase();
+
+  const orderData = {
+    type: "starting-par",
+    venue,
+    recipeId,
+    recipeNo,
+    sendQty: parseFloat(Number(sendQty).toFixed(2)),
+    pans,
+    panWeight,
+    netWeight,
+    costPerLb,
+    totalCost,
+    date: today,
+    status: "sent",
+    sentAt: Timestamp.now(),
+    timestamp: Timestamp.now()
+  };
+
+  await addDoc(collection(db, "orders"), orderData);
+  console.log(`✅ Sent ${sendQty} lbs for ${recipeId} to ${venue} → Net: ${netWeight} lbs, Cost: $${totalCost.toFixed(2)}`);
+}
+
+window.sendSingleStartingPar = async function (recipeId, venue, button) {
+  const row = button.closest("tr");
+  const input = row.querySelector(".send-qty-input");
+  const cacheKey = input?.getAttribute("data-cache-key");
+
+  // Force a last normalization so "1+1" becomes "2" even if user didn't blur
+  let qtyFromInput = NaN;
+  if (input) {
+    const v = normalizeQtyInputValue(input); // evaluates math & rewrites input.value
+    qtyFromInput = Number.isFinite(v) ? v : NaN;
+  }
+
+  const qtyFromCache = cacheKey != null ? Number(window.mainStartingQtyCache?.[cacheKey]) : NaN;
+  const sendQty = Number.isFinite(qtyFromInput) ? qtyFromInput : qtyFromCache;
+
+  if (!Number.isFinite(sendQty) || sendQty <= 0) {
+    alert("Please enter a valid quantity > 0.");
     return;
   }
 
   await sendStartingPar(recipeId, venue, sendQty);
 
-  // ✅ Clear from cache
-  const cacheKey = `${venue}|${recipeId}`;
-  if (window.mainStartingQtyCache) {
-    delete window.mainStartingQtyCache[cacheKey];
-delete window.mainStartingInputCache[cacheKey];
-  }
-
-  // 🧹 Remove the row from UI
+  // ✅ Clear from cache and UI
+  if (cacheKey && window.mainStartingQtyCache) delete window.mainStartingQtyCache[cacheKey];
+  if (window.mainStartingInputCache) delete window.mainStartingInputCache[cacheKey]; // legacy cleanup
   row.remove();
 };
 
@@ -1960,7 +2073,8 @@ window.sendSingleWaste = async function (button, recipeId) {
 
 
 //**Main kitchen waste */
-window.mainWasteTotals = {}; // 🧠 Key: itemId, value: qty
+// 🧠 Persist totals by itemId
+window.mainWasteTotals = window.mainWasteTotals || {}; 
 
 window.loadMainKitchenWaste = async function () {
   const tableBody = document.querySelector(".main-waste-table tbody");
@@ -1968,7 +2082,7 @@ window.loadMainKitchenWaste = async function () {
 
   // ✅ Use cache if available
   if (!window.cachedMainWasteItems) {
-    // 1. Load all recipes
+    // 1) Recipes
     const recipesSnap = await getDocs(collection(db, "recipes"));
     const allRecipes = recipesSnap.docs.map(doc => {
       const data = doc.data();
@@ -1982,7 +2096,7 @@ window.loadMainKitchenWaste = async function () {
       };
     });
 
-    // 2. Load all ingredients
+    // 2) Ingredients
     const ingredientsSnap = await getDocs(collection(db, "ingredients"));
     const allIngredients = ingredientsSnap.docs.map(doc => {
       const data = doc.data();
@@ -1996,7 +2110,6 @@ window.loadMainKitchenWaste = async function () {
       };
     });
 
-    // 🔁 Combine and cache
     window.cachedMainWasteItems = [...allRecipes, ...allIngredients];
     console.log("📦 Cached main waste items:", window.cachedMainWasteItems.length);
   }
@@ -2004,9 +2117,6 @@ window.loadMainKitchenWaste = async function () {
   window.mainWasteItemList = window.cachedMainWasteItems;
   renderMainWasteRows(window.mainWasteItemList);
 };
-
-
-
 
 window.renderMainWasteRows = function (items) {
   const tableBody = document.querySelector(".main-waste-table tbody");
@@ -2018,41 +2128,50 @@ window.renderMainWasteRows = function (items) {
     row.dataset.itemType = item.type;
     row.dataset.category = item.category?.toLowerCase() || "";
 
-  const savedQty = window.mainWasteTotals?.[item.id] || 0;
+    const savedQty = window.mainWasteTotals?.[item.id];
+    const val = (savedQty ?? "").toString();
 
-row.innerHTML = `
-  <td>${item.name}</td>
-  <td>${item.uom}</td>
-  <td>
-    <span class="waste-total">${savedQty}</span>
-    <input class="waste-input" type="number" min="0" value="0" style="width: 60px; margin-left: 6px;" />
-    <button onclick="addToMainWasteQty(this)" style="margin-left: 6px;">Add</button>
-  </td>
-  <td><button onclick="sendSingleMainWaste(this)">Send</button></td>
-`;
+    row.innerHTML = `
+      <td>${item.name}</td>
+      <td>${item.uom}</td>
+      <td>
+        <input
+          class="waste-input"
+          type="text"
+          inputmode="decimal"
+          value="${val}"
+          data-item-id="${item.id}"
+          style="width: 80px; margin-left: 6px; text-align: right;"
+          placeholder="0"
+        />
+      </td>
+      <td><button onclick="sendSingleMainWaste(this)">Send</button></td>
+    `;
+
+    // Normalize on Enter/blur and save to cache
+    const input = row.querySelector(".waste-input");
+    const updateCacheFromInput = () => {
+      const v = normalizeQtyInputValue(input); // math eval + normalization
+      window.mainWasteTotals[item.id] = Number.isFinite(v) ? v : "";
+    };
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        updateCacheFromInput();
+        input.select?.();
+      }
+    });
+    input.addEventListener("blur", updateCacheFromInput);
 
     tableBody.appendChild(row);
   });
+
+  // 🔌 Enable math (1+1, 2*3, 10/4, etc.)
+  enableMathOnInputs(".main-waste-table .waste-input", document);
 };
 
-window.addToMainWasteQty = function (button) {
-  const row = button.closest("tr");
-  const input = row.querySelector(".waste-input");
-  const span = row.querySelector(".waste-total");
-
-  const addQty = Number(input.value);
-  const currentQty = Number(span.textContent);
-  const newQty = currentQty + addQty;
-
-  if (!isNaN(addQty) && addQty > 0) {
-    span.textContent = newQty;
-    input.value = "0";
-
-    const itemId = row.dataset.itemId;
-    window.mainWasteTotals[itemId] = newQty;
-  }
-};
-
+// ❌ Remove the old addToMainWasteQty — no longer needed
+// window.addToMainWasteQty = ...  ← delete this function
 
 window.filterMainWaste = function () {
   const searchInput = document.getElementById("mainWasteSearch").value.trim().toLowerCase();
@@ -2073,16 +2192,18 @@ window.filterMainWaste = function () {
 
 window.sendSingleMainWaste = async function (button) {
   const row = button.closest("tr");
-  const span = row.querySelector(".waste-total");
   const input = row.querySelector(".waste-input");
-  const qty = Number(span.textContent);
+  const itemId = row.dataset.itemId;
 
-  if (qty <= 0) {
-    alert("Please add a quantity first.");
+  // Ensure last-minute normalization (handles unblurred "1+1")
+  const v = normalizeQtyInputValue(input);
+  const qty = Number.isFinite(v) ? v : Number(window.mainWasteTotals?.[itemId] || 0);
+
+  if (!Number.isFinite(qty) || qty <= 0) {
+    alert("Please enter a valid quantity first.");
     return;
   }
 
-  const itemId = row.dataset.itemId;
   const item = window.mainWasteItemList.find(i => i.id === itemId);
   const today = getTodayDate();
 
@@ -2096,20 +2217,16 @@ window.sendSingleMainWaste = async function (button) {
   };
 
   await addDoc(collection(db, "waste"), wasteData);
-  console.log(`✅ Sent waste to 'waste': ${qty} of ${item.name}`);
+  console.log(`✅ Sent waste: ${qty} of ${item.name}`);
 
-  // Reset quantity values
-  span.textContent = "0";
-  input.value = "0";
-
-  // Show "Sent" confirmation text
+  // Clear UI + cache
+  input.value = "";
+  window.mainWasteTotals[itemId] = "";
   const confirm = document.createElement("span");
   confirm.textContent = "Sent";
   confirm.style.color = "green";
   confirm.style.marginLeft = "8px";
   button.parentNode.appendChild(confirm);
-
-  // Remove confirmation after 2 seconds
   setTimeout(() => confirm.remove(), 2000);
 };
 
@@ -2119,13 +2236,13 @@ window.sendAllMainWaste = async function () {
   let sentCount = 0;
 
   for (const row of rows) {
-    const span = row.querySelector(".waste-total");
-    const qty = Number(span.textContent);
+    const input = row.querySelector(".waste-input");
+    const itemId = row.dataset.itemId;
+    const v = normalizeQtyInputValue(input);
+    const qty = Number.isFinite(v) ? v : Number(window.mainWasteTotals?.[itemId] || 0);
 
-    if (qty > 0) {
-      const itemId = row.dataset.itemId;
+    if (Number.isFinite(qty) && qty > 0) {
       const item = window.mainWasteItemList.find(i => i.id === itemId);
-
       const wasteData = {
         item: item.name,
         venue: "Main Kitchen",
@@ -2134,18 +2251,29 @@ window.sendAllMainWaste = async function () {
         date: today,
         timestamp: serverTimestamp()
       };
-
       await addDoc(collection(db, "waste"), wasteData);
-      console.log(`📦 Sent ${qty} of ${item.name}`);
       sentCount++;
+
+      // clear UI + cache
+      input.value = "";
+      window.mainWasteTotals[itemId] = "";
     }
   }
-if (sentCount > 0) {
-    alert(`✅ ${sentCount} waste entries recorded for Main Kitchen.`);
+
+  if (sentCount > 0) {
+    alert(`✅ ${sentCount} waste entr${sentCount === 1 ? "y" : "ies"} recorded for Main Kitchen.`);
   } else {
-    alert("⚠️ No waste entries with quantity > 0 found.");
+    alert("⚠️ No valid waste quantities found.");
   }
 };
+
+
+
+
+
+
+
+
 
 
 //**Aloha Returns */
@@ -3040,16 +3168,16 @@ window.loadGatewayStartingPar = async function () {
   const guestData = guestSnap.data();
   console.log("📦 Full guest data:", guestData);
 
-  const guestCount = guestData?.Gateway || 0;
+  const guestCount = Number(guestData?.Gateway || 0);
   document.getElementById("gatewayGuestInfo").textContent = `👥 Guest Count: ${guestCount}`;
 
-  // Load Gateway recipes
+  // 🔍 Load Gateway recipes (venueCode b003)
   const recipesRef = collection(db, "recipes");
-  const q = query(recipesRef, where("venueCodes", "array-contains", "b003")); // Gateway
+  const q = query(recipesRef, where("venueCodes", "array-contains", "b003"));
   const snapshot = await getDocs(q);
   const recipes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-  // Load today's sent orders
+  // 🔁 Load today's starting-par orders for Gateway
   const ordersQuery = query(
     collection(db, "orders"),
     where("type", "==", "starting-par"),
@@ -3058,22 +3186,42 @@ window.loadGatewayStartingPar = async function () {
   );
   const ordersSnap = await getDocs(ordersQuery);
 
-  const sentPars = {};
-  const receivedPars = {};
+  const sentPars = {};     // recipeId -> total pans sent today
+  const receivedPars = {}; // recipeId -> true if any received today
 
-  ordersSnap.forEach(doc => {
-    const order = doc.data();
-    if (!sentPars[order.recipeId]) sentPars[order.recipeId] = 0;
-    sentPars[order.recipeId] += order.qty;
+  ordersSnap.forEach(docSnap => {
+    const order = docSnap.data();
+    const recipeId = order.recipeId;
+    if (!recipeId) return;
 
-    if (order.received) {
-      receivedPars[order.recipeId] = true;
+    // ✅ Sum by PANS (par unit), not lbs
+    const pans = Number(order.pans ?? 0);
+    if (!sentPars[recipeId]) sentPars[recipeId] = 0;
+    sentPars[recipeId] += pans;
+
+    if (order.received || order.status === "received") {
+      receivedPars[recipeId] = true;
     }
   });
 
-  // ✅ Cache
-  if (!window.startingCache) window.startingCache = {};
-  window.startingCache["Gateway"] = { recipes, guestCount, sentPars, receivedPars };
+  // ✅ Build list with remaining par = targetPar - pansSent; hide when <= 0
+  const filteredRecipes = recipes
+    .map(recipe => {
+      const targetPar = Number(recipe.pars?.Gateway?.[guestCount] || 0);
+      const pansSent = Number(sentPars[recipe.id] || 0);
+      const remainingPar = targetPar - pansSent;
+      return { ...recipe, parQty: remainingPar };
+    })
+    .filter(r => r.parQty > 0);
+
+  // ✅ Cache for renderStartingStatus (which now uses recipe.parQty when present)
+  window.startingCache = window.startingCache || {};
+  window.startingCache["Gateway"] = {
+    recipes: filteredRecipes,
+    guestCount,
+    sentPars,      // still handy if needed elsewhere
+    receivedPars
+  };
 
   renderStartingStatus("Gateway", window.startingCache["Gateway"]);
 };
@@ -3899,7 +4047,6 @@ window.sendOhanaReturn = async function (btn, recipeId) {
   }
 };
 //OHANA STARTING PAR
-
 window.loadOhanaStartingPar = async function () {
   console.log("🚀 Starting Ohana par load...");
 
@@ -3916,7 +4063,7 @@ window.loadOhanaStartingPar = async function () {
   const guestData = guestSnap.data();
   console.log("🌺 Full guest data:", guestData);
 
-  const guestCount = guestData?.Ohana || 0;
+  const guestCount = Number(guestData?.Ohana || 0);
   document.getElementById("ohanaGuestInfo").textContent = `👥 Guest Count: ${guestCount}`;
 
   // 🔍 Load recipes for Ohana (venueCode b002)
@@ -3925,7 +4072,7 @@ window.loadOhanaStartingPar = async function () {
   const snapshot = await getDocs(q);
   const recipes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-  // 🔁 Load today's sent orders for Ohana
+  // 🔁 Load today's starting-par orders for Ohana
   const ordersQuery = query(
     collection(db, "orders"),
     where("type", "==", "starting-par"),
@@ -3934,25 +4081,45 @@ window.loadOhanaStartingPar = async function () {
   );
   const ordersSnap = await getDocs(ordersQuery);
 
-  const sentPars = {};
-  const receivedPars = {};
+  const sentPars = {};    // recipeId -> total pans sent today
+  const receivedPars = {}; // recipeId -> true if any received today
 
-  ordersSnap.forEach(doc => {
-    const order = doc.data();
-    if (!sentPars[order.recipeId]) sentPars[order.recipeId] = 0;
-    sentPars[order.recipeId] += order.qty;
+  ordersSnap.forEach(docSnap => {
+    const order = docSnap.data();
+    const recipeId = order.recipeId;
+    if (!recipeId) return;
 
-    if (order.received) {
-      receivedPars[order.recipeId] = true;
+    const pans = Number(order.pans ?? 0);
+    if (!sentPars[recipeId]) sentPars[recipeId] = 0;
+    sentPars[recipeId] += pans;
+
+    if (order.received || order.status === "received") {
+      receivedPars[recipeId] = true;
     }
   });
 
+  // ✅ Filter recipes so par = targetPar - sentPans
+  const filteredRecipes = recipes
+    .map(recipe => {
+      let targetPar = Number(recipe.pars?.Ohana?.[guestCount] || 0);
+      let sentPans = Number(sentPars[recipe.id] || 0);
+      let remainingPar = targetPar - sentPans;
+
+      return {
+        ...recipe,
+        parQty: remainingPar
+      };
+    })
+    .filter(r => r.parQty > 0); // hide items with 0 or less remaining
+
   // ✅ Cache
-  if (!window.startingCache) window.startingCache = {};
-  window.startingCache["Ohana"] = { recipes, guestCount, sentPars, receivedPars };
+  window.startingCache = window.startingCache || {};
+  window.startingCache["Ohana"] = { recipes: filteredRecipes, guestCount, sentPars, receivedPars };
 
   renderStartingStatus("Ohana", window.startingCache["Ohana"]);
 };
+
+
 //**CHAT */
 function getHawaiiTimestampRange() {
   const now = new Date();

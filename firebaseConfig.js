@@ -1,4 +1,4 @@
-// ✅ firebaseconfig.js (with FirestoreSettings.cache)
+// ✅ firebaseconfig.js (with FirestoreSettings.cache + long-polling fallback)
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-app.js";
 import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-analytics.js";
@@ -18,7 +18,7 @@ import {
   Timestamp,
   orderBy,
   limit,
-   deleteDoc // ⬅️ ADD THIS
+  deleteDoc // ⬅️ already added
 } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore.js";
 
 // ✅ Firebase configuration
@@ -36,9 +36,11 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const analytics = getAnalytics(app);
 
-// ✅ Initialize Firestore with cache enabled
+// ✅ Initialize Firestore with persistent cache + long-polling fallback
 const db = initializeFirestore(app, {
-  localCache: "persistent" // ✅ NEW recommended way to enable offline persistence
+  localCache: "persistent", // offline persistence
+  experimentalAutoDetectLongPolling: true, // automatically switch if streaming is blocked
+  useFetchStreams: false // helps avoid QUIC/stream errors on some networks
 });
 
 // ✅ Export everything needed
@@ -58,5 +60,5 @@ export {
   Timestamp,
   orderBy,
   limit,
-   deleteDoc // ⬅️ ADD THIS
+  deleteDoc
 };
