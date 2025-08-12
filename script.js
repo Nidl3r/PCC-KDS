@@ -4960,6 +4960,9 @@ function showLoading(targetSelector, message = "Loading...") {
 
 //**LUNCH */
 
+// 🧠 Persist totals by itemId for lunch
+window.mainLunchTotals = window.mainLunchTotals || {};
+
 window.loadMainKitchenLunch = async function () {
   const tableBody = document.querySelector(".main-lunch-table tbody");
   tableBody.innerHTML = "";
@@ -5003,7 +5006,6 @@ window.loadMainKitchenLunch = async function () {
   renderMainLunchRows(window.mainLunchItemList);
 };
 
-
 window.renderMainLunchRows = function (items) {
   const tableBody = document.querySelector(".main-lunch-table tbody");
   tableBody.innerHTML = "";
@@ -5014,20 +5016,50 @@ window.renderMainLunchRows = function (items) {
     row.dataset.itemType = item.type;
     row.dataset.category = item.category?.toLowerCase() || "";
 
+    const savedQty = window.mainLunchTotals?.[item.id];
+    const val = (savedQty ?? "").toString();
+
     row.innerHTML = `
       <td>${item.name}</td>
       <td>${item.uom}</td>
       <td>
-        <span class="lunch-total">0</span>
-        <input class="lunch-input" type="number" min="0" value="0" style="width: 60px; margin-left: 6px;" />
-        <button onclick="addToLunchQty(this)" style="margin-left: 6px;">Add</button>
+        <input
+          class="lunch-input"
+          type="text"
+          inputmode="decimal"
+          value="${val}"
+          data-item-id="${item.id}"
+          style="width: 80px; margin-left: 6px; text-align: right;"
+          placeholder="0"
+        />
       </td>
       <td><button onclick="sendSingleMainLunch(this)">Send</button></td>
     `;
 
+    // Normalize on Enter/blur and save to cache
+    const input = row.querySelector(".lunch-input");
+    const updateCacheFromInput = () => {
+      const v = normalizeQtyInputValue(input); // math eval + normalization
+      window.mainLunchTotals[item.id] = Number.isFinite(v) ? v : "";
+    };
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        updateCacheFromInput();
+        input.select?.();
+      }
+    });
+    input.addEventListener("blur", updateCacheFromInput);
+
     tableBody.appendChild(row);
   });
+
+  // 🔌 Enable math (1+1, 2*3, 10/4, etc.)
+  enableMathOnInputs(".main-lunch-table .lunch-input", document);
 };
+
+// ❌ Remove the old addToLunchQty — no longer needed
+// window.addToLunchQty = ...  ← delete this function
 
 window.filterMainLunch = function () {
   const searchInput = document.getElementById("mainLunchSearch").value.trim().toLowerCase();
@@ -5046,31 +5078,20 @@ window.filterMainLunch = function () {
   renderMainLunchRows(filtered);
 };
 
-window.addToLunchQty = function (button) {
-  const row = button.closest("tr");
-  const input = row.querySelector(".lunch-input");
-  const span = row.querySelector(".lunch-total");
-  const addedQty = Number(input.value);
-  const currentQty = Number(span.textContent);
-
-  if (!isNaN(addedQty) && addedQty > 0) {
-    span.textContent = currentQty + addedQty;
-    input.value = "0";
-  }
-};
-
 window.sendSingleMainLunch = async function (button) {
   const row = button.closest("tr");
-  const span = row.querySelector(".lunch-total");
   const input = row.querySelector(".lunch-input");
-  const qty = Number(span.textContent);
+  const itemId = row.dataset.itemId;
 
-  if (qty <= 0) {
-    alert("Please add a quantity first.");
+  // Ensure last-minute normalization (handles unblurred "1+1")
+  const v = normalizeQtyInputValue(input);
+  const qty = Number.isFinite(v) ? v : Number(window.mainLunchTotals?.[itemId] || 0);
+
+  if (!Number.isFinite(qty) || qty <= 0) {
+    alert("Please enter a valid quantity first.");
     return;
   }
 
-  const itemId = row.dataset.itemId;
   const item = window.mainLunchItemList.find(i => i.id === itemId);
   const today = getTodayDate();
 
@@ -5084,11 +5105,11 @@ window.sendSingleMainLunch = async function (button) {
   };
 
   await addDoc(collection(db, "lunch"), lunchData);
-  console.log(`✅ Sent lunch to 'lunch': ${qty} of ${item.name}`);
+  console.log(`✅ Sent lunch: ${qty} of ${item.name}`);
 
-  span.textContent = "0";
-  input.value = "0";
-
+  // Clear UI + cache
+  input.value = "";
+  window.mainLunchTotals[itemId] = "";
   const confirm = document.createElement("span");
   confirm.textContent = "Sent";
   confirm.style.color = "green";
@@ -5103,11 +5124,12 @@ window.sendAllMainLunch = async function () {
   let sentCount = 0;
 
   for (const row of rows) {
-    const span = row.querySelector(".lunch-total");
-    const qty = Number(span.textContent);
+    const input = row.querySelector(".lunch-input");
+    const itemId = row.dataset.itemId;
+    const v = normalizeQtyInputValue(input);
+    const qty = Number.isFinite(v) ? v : Number(window.mainLunchTotals?.[itemId] || 0);
 
-    if (qty > 0) {
-      const itemId = row.dataset.itemId;
+    if (Number.isFinite(qty) && qty > 0) {
       const item = window.mainLunchItemList.find(i => i.id === itemId);
 
       const lunchData = {
@@ -5120,14 +5142,17 @@ window.sendAllMainLunch = async function () {
       };
 
       await addDoc(collection(db, "lunch"), lunchData);
-      console.log(`📦 Sent ${qty} of ${item.name}`);
       sentCount++;
+
+      // clear UI + cache
+      input.value = "";
+      window.mainLunchTotals[itemId] = "";
     }
   }
 
   if (sentCount > 0) {
-    alert(`✅ ${sentCount} lunch entries recorded for Main Kitchen.`);
+    alert(`✅ ${sentCount} lunch entr${sentCount === 1 ? "y" : "ies"} recorded for Main Kitchen.`);
   } else {
-    alert("⚠️ No lunch entries with quantity > 0 found.");
+    alert("⚠️ No valid lunch quantities found.");
   }
 };
