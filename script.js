@@ -616,6 +616,7 @@ let previousAddonOrders = [];
 function listenToAddonOrders() {
   const ordersRef = collection(db, "orders");
 
+  // listen to all add-on orders that are actionable in the kitchen
   const addonQuery = query(
     ordersRef,
     where("type", "==", "addon"),
@@ -623,13 +624,41 @@ function listenToAddonOrders() {
   );
 
   onSnapshot(addonQuery, (snapshot) => {
-    const orders = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    console.log("📦 Snapshot received:", orders.length, "orders");
+    // raw docs
+    const all = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-    // ✅ Render all orders for the kitchen
-    renderKitchen(orders);
+    // 🔒 keep to the four venues we care about
+    const allowedVenues = new Set(["Aloha", "Gateway", "Ohana", "Concessions"]);
 
-    const currentIds = orders.map(o => o.id);
+    // 🗓️ only show today's orders (works even if a doc has no 'date' field)
+    const todayStr = getTodayDate();                // "YYYY-MM-DD" in Hawaii time
+    const { start, end } = getHawaiiTimestampRange(); // Timestamp range (HST)
+
+    const todays = all.filter(o => {
+      if (!allowedVenues.has(o.venue)) return false;
+
+      const matchByDateField = o.date === todayStr;
+
+      let matchByTimestamp = false;
+      try {
+        const ts = o.timestamp?.toDate?.();
+        if (ts) {
+          const startJS = start.toDate();
+          const endJS   = end.toDate();
+          matchByTimestamp = ts >= startJS && ts < endJS;
+        }
+      } catch { /* ignore */ }
+
+      return matchByDateField || matchByTimestamp;
+    });
+
+    console.log("📦 Kitchen add-ons (today):", todays.length);
+
+    // ✅ Render today's kitchen add-ons
+    renderKitchen(todays);
+
+    // 🔔 Deletion + update notifications use the filtered list
+    const currentIds = todays.map(o => o.id);
     const deletedOrders = previousAddonOrders.filter(o => !currentIds.includes(o.id));
 
     if (deletedOrders.length > 0) {
@@ -637,22 +666,22 @@ function listenToAddonOrders() {
     }
 
     deletedOrders.forEach(deleted => {
-      console.log("🔔 Notifying deletion of:", deleted.item);
       showMainKitchenNotif(`🗑️ Order deleted: ${deleted.item}`, 4000, "info");
     });
 
     snapshot.docChanges().forEach(change => {
-      const data = change.doc.data();
       if (change.type === "modified") {
+        const data = change.doc.data();
         console.log("✏️ Order updated:", data.item);
         showMainKitchenNotif(`✏️ Order updated: ${data.item}`, 4000, "info");
       }
     });
 
     // ✅ Update cache after everything
-    previousAddonOrders = orders;
+    previousAddonOrders = todays;
   });
 }
+
 
 window.sendKitchenOrder = async function(orderId, button) {
   let rowRemoved = false;
@@ -3586,6 +3615,7 @@ concessionCategorySelect?.addEventListener("change", () => {
 });
 
 // ✅ Send concession add-on order
+// ✅ Send concession add-on order
 window.sendConcessionOrder = async function (button) {
   const itemSelect = document.getElementById("concessionItem");
   const qtyInput = document.getElementById("concessionQty");
@@ -3593,12 +3623,12 @@ window.sendConcessionOrder = async function (button) {
 
   const recipeNo = itemSelect.value;
   const notes = notesInput?.value?.trim() || "";
-const qty = parseFloat(qtyInput.value || 0);
+  const qty = parseFloat(qtyInput.value || 0);
 
   if (!recipeNo || isNaN(qty) || qty <= 0) {
-  alert("Please select an item and enter a valid quantity.");
-  return;
-}
+    alert("Please select an item and enter a valid quantity.");
+    return;
+  }
 
   try {
     const recipeSnapshot = await getDocs(
@@ -3612,22 +3642,28 @@ const qty = parseFloat(qtyInput.value || 0);
 
     const recipeData = recipeSnapshot.docs[0].data();
 
-    // 🔒 Only restrict quantity if it's HOTFOODS
     if (qty > 1 && recipeData.category?.toUpperCase() === "HOTFOODS") {
       alert("⚠️ HOTFOODS items must be ordered one at a time.");
       return;
     }
 
+    // ✅ align with other venues
+    const unitCost = Number(recipeData.cost || 0);
+    const totalCost = parseFloat((unitCost * qty).toFixed(2));
+
     const order = {
       item: recipeData.description || recipeNo,
-      qty: qty,
+      qty,
       status: "open",
       venue: "Concessions",
       station: recipeData.station || "Unknown",
-      recipeNo: recipeNo,
+      recipeNo,
       cookTime: recipeData.cookTime || 0,
-      notes: notes,
+      notes,
       uom: recipeData.uom || "ea",
+      type: "addon",                // 👈 REQUIRED for kitchen listener
+      date: getTodayDate(),         // 👈 so today filters work
+      totalCost,                    // 👈 shows up in accounting
       timestamp: serverTimestamp(),
     };
 
@@ -3642,6 +3678,7 @@ const qty = parseFloat(qtyInput.value || 0);
     alert("❌ Failed to send order.");
   }
 };
+
 
 
 // ✅ Listen to concession open orders
