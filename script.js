@@ -3265,6 +3265,24 @@ function renderOhanaTable(orders) {
 window.listenToOhanaOrders = listenToOhanaOrders;
 
 
+// ✅ Editable qty overrides (persisted in memory per tab + row key) for accounting
+window.accountingQtyOverrides = {
+  production: new Map(),
+  productionShipments: new Map(),
+  waste: new Map(),
+  lunch: new Map()
+};
+
+function getAcctQty(tab, key, fallback) {
+  const v = window.accountingQtyOverrides[tab]?.get(key);
+  return (typeof v === "number" && !Number.isNaN(v)) ? v : fallback;
+}
+
+function setAcctQty(tab, key, value) {
+  if (!window.accountingQtyOverrides[tab]) window.accountingQtyOverrides[tab] = new Map();
+  const v = Number(value);
+  if (!Number.isNaN(v)) window.accountingQtyOverrides[tab].set(key, v);
+}
 
 
 
@@ -4201,13 +4219,35 @@ window.loadProductionSummary = async function () {
   for (const recipeNo of recipeKeyList) {
     const item = summaryMap.get(recipeNo);
     const tr = document.createElement("tr");
-    tr.innerHTML = `
-      <td>${item.submenuCode}</td>
-      <td>${item.dishCode}</td>
-      <td>${item.recipeNo}</td>
-      <td>${item.description}</td>
-      <td>${item.total}</td>
-    `;
+  const prodKey = item.recipeNo; // unique enough for production rows
+const prodQty = getAcctQty("production", prodKey, Number(item.total) || 0);
+
+tr.innerHTML = `
+  <td>${item.submenuCode}</td>
+  <td>${item.dishCode}</td>
+  <td>${item.recipeNo}</td>
+  <td>${item.description}</td>
+  <td>
+    <input
+      type="number"
+      step="0.01"
+      min="0"
+      class="acct-qty-input"
+      data-tab="production"
+      data-key="${prodKey}"
+      value="${prodQty}"
+      style="width: 90px; text-align: right;"
+    />
+  </td>
+`;
+// Attach once per render
+tbody.addEventListener("input", (e) => {
+  const el = e.target;
+  if (!el.classList.contains("acct-qty-input")) return;
+  setAcctQty(el.dataset.tab, el.dataset.key, el.value);
+});
+
+
     tbody.appendChild(tr);
   }
 };
@@ -4219,27 +4259,30 @@ let currentVenueCode = "b001"; // 🧭 Default venue
 
 window.copyProductionSummaryToClipboard = function () {
   const table = document.getElementById("productionTable");
-  if (!table) {
-    alert("Production Summary Table not found.");
-    return;
-  }
+  if (!table) return alert("Production Summary Table not found.");
 
   let tsv = "";
-  const rows = table.querySelectorAll("tbody tr"); // ✅ Only target <tbody> rows (skip headers)
+  const rows = table.querySelectorAll("tbody tr");
 
   rows.forEach(row => {
     const cells = row.querySelectorAll("td");
-    const rowData = Array.from(cells).map(cell => cell.innerText.trim());
-    tsv += rowData.join("\t") + "\n";
+
+    // columns: submenu, dish, recipeNo, description, qty(input)
+    const submenu = cells[0]?.innerText.trim() ?? "";
+    const dish = cells[1]?.innerText.trim() ?? "";
+    const recipeNo = cells[2]?.innerText.trim() ?? "";
+    const desc = cells[3]?.innerText.trim() ?? "";
+    const qtyInput = cells[4]?.querySelector("input");
+    const qty = qtyInput ? qtyInput.value : (cells[4]?.innerText.trim() ?? "");
+
+    tsv += [submenu, dish, recipeNo, desc, qty].join("\t") + "\n";
   });
 
   navigator.clipboard.writeText(tsv)
-    .then(() => alert("Copied to clipboard! You can now paste it into Excel."))
-    .catch(err => {
-      console.error("Failed to copy:", err);
-      alert("Copy failed. Try again.");
-    });
+    .then(() => alert("Copied to clipboard!"))
+    .catch(() => alert("Copy failed. Try again."));
 };
+
 
 // 🔁 Venue map
 const venueNames = {
@@ -4361,17 +4404,16 @@ window.loadVenueShipment = function (venueCode) {
     s => (s.venueCode || "").toLowerCase() === venueCode
   );
 
+  // Aggregate by recipe + description (display key)
   const rows = {};
   shipments.forEach(item => {
     const recipeNo = item.recipeNo || "UNKNOWN";
     const description = item.description || "No Description";
-    const type = item.type || "";
-
-    // ✅ Ensure correct quantity based on type
     const qty = Number(item.quantity || 0);
-    const key = `${recipeNo}__${description}`;
-    if (!rows[key]) rows[key] = { recipeNo, description, quantity: 0 };
-    rows[key].quantity += qty;
+
+    const displayKey = `${recipeNo}__${description}`; // for grouping/rows
+    if (!rows[displayKey]) rows[displayKey] = { recipeNo, description, quantity: 0 };
+    rows[displayKey].quantity += qty;
   });
 
   const section = document.createElement("div");
@@ -4408,15 +4450,38 @@ window.loadVenueShipment = function (venueCode) {
     `;
     body.appendChild(emptyRow);
   } else {
-    keys.forEach(key => {
-      const { recipeNo, description, quantity } = rows[key];
+    keys.forEach(displayKey => {
+      const { recipeNo, description, quantity } = rows[displayKey];
+
+      // Use a stable override key that won't collide across venues
+      const overrideKey = `${venueCode}__${recipeNo}`;
+      const value = getAcctQty("productionShipments", overrideKey, Number(quantity) || 0);
+
       const tr = document.createElement("tr");
       tr.innerHTML = `
         <td>${recipeNo}</td>
         <td>${description}</td>
-        <td>${quantity}</td>
+        <td>
+          <input
+            type="number"
+            step="0.01"
+            min="0"
+            class="acct-qty-input"
+            data-tab="productionShipments"
+            data-key="${overrideKey}"
+            value="${value}"
+            style="width: 90px; text-align:right;"
+          />
+        </td>
       `;
       body.appendChild(tr);
+    });
+
+    // Delegate input → save overrides
+    body.addEventListener("input", (e) => {
+      const el = e.target;
+      if (!el.classList.contains("acct-qty-input")) return;
+      setAcctQty(el.dataset.tab, el.dataset.key, el.value);
     });
   }
 
@@ -4424,36 +4489,33 @@ window.loadVenueShipment = function (venueCode) {
   container.appendChild(section);
 };
 
+
 // 📋 Copy current venue shipment table
 window.copyCurrentVenueShipmentToClipboard = function () {
   const table = document.querySelector("#singleVenueShipmentContainer table");
   if (!table) {
-    alert("No table to copy.");
+    alert("No table found.");
     return;
   }
 
   let tsv = "";
-  const rows = table.querySelectorAll("tbody tr"); // ✅ Only body rows (skip headers)
+  const rows = table.querySelectorAll("tbody tr");
 
   rows.forEach(row => {
-    const cells = row.querySelectorAll("td");
-    const rowData = Array.from(cells).map(cell => cell.innerText.trim());
-    if (rowData.length > 0) {
-      tsv += rowData.join("\t") + "\n";
-    }
+    const tds = row.querySelectorAll("td");
+    if (tds.length < 3) return; // skip "No items" row
+
+    const recipeNo = tds[0]?.innerText.trim() ?? "";
+    const desc = tds[1]?.innerText.trim() ?? "";
+    const qtyInput = tds[2]?.querySelector("input");
+    const qty = qtyInput ? qtyInput.value : (tds[2]?.innerText.trim() ?? "");
+
+    tsv += [recipeNo, desc, qty].join("\t") + "\n";
   });
 
-  if (!tsv.trim()) {
-    alert("Nothing to copy — table is empty.");
-    return;
-  }
-
   navigator.clipboard.writeText(tsv)
-    .then(() => alert(`Copied ${venueNames[currentVenueCode] || "Current Venue"} data to clipboard!`))
-    .catch(err => {
-      console.error("Failed to copy:", err);
-      alert("Copy failed. Try again.");
-    });
+    .then(() => alert("Copied to clipboard!"))
+    .catch(() => alert("Copy failed. Try again."));
 };
 
 const venueCodes = {
@@ -4475,7 +4537,7 @@ window.loadAccountingWaste = async function () {
   const dd = String(today.getDate()).padStart(2, '0');
   const localToday = `${yyyy}-${mm}-${dd}`;
 
-  // 🔄 1. Load all recipes and store in a map
+  // 1) Load all recipes and store in a map
   const recipesSnapshot = await getDocs(collection(db, "recipes"));
   const recipeMap = new Map();
   recipesSnapshot.forEach(doc => {
@@ -4485,7 +4547,7 @@ window.loadAccountingWaste = async function () {
     }
   });
 
-  // 🔄 2. Load all ingredients and store in a map
+  // 2) Load all ingredients and store in a map
   const ingredientsSnapshot = await getDocs(collection(db, "ingredients"));
   const ingredientMap = new Map();
   ingredientsSnapshot.forEach(doc => {
@@ -4495,13 +4557,15 @@ window.loadAccountingWaste = async function () {
     }
   });
 
-  // 📦 3. Load waste entries for today
+  // 3) Load waste entries for today
   const wasteSnapshot = await getDocs(
     query(collection(db, "waste"), orderBy("timestamp", "desc"))
   );
 
-  for (const doc of wasteSnapshot.docs) {
-    const data = doc.data();
+  let rendered = 0;
+
+  for (const docSnap of wasteSnapshot.docs) {
+    const data = docSnap.data();
     const rawDate = data.date || "";
     if (rawDate !== localToday) continue;
 
@@ -4509,10 +4573,14 @@ window.loadAccountingWaste = async function () {
     const venue = data.venue || "";
     const locationCode = venueCodes[venue] || venue;
     const description = data.item || "";
-    const quantity = data.qty || 0;
+    const quantity = Number(data.qty || 0);
 
     const descKey = description.toLowerCase();
     let recipeNoOrItemNo = recipeMap.get(descKey) || ingredientMap.get(descKey) || "";
+
+    // 👉 Stable override key so edits persist while the page is open
+    const overrideKey = `${rawDate}__${locationCode}__${recipeNoOrItemNo || descKey}`;
+    const value = getAcctQty("waste", overrideKey, quantity);
 
     const row = document.createElement("tr");
     row.innerHTML = `
@@ -4520,14 +4588,36 @@ window.loadAccountingWaste = async function () {
       <td>${locationCode}</td>
       <td>${recipeNoOrItemNo}</td>
       <td>${description}</td>
-      <td>${quantity}</td>
+      <td>
+        <input
+          type="number"
+          step="0.01"
+          min="0"
+          class="acct-qty-input"
+          data-tab="waste"
+          data-key="${overrideKey}"
+          value="${value}"
+          style="width: 90px; text-align:right;"
+        />
+      </td>
     `;
     tableBody.appendChild(row);
+    rendered++;
+  }
+
+  // Delegate input → save overrides (attach once per render)
+  tableBody.addEventListener("input", (e) => {
+    const el = e.target;
+    if (!el.classList.contains("acct-qty-input")) return;
+    setAcctQty(el.dataset.tab, el.dataset.key, el.value);
+  });
+
+  if (rendered === 0) {
+    const empty = document.createElement("tr");
+    empty.innerHTML = `<td colspan="5" style="text-align:center; font-style:italic; color:gray;">No waste entries for today</td>`;
+    tableBody.appendChild(empty);
   }
 };
-
-
-
 window.copyWasteTableToClipboard = function () {
   const table = document.getElementById("wasteTable");
   if (!table) {
@@ -4540,8 +4630,18 @@ window.copyWasteTableToClipboard = function () {
 
   rows.forEach(row => {
     const cells = row.querySelectorAll("td");
-    const rowData = Array.from(cells).map(cell => cell.innerText.trim());
-    tsv += rowData.join("\t") + "\n";
+    if (cells.length < 5) return; // skip "No entries" row
+
+    const date = cells[0]?.innerText.trim() ?? "";
+    const location = cells[1]?.innerText.trim() ?? "";
+    const code = cells[2]?.innerText.trim() ?? "";
+    const description = cells[3]?.innerText.trim() ?? "";
+
+    // ⬇️ Get the value from the input if present
+    const qtyInput = cells[4]?.querySelector("input");
+    const qty = qtyInput ? qtyInput.value : (cells[4]?.innerText.trim() ?? "");
+
+    tsv += [date, location, code, description, qty].join("\t") + "\n";
   });
 
   navigator.clipboard.writeText(tsv)
@@ -4556,6 +4656,17 @@ window.copyWasteTableToClipboard = function () {
 async function loadLunchAccountingTable() {
   const tbody = document.querySelector("#lunchTable tbody");
   tbody.innerHTML = "";
+
+  // 🔹 Local date formatter
+  function formatDateLocal(dateStr) {
+    const parts = dateStr.split("-");
+    if (parts.length !== 3) return dateStr;
+    const year = parseInt(parts[0], 10);
+    const month = parseInt(parts[1], 10) - 1;
+    const day = parseInt(parts[2], 10);
+    const localDate = new Date(year, month, day);
+    return `${localDate.getMonth() + 1}/${localDate.getDate()}/${localDate.getFullYear()}`;
+  }
 
   // 🥄 Preload recipes and ingredients
   const recipeSnapshot = await getDocs(collection(db, "recipes"));
@@ -4581,43 +4692,58 @@ async function loadLunchAccountingTable() {
   const entries = snapshot.docs.map(doc => doc.data());
 
   entries.forEach(entry => {
-    // 🗓 Format date
     let formattedDate = "";
+    let isoDateKey = "";
+
     if (typeof entry.date === "string") {
       formattedDate = formatDateLocal(entry.date);
+      isoDateKey = entry.date;
     } else if (entry.date instanceof Timestamp || (entry.date?.seconds && entry.date?.nanoseconds)) {
       const jsDate = entry.date.toDate ? entry.date.toDate() : new Date(entry.date.seconds * 1000);
       formattedDate = `${jsDate.getMonth() + 1}/${jsDate.getDate()}/${jsDate.getFullYear()}`;
+      const yyyy = jsDate.getFullYear();
+      const mm = String(jsDate.getMonth() + 1).padStart(2, "0");
+      const dd = String(jsDate.getDate()).padStart(2, "0");
+      isoDateKey = `${yyyy}-${mm}-${dd}`;
     }
 
-    // 🆔 Get recipeNo or itemNo
     const description = entry.item || "";
     const descKey = description.toLowerCase();
     const itemNo = recipeMap.get(descKey) || ingredientMap.get(descKey) || "";
+
+    const qty = Number(entry.qty || 0);
+    const uom = entry.uom || "ea";
+
+    const overrideKey = `${isoDateKey}__${itemNo || descKey}`;
+    const value = getAcctQty("lunch", overrideKey, qty);
 
     const row = document.createElement("tr");
     row.innerHTML = `
       <td>${formattedDate}</td>
       <td>${itemNo}</td>
       <td>${description}</td>
-      <td>${entry.qty || 0}</td>
-      <td>${entry.uom || "ea"}</td>
+      <td>
+        <input
+          type="number"
+          step="0.01"
+          min="0"
+          class="acct-qty-input"
+          data-tab="lunch"
+          data-key="${overrideKey}"
+          value="${value}"
+          style="width: 90px; text-align:right;"
+        />
+      </td>
+      <td>${uom}</td>
     `;
     tbody.appendChild(row);
   });
-}
 
-function formatDateLocal(dateStr) {
-  // Split the YYYY-MM-DD string manually
-  const parts = dateStr.split("-");
-  if (parts.length !== 3) return dateStr;
-
-  const year = parseInt(parts[0], 10);
-  const month = parseInt(parts[1], 10) - 1; // JS months are 0-based
-  const day = parseInt(parts[2], 10);
-
-  const localDate = new Date(year, month, day); // 👈 Local time
-  return `${localDate.getMonth() + 1}/${localDate.getDate()}/${localDate.getFullYear()}`;
+  tbody.addEventListener("input", (e) => {
+    const el = e.target;
+    if (!el.classList.contains("acct-qty-input")) return;
+    setAcctQty(el.dataset.tab, el.dataset.key, el.value);
+  });
 }
 
 
@@ -4630,16 +4756,21 @@ window.copyLunchTableToClipboard = function () {
     return;
   }
 
-  // Build tab-delimited string
-  const text = rows
-    .map(row =>
-      Array.from(row.cells)
-        .map(cell => cell.textContent.trim())
-        .join("\t")
-    )
-    .join("\n");
+  // Build tab-delimited string (Date, ItemNo, Description, Qty, UOM)
+  const text = rows.map(row => {
+    const cells = row.querySelectorAll("td");
+    const date = cells[0]?.innerText.trim() ?? "";
+    const itemNo = cells[1]?.innerText.trim() ?? "";
+    const desc = cells[2]?.innerText.trim() ?? "";
 
-  // Copy to clipboard
+    // 👇 Qty from input if present
+    const qtyInput = cells[3]?.querySelector("input");
+    const qty = qtyInput ? qtyInput.value : (cells[3]?.innerText.trim() ?? "");
+
+    const uom = cells[4]?.innerText.trim() ?? "ea";
+    return [date, itemNo, desc, qty, uom].join("\t");
+  }).join("\n");
+
   navigator.clipboard.writeText(text).then(() => {
     alert("✅ Lunch table (without headers) copied to clipboard.");
   }).catch(err => {
