@@ -51,6 +51,15 @@ const map = {
   accounting: "Accounting"
 };
 
+// put this near your startup code, before loadAccountingWaste runs
+window.venueCodes = {
+  Aloha: "B001",
+  Ohana: "B002",
+  Gateway: "B003",
+  Concessions: "C002",
+  "Main Kitchen": "W002"
+};
+
   window.currentVenue = map[val] || "Main Kitchen";
   document.getElementById("currentVenueLabel").innerText = window.currentVenue;
 
@@ -4619,6 +4628,13 @@ tbody.addEventListener("input", (e) => {
   }
 };
 
+function formatDateLocal(dateString) {
+  // Expecting YYYY-MM-DD, split manually to avoid UTC offset issues
+  const [year, month, day] = dateString.split("-").map(Number);
+  const date = new Date(year, month - 1, day); // Local time
+  return `${month}/${day}/${year}`;
+}
+
 
 
 
@@ -4898,55 +4914,82 @@ window.loadAccountingWaste = async function () {
   const tableBody = document.querySelector("#wasteTable tbody");
   tableBody.innerHTML = "";
 
-  const today = new Date();
-  const yyyy = today.getFullYear();
-  const mm = String(today.getMonth() + 1).padStart(2, '0');
-  const dd = String(today.getDate()).padStart(2, '0');
-  const localToday = `${yyyy}-${mm}-${dd}`;
+  // Use the app's Hawaii-aware helpers
+  const todayStr = getTodayDate();                  // "YYYY-MM-DD" in HST
+  const { start, end } = getHawaiiTimestampRange(); // Firestore Timestamps (HST day range)
 
-  // 1) Load all recipes and store in a map
+  // 1) Load all recipes -> map: description(lower) -> recipeNo
   const recipesSnapshot = await getDocs(collection(db, "recipes"));
   const recipeMap = new Map();
-  recipesSnapshot.forEach(doc => {
-    const data = doc.data();
-    if (data.description) {
-      recipeMap.set(data.description.toLowerCase(), data.recipeNo);
-    }
+  recipesSnapshot.forEach(docSnap => {
+    const d = docSnap.data();
+    if (d.description) recipeMap.set(d.description.toLowerCase(), d.recipeNo);
   });
 
-  // 2) Load all ingredients and store in a map
+  // 2) Load all ingredients -> map: itemName(lower) -> itemNo
   const ingredientsSnapshot = await getDocs(collection(db, "ingredients"));
   const ingredientMap = new Map();
-  ingredientsSnapshot.forEach(doc => {
-    const data = doc.data();
-    if (data.itemName) {
-      ingredientMap.set(data.itemName.toLowerCase(), data.itemNo);
-    }
+  ingredientsSnapshot.forEach(docSnap => {
+    const d = docSnap.data();
+    if (d.itemName) ingredientMap.set(d.itemName.toLowerCase(), d.itemNo);
   });
 
-  // 3) Load waste entries for today
+  // 3) Load waste entries (we'll filter to "today" and dedupe in code)
   const wasteSnapshot = await getDocs(
     query(collection(db, "waste"), orderBy("timestamp", "desc"))
   );
 
+  // Dedup key memory
+  const seen = new Set();
   let rendered = 0;
 
   for (const docSnap of wasteSnapshot.docs) {
     const data = docSnap.data();
-    const rawDate = data.date || "";
-    if (rawDate !== localToday) continue;
 
-    const formattedDate = formatDateLocal(rawDate);
-    const venue = data.venue || "";
-    const locationCode = venueCodes[venue] || venue;
+    // --- Keep only today's entries (supports both 'date' string and 'timestamp')
+    const hasDateStr = typeof data.date === "string" && data.date.length === 10;
+    const inDateStr = hasDateStr && data.date === todayStr;
+
+    let inTsRange = false;
+    try {
+      if (data.timestamp?.toDate) {
+        const t = data.timestamp.toDate();
+        const s = start.toDate();
+        const e = end.toDate();
+        inTsRange = t >= s && t < e;
+      }
+    } catch { /* ignore */ }
+
+    if (!inDateStr && !inTsRange) continue;
+
+    const rawDate = hasDateStr ? data.date : todayStr;  // fall back if missing
+    const formattedDate = formatDateLocal(rawDate);     // e.g., 8/11/2025
+
+const venue = data.venue || "";
+const locationCode = (window.venueCodes && window.venueCodes[venue]) ? window.venueCodes[venue] : venue;
+
+
+
     const description = data.item || "";
-    const quantity = Number(data.qty || 0);
-
     const descKey = description.toLowerCase();
-    let recipeNoOrItemNo = recipeMap.get(descKey) || ingredientMap.get(descKey) || "";
 
-    // 👉 Stable override key so edits persist while the page is open
-    const overrideKey = `${rawDate}__${locationCode}__${recipeNoOrItemNo || descKey}`;
+    const quantity = Number(data.qty || 0);
+    const recipeNoOrItemNo = recipeMap.get(descKey) || ingredientMap.get(descKey) || "";
+
+    // ---- Exact duplicate filter (date + venue + itemKey + qty)
+    const itemKey = (recipeNoOrItemNo || descKey).toString().toUpperCase();
+    const dupeKey = [
+      rawDate,
+      locationCode,
+      itemKey,
+      quantity.toFixed(2)
+    ].join("|");
+
+    if (seen.has(dupeKey)) continue;
+    seen.add(dupeKey);
+
+    // Persist editable overrides by a stable key
+    const overrideKey = `${rawDate}__${locationCode}__${itemKey}`;
     const value = getAcctQty("waste", overrideKey, quantity);
 
     const row = document.createElement("tr");
@@ -4972,12 +5015,12 @@ window.loadAccountingWaste = async function () {
     rendered++;
   }
 
-  // Delegate input → save overrides (attach once per render)
+  // Save overrides on edit
   tableBody.addEventListener("input", (e) => {
     const el = e.target;
     if (!el.classList.contains("acct-qty-input")) return;
     setAcctQty(el.dataset.tab, el.dataset.key, el.value);
-  });
+  }, { once: true }); // attach once per render
 
   if (rendered === 0) {
     const empty = document.createElement("tr");
@@ -4985,6 +5028,7 @@ window.loadAccountingWaste = async function () {
     tableBody.appendChild(empty);
   }
 };
+
 window.copyWasteTableToClipboard = function () {
   const table = document.getElementById("wasteTable");
   if (!table) {
