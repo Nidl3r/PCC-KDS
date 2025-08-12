@@ -1274,7 +1274,7 @@ window.loadAlohaStartingPar = async function () {
   const snapshot = await getDocs(q);
   const recipes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-  // 🔁 Load today's starting-par orders for Aloha
+  // 🔁 Today's starting-par orders for Aloha
   const ordersQuery = query(
     collection(db, "orders"),
     where("type", "==", "starting-par"),
@@ -1291,30 +1291,25 @@ window.loadAlohaStartingPar = async function () {
     const recipeId = order.recipeId;
     if (!recipeId) return;
 
-    // ✅ Sum by PANS (par unit), not lbs
     const pans = Number(order.pans ?? 0);
-    if (!sentPars[recipeId]) sentPars[recipeId] = 0;
-    sentPars[recipeId] += pans;
+    sentPars[recipeId] = (sentPars[recipeId] || 0) + pans;
 
     if (order.received || order.status === "received") {
       receivedPars[recipeId] = true;
     }
   });
 
-  // ✅ Build list with remaining par = targetPar - pansSent; hide when <= 0
-  const filteredRecipes = recipes
-    .map(recipe => {
-      const targetPar = Number(recipe.pars?.Aloha?.[guestCount] || 0);
-      const pansSent  = Number(sentPars[recipe.id] || 0);
-      const remainingPar = targetPar - pansSent;
-      return { ...recipe, parQty: remainingPar };
-    })
-    .filter(r => r.parQty > 0);
+  // ✅ Compute remaining = targetPar - pansSent (NO pre-filter here)
+  const computedRecipes = recipes.map(recipe => {
+    const targetPar = Number(recipe.pars?.Aloha?.[String(guestCount)] || 0); // ← stringify key
+    const pansSent  = Number(sentPars[recipe.id] || 0);
+    const remainingPar = targetPar - pansSent;
+    return { ...recipe, parQty: remainingPar, targetPar };
+  });
 
-  // ✅ Cache for renderStartingStatus (which now prefers recipe.parQty)
   window.startingCache = window.startingCache || {};
   window.startingCache["Aloha"] = {
-    recipes: filteredRecipes,
+    recipes: computedRecipes, // let the renderer decide visibility
     guestCount,
     sentPars,
     receivedPars
@@ -1323,11 +1318,12 @@ window.loadAlohaStartingPar = async function () {
   renderStartingStatus("Aloha", window.startingCache["Aloha"]);
 };
 
-
 window.renderStartingStatus = async function (venue, data) {
   const tbody = document.getElementById(`${venue.toLowerCase()}ParTableBody`);
-  const categoryFilter = document.getElementById(`${venue.toLowerCase()}-starting-category`).value;
-  const guestCount = data.guestCount;
+  if (!tbody) return;
+
+  const categoryFilter = document.getElementById(`${venue.toLowerCase()}-starting-category`)?.value || "";
+  const guestCount = Number(data?.guestCount || 0);
   tbody.innerHTML = "";
   let matchedCount = 0;
 
@@ -1343,28 +1339,28 @@ window.renderStartingStatus = async function (venue, data) {
   ));
 
   // Pending (sent but not received) in pans
-  const pendingPansByRecipe = new Map(); // recipeId -> pans
+  const pendingPansByRecipe = new Map();
   ordersSnapshot.forEach(docSnap => {
     const o = docSnap.data();
     const recipeId = o.recipeId;
     if (!recipeId) return;
+    if (o.received || o.status === "received") return;
     const pans = Number(o.pans ?? 0);
-    if (o.received || o.status === "received") return; // received doesn't count as pending
     if (pans > 0) {
       pendingPansByRecipe.set(recipeId, (pendingPansByRecipe.get(recipeId) || 0) + pans);
     }
   });
 
-  data.recipes.forEach(recipe => {
+  (data?.recipes || []).forEach(recipe => {
     const recipeId = recipe.id;
 
     // Category filter
-    if (categoryFilter && recipe.category?.toLowerCase() !== categoryFilter.toLowerCase()) return;
+    if (categoryFilter && (recipe.category || "").toLowerCase() !== categoryFilter.toLowerCase()) return;
 
-    // 1) Prefer precomputed remaining par (from loader), else compute from recipe.pars
+    // Prefer precomputed remaining (target - sent), else compute from pars
     let baseParPans;
     if (typeof recipe.parQty === "number") {
-      baseParPans = Number(recipe.parQty); // already (target - sent)
+      baseParPans = Number(recipe.parQty);
     } else {
       if (venue === "Concession") {
         baseParPans = Number(recipe.pars?.Concession?.default || 0);
@@ -1373,20 +1369,20 @@ window.renderStartingStatus = async function (venue, data) {
       }
     }
 
-    // 2) Pending pans not yet received (for the "Sent" column)
     const pendingPans = Number(pendingPansByRecipe.get(recipeId) || 0);
 
-    // 3) If we DIDN'T get a precomputed remaining par, subtract pending now.
+    // If we DIDN’T get precomputed remaining, subtract pending now
     const displayParPans = (typeof recipe.parQty === "number")
       ? baseParPans
       : Math.max(0, baseParPans - pendingPans);
 
-    // Hide if no par left to send
-    if (displayParPans <= 0) return;
+    // 🔴 OLD: if (displayParPans <= 0) return;
+    // 🟢 NEW: keep the row if there are unreceived pans
+    if (displayParPans <= 0 && pendingPans <= 0) return;
 
     const row = document.createElement("tr");
     row.innerHTML = `
-      <td>${recipe.description}</td>
+      <td>${recipe.description || recipe.recipeNo || recipeId}</td>
       <td>${displayParPans % 1 ? displayParPans.toFixed(2) : displayParPans}</td>
       <td>${pendingPans % 1 ? pendingPans.toFixed(2) : pendingPans}</td>
       <td>
@@ -1394,9 +1390,8 @@ window.renderStartingStatus = async function (venue, data) {
       </td>
     `;
 
-    // Receive handler
     if (pendingPans > 0) {
-      row.querySelector(".receive-btn").addEventListener("click", async (e) => {
+      row.querySelector(".receive-btn")?.addEventListener("click", async (e) => {
         const btn = e.currentTarget;
         await receiveStartingPar(venue, recipeId, btn);
       });
@@ -1408,7 +1403,6 @@ window.renderStartingStatus = async function (venue, data) {
 
   console.log(`✅ Rendered ${matchedCount} recipes for ${venue} with guest count ${guestCount}`);
 };
-
 
 
 
@@ -2050,41 +2044,61 @@ window.sendStartingPar = async function (recipeId, venue, sendQty) {
   }
 
   const recipeData = recipeSnap.data();
-  const panWeight = Number(recipeData.panWeight || 0);
-  const costPerLb = Number(recipeData.cost || 0);
-  const pans = Number(recipeData.pars?.[venue]?.[String(guestCount)] || 0);
+  const recipeNo    = (recipeData.recipeNo || recipeId).toUpperCase();
+  const costPerUnit = Number(recipeData.cost || 0);
+  const panWeight   = Number(recipeData.panWeight || 0);
 
-  // net = entered lbs - (pans * panWeight)
-  const netWeightRaw = Number(sendQty) - (pans * panWeight);
-  if (!Number.isFinite(netWeightRaw) || netWeightRaw <= 0) {
-    alert(`❌ Cannot send: Net weight would be ${Number.isFinite(netWeightRaw) ? netWeightRaw.toFixed(2) : "NaN"} lbs.`);
-    return;
+  const isConcessions = venue === "Concessions";
+
+  let orderData;
+
+  if (isConcessions) {
+    // 💡 Input is lbs for concessions
+    const grossLbs   = Number(sendQty);
+    const netWeight  = parseFloat(Math.max(0, grossLbs - panWeight).toFixed(2)); // (optional) pan tare
+    const totalCost  = parseFloat((netWeight * costPerUnit).toFixed(2));
+
+    orderData = {
+      type: "starting-par",
+      venue,
+      recipeId,
+      recipeNo,
+      sendQty: parseFloat(grossLbs.toFixed(2)),
+      netWeight,
+      totalCost,
+      date: today,
+      status: "sent",
+      sentAt: Timestamp.now(),
+      timestamp: Timestamp.now()
+    };
+  } else {
+    // 🍽️ Buffet venues: input is PANS sent
+    const pansSent  = Number(sendQty);
+    if (!Number.isFinite(pansSent) || pansSent <= 0) {
+      alert("❌ Please enter a valid number of pans.");
+      return;
+    }
+    const totalCost = parseFloat((pansSent * costPerUnit).toFixed(2));
+
+    orderData = {
+      type: "starting-par",
+      venue,
+      recipeId,
+      recipeNo,
+      pans: pansSent,            // ← store what we actually sent
+      qty: pansSent,             // (handy for simple sums)
+      totalCost,
+      date: today,
+      status: "sent",
+      sentAt: Timestamp.now(),
+      timestamp: Timestamp.now()
+    };
   }
 
-  const netWeight = parseFloat(netWeightRaw.toFixed(2));
-  const totalCost = parseFloat((netWeight * costPerLb).toFixed(2));
-  const recipeNo = (recipeData.recipeNo || recipeId).toUpperCase();
-
-  const orderData = {
-    type: "starting-par",
-    venue,
-    recipeId,
-    recipeNo,
-    sendQty: parseFloat(Number(sendQty).toFixed(2)),
-    pans,
-    panWeight,
-    netWeight,
-    costPerLb,
-    totalCost,
-    date: today,
-    status: "sent",
-    sentAt: Timestamp.now(),
-    timestamp: Timestamp.now()
-  };
-
   await addDoc(collection(db, "orders"), orderData);
-  console.log(`✅ Sent ${sendQty} lbs for ${recipeId} to ${venue} → Net: ${netWeight} lbs, Cost: $${totalCost.toFixed(2)}`);
+  console.log("✅ Starting-par sent:", orderData);
 };
+
 
 
 
@@ -2546,81 +2560,77 @@ window.sendAllMainWaste = async function () {
 
 //**Aloha Returns */
 
-// 🔁 Aloha Returns — only items RECEIVED TODAY (HST), no composite index needed
 window.loadAlohaReturns = async function () {
   const tableBody = document.querySelector(".aloha-returns-table tbody");
-  if (!tableBody) return;
   tableBody.innerHTML = "";
 
-  console.log("🔁 Loading Aloha Returns (today only, HST)…");
+  console.log("🔁 Loading Aloha Returns...");
 
-  // HST bounds for "today"
-  const { start, end } = getHawaiiTimestampRange(); // Firestore Timestamps for HST day
+  const todayStr = getTodayDate(); // "YYYY-MM-DD"
 
-  // 1) Orders received today → filter to Aloha + status:'received'
-  const ordersQ = query(
-    collection(db, "orders"),
-    where("receivedAt", ">=", start),
-    where("receivedAt", "<", end)
+  const ordersRef = collection(db, "orders");
+  const q = query(
+    ordersRef,
+    where("venue", "==", "Aloha"),
+    where("status", "==", "received")
   );
-  const ordersSnap = await getDocs(ordersQ);
+  const snapshot = await getDocs(q);
 
-  const todaysAlohaOrders = ordersSnap.docs
-    .map(d => ({ id: d.id, ...d.data() }))
-    .filter(o => o.venue === "Aloha" && o.status === "received");
-
-  if (todaysAlohaOrders.length === 0) {
-    console.log("📭 No orders received today for Aloha");
+  if (snapshot.empty) {
+    console.log("📭 No orders received for Aloha");
     return;
   }
 
-  // 2) Sum received qty per recipe (by recipeNo or recipeId)
-  const recipeQtyMap = {};
-  todaysAlohaOrders.forEach(order => {
-    const recipeKey = (order.recipeNo || order.recipeId || "").toUpperCase();
-    if (!recipeKey) return;
-    const qty = Number(order.qty ?? order.sendQty ?? 0);
-    recipeQtyMap[recipeKey] = (recipeQtyMap[recipeKey] || 0) + qty;
-  });
+  const todayOrders = snapshot.docs
+    .map(doc => ({ id: doc.id, ...doc.data() }))
+    .filter(order => order.date === todayStr);
 
-  // 3) Exclude anything already returned TODAY (query by returnedAt range → filter venue/status in JS)
-  const returnsQ = query(
-    collection(db, "returns"),
-    where("returnedAt", ">=", start),
-    where("returnedAt", "<", end)
+  const returnsSnapshot = await getDocs(
+    query(collection(db, "returns"), where("venue", "==", "Aloha"))
   );
-  const returnsSnap = await getDocs(returnsQ);
 
   const excludedRecipeKeys = new Set();
-  returnsSnap.forEach(d => {
-    const r = d.data();
-    const key = (r.recipeNo || r.recipeId || "").toUpperCase();
-    if (r.venue === "Aloha" && r.status === "returned" && key) {
+  returnsSnapshot.forEach(doc => {
+    const data = doc.data();
+    const key = (data.recipeNo || data.recipeId || "").toUpperCase();
+    const returnDate = data.date;
+    if (data.status === "returned" && key && returnDate === todayStr) {
       excludedRecipeKeys.add(key);
     }
   });
 
-  console.log("🚫 Excluded (already returned today):", Array.from(excludedRecipeKeys));
-  console.log(`📦 Found ${todaysAlohaOrders.length} Aloha orders received today`);
+  console.log("🚫 Excluded keys (from today's returns):", Array.from(excludedRecipeKeys));
+  console.log(`📦 Found ${todayOrders.length} Aloha orders received today`);
+  if (todayOrders.length === 0) return;
 
-  // 4) Resolve recipes → keep only those marked returnable (returns == "Yes") and not excluded
+  const recipeQtyMap = {};
+  todayOrders.forEach(order => {
+    const recipeKey = (order.recipeNo || order.recipeId || "").toUpperCase();
+    const qty = Number(order.qty ?? order.sendQty ?? 0);
+    if (!recipeKey) return;
+    recipeQtyMap[recipeKey] = (recipeQtyMap[recipeKey] || 0) + qty;
+  });
+
   const validRecipes = [];
-  for (const recipeKey in recipeQtyMap) {
-    if (excludedRecipeKeys.has(recipeKey)) {
-      console.log(`⛔ Skipping already returned recipe: ${recipeKey}`);
-      continue;
-    }
 
-    // Try by recipeNo first, fallback to doc id
+  for (const recipeKey in recipeQtyMap) {
     let recipeDoc = null;
-    const byNoSnap = await getDocs(
-      query(collection(db, "recipes"), where("recipeNo", "==", recipeKey))
+
+    // Try to find by recipeNo
+    const recipeQuery = query(
+      collection(db, "recipes"),
+      where("recipeNo", "==", recipeKey)
     );
-    if (!byNoSnap.empty) {
-      recipeDoc = byNoSnap.docs[0];
+    const recipeSnapshot = await getDocs(recipeQuery);
+
+    if (!recipeSnapshot.empty) {
+      recipeDoc = recipeSnapshot.docs[0];
     } else {
-      const fallback = await getDoc(doc(db, "recipes", recipeKey));
-      if (fallback.exists()) recipeDoc = fallback;
+      // Try to get by ID
+      const fallbackDoc = await getDoc(doc(db, "recipes", recipeKey));
+      if (fallbackDoc.exists()) {
+        recipeDoc = fallbackDoc;
+      }
     }
 
     if (!recipeDoc) {
@@ -2628,7 +2638,13 @@ window.loadAlohaReturns = async function () {
       continue;
     }
 
+    if (excludedRecipeKeys.has(recipeKey)) {
+      console.log(`⛔ Skipping already returned recipe: ${recipeKey}`);
+      continue;
+    }
+
     const recipe = recipeDoc.data();
+
     if (String(recipe.returns || "").toLowerCase() === "yes") {
       validRecipes.push({
         id: recipeDoc.id,
@@ -2646,22 +2662,26 @@ window.loadAlohaReturns = async function () {
     return;
   }
 
-  // 5) Render rows
-  validRecipes.forEach(r => {
+  validRecipes.forEach(recipe => {
     const row = document.createElement("tr");
-    row.dataset.recipeId = r.id;
+    row.dataset.recipeId = recipe.id;
+
     row.innerHTML = `
-      <td>${r.name}</td>
-      <td>${r.qty} ${r.uom}</td>
-      <td><input class="return-input" type="number" min="0" value="0" style="width: 60px;" /></td>
-      <td><button onclick="sendSingleReturn(this, '${r.id}')">Return</button></td>
+      <td>${recipe.name}</td>
+      <td>${recipe.qty} ${recipe.uom}</td>
+      <td>
+        <input class="return-input" type="number" min="0" value="0" style="width: 60px;" />
+      </td>
+      <td>
+        <button onclick="sendSingleReturn(this, '${recipe.id}')">Return</button>
+      </td>
     `;
+
     tableBody.appendChild(row);
   });
 
   console.log(`✅ Loaded ${validRecipes.length} returnable recipes`);
 };
-
 
 
 window.sendSingleReturn = async function (btn, recipeId) {
@@ -3524,18 +3544,16 @@ window.loadGatewayStartingPar = async function () {
   }
 
   const guestData = guestSnap.data();
-  console.log("📦 Full guest data:", guestData);
-
   const guestCount = Number(guestData?.Gateway || 0);
   document.getElementById("gatewayGuestInfo").textContent = `👥 Guest Count: ${guestCount}`;
 
-  // 🔍 Load Gateway recipes (venueCode b003)
+  // Recipes for Gateway (b003)
   const recipesRef = collection(db, "recipes");
   const q = query(recipesRef, where("venueCodes", "array-contains", "b003"));
   const snapshot = await getDocs(q);
   const recipes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-  // 🔁 Load today's starting-par orders for Gateway
+  // Today's starting-par orders for Gateway
   const ordersQuery = query(
     collection(db, "orders"),
     where("type", "==", "starting-par"),
@@ -3544,40 +3562,33 @@ window.loadGatewayStartingPar = async function () {
   );
   const ordersSnap = await getDocs(ordersQuery);
 
-  const sentPars = {};     // recipeId -> total pans sent today
+  const sentPars = {};     // recipeId -> total pans (includes pending)
   const receivedPars = {}; // recipeId -> true if any received today
 
   ordersSnap.forEach(docSnap => {
-    const order = docSnap.data();
-    const recipeId = order.recipeId;
-    if (!recipeId) return;
-
-    // ✅ Sum by PANS (par unit), not lbs
-    const pans = Number(order.pans ?? 0);
-    if (!sentPars[recipeId]) sentPars[recipeId] = 0;
-    sentPars[recipeId] += pans;
-
-    if (order.received || order.status === "received") {
-      receivedPars[recipeId] = true;
+    const o = docSnap.data();
+    const id = o.recipeId;
+    if (!id) return;
+    const pans = Number(o.pans ?? 0);
+    if (!sentPars[id]) sentPars[id] = 0;
+    sentPars[id] += pans;
+    if (o.received || o.status === "received") {
+      receivedPars[id] = true;
     }
   });
 
-  // ✅ Build list with remaining par = targetPar - pansSent; hide when <= 0
-  const filteredRecipes = recipes
-    .map(recipe => {
-      const targetPar = Number(recipe.pars?.Gateway?.[guestCount] || 0);
-      const pansSent = Number(sentPars[recipe.id] || 0);
-      const remainingPar = targetPar - pansSent;
-      return { ...recipe, parQty: remainingPar };
-    })
-    .filter(r => r.parQty > 0);
+  // Compute remaining = targetPar - sentPans  (do NOT filter here)
+  const computedRecipes = recipes.map(r => {
+    const targetPar = Number(r.pars?.Gateway?.[String(guestCount)] || 0); // ← stringify
+    const pansSent  = Number(sentPars[r.id] || 0);
+    return { ...r, parQty: targetPar - pansSent, targetPar };
+  });
 
-  // ✅ Cache for renderStartingStatus (which now uses recipe.parQty when present)
   window.startingCache = window.startingCache || {};
   window.startingCache["Gateway"] = {
-    recipes: filteredRecipes,
+    recipes: computedRecipes, // no pre-filter — let renderer decide
     guestCount,
-    sentPars,      // still handy if needed elsewhere
+    sentPars,
     receivedPars
   };
 
@@ -4402,7 +4413,7 @@ window.loadOhanaStartingPar = async function () {
   const snapshot = await getDocs(q);
   const recipes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-  // 🔁 Load today's starting-par orders for Ohana
+  // 🔁 Today's starting-par orders for Ohana
   const ordersQuery = query(
     collection(db, "orders"),
     where("type", "==", "starting-par"),
@@ -4411,8 +4422,8 @@ window.loadOhanaStartingPar = async function () {
   );
   const ordersSnap = await getDocs(ordersQuery);
 
-  const sentPars = {};    // recipeId -> total pans sent today
-  const receivedPars = {}; // recipeId -> true if any received today
+  const sentPars = {};      // recipeId -> total pans sent today (pending included)
+  const receivedPars = {};  // recipeId -> true if any received today
 
   ordersSnap.forEach(docSnap => {
     const order = docSnap.data();
@@ -4420,31 +4431,29 @@ window.loadOhanaStartingPar = async function () {
     if (!recipeId) return;
 
     const pans = Number(order.pans ?? 0);
-    if (!sentPars[recipeId]) sentPars[recipeId] = 0;
-    sentPars[recipeId] += pans;
+    sentPars[recipeId] = (sentPars[recipeId] || 0) + pans;
 
     if (order.received || order.status === "received") {
       receivedPars[recipeId] = true;
     }
   });
 
-  // ✅ Filter recipes so par = targetPar - sentPans
-  const filteredRecipes = recipes
-    .map(recipe => {
-      let targetPar = Number(recipe.pars?.Ohana?.[guestCount] || 0);
-      let sentPans = Number(sentPars[recipe.id] || 0);
-      let remainingPar = targetPar - sentPans;
+  // ✅ Compute remaining = targetPar - pansSent (no pre-filter here)
+  const computedRecipes = recipes.map(recipe => {
+    const targetPar   = Number(recipe.pars?.Ohana?.[String(guestCount)] || 0); // stringify key
+    const pansSent    = Number(sentPars[recipe.id] || 0);
+    const remainingPar = targetPar - pansSent;
+    return { ...recipe, parQty: remainingPar, targetPar };
+  });
 
-      return {
-        ...recipe,
-        parQty: remainingPar
-      };
-    })
-    .filter(r => r.parQty > 0); // hide items with 0 or less remaining
-
-  // ✅ Cache
+  // ✅ Cache for renderer
   window.startingCache = window.startingCache || {};
-  window.startingCache["Ohana"] = { recipes: filteredRecipes, guestCount, sentPars, receivedPars };
+  window.startingCache["Ohana"] = {
+    recipes: computedRecipes,  // let the renderer decide visibility
+    guestCount,
+    sentPars,
+    receivedPars
+  };
 
   renderStartingStatus("Ohana", window.startingCache["Ohana"]);
 };
