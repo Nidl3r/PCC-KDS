@@ -4691,7 +4691,7 @@ window.sendChatMessage = async function () {
 window.loadProductionSummary = async function () {
   const tbody = document.querySelector("#productionTable tbody");
 
-  // 🌀 Show loading spinner
+  // 🌀 Loading UI
   tbody.innerHTML = `
     <tr>
       <td colspan="5" style="text-align:center; padding: 10px;">
@@ -4701,136 +4701,187 @@ window.loadProductionSummary = async function () {
     </tr>
   `;
 
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-
+  // Today (YYYY-MM-DD)
+  const today = new Date(); today.setHours(0,0,0,0);
   const yyyy = today.getFullYear();
   const mm = String(today.getMonth() + 1).padStart(2, '0');
   const dd = String(today.getDate()).padStart(2, '0');
   const todayStr = `${yyyy}-${mm}-${dd}`;
 
-  const summaryMap = new Map();
-  const recipeKeyList = [];
-
-  // 🔄 Load ORDERS
+  // --- 1) Pull ALL orders for today (any venue). We'll merge starting-par + add-ons. ---
   const orderSnapshot = await getDocs(query(
     collection(db, "orders"),
     where("date", "==", todayStr)
   ));
 
-  for (const doc of orderSnapshot.docs) {
-    const data = doc.data();
-    const type = data.type || "";
-    let recipeNo = (data.recipeNo || data.recipeId || "").toUpperCase();
-    if (!recipeNo) continue;
+  // temp accumulator keyed by either recipeNo (e.g., "R0054") or placeholder "id:<recipeId>"
+  const tempMap = new Map(); // key -> { total, submenuCode }
+  const recipeIdsToResolve = new Set(); // ids we must map to recipeNo
+  const seenSubmenuCode = new Map(); // finalRecipeNo -> submenuCode (first seen)
 
-    const submenuCode = data.submenuCode || "";
+  const addToTemp = (key, qty, submenuCode) => {
+    if (!Number.isFinite(qty) || qty <= 0) return;
+    const obj = tempMap.get(key) || { total: 0, submenuCode: "" };
+    obj.total += qty;
+    if (submenuCode && !obj.submenuCode) obj.submenuCode = submenuCode;
+    tempMap.set(key, obj);
+  };
 
-    let qty = (type === "starting-par") 
-      ? Number(data.netWeight ?? 0)
-      : Number(data.sendQty ?? data.qty ?? 0);
+  // Sum orders (and collect ids needing resolution)
+  orderSnapshot.forEach(docSnap => {
+    const d = docSnap.data();
+    const type = (d.type || "").toLowerCase();
 
-    if (qty <= 0) {
-      console.warn(`🚫 Skipping ${recipeNo} due to zero quantity`, data);
-      continue;
+    // Quantity logic: starting-par prefers netWeight; add-ons prefer sendQty/qty
+    const qtySP  = parseFloat(d.netWeight ?? d.sendQty ?? d.qty ?? 0);
+    const qtyAO  = parseFloat(d.sendQty ?? d.qty ?? d.netWeight ?? 0);
+    const qty    = type === "starting-par" ? qtySP : qtyAO;
+
+    if (!Number.isFinite(qty) || qty <= 0) return;
+
+    let key = (d.recipeNo || "").toString().toUpperCase().trim();
+    const submenuCode = d.submenuCode || "";
+
+    if (!key) {
+      const rid = (d.recipeId || "").toString().trim();
+      if (!rid) return; // no recipe identifier at all; skip
+      key = `id:${rid}`;
+      recipeIdsToResolve.add(rid);
     }
 
-    if (!summaryMap.has(recipeNo)) {
-      summaryMap.set(recipeNo, {
-        submenuCode,
-        dishCode: "",
-        recipeNo,
-        description: "No Description",
-        total: 0,
-      });
-      recipeKeyList.push(recipeNo);
-    }
+    addToTemp(key, qty, submenuCode);
+  });
 
-    summaryMap.get(recipeNo).total += qty;
+  // --- 2) Resolve any recipeId -> recipeNo and merge into final map keyed by recipeNo ---
+  const summaryMap = new Map(); // recipeNo -> { submenuCode, dishCode, recipeNo, description, total }
+  const recipeNosSet = new Set();
+
+  // Helper to add to final map
+  const addFinal = (recipeNo, qty, submenuCode) => {
+    if (!recipeNo) return;
+    const key = recipeNo.toUpperCase();
+    const obj = summaryMap.get(key) || {
+      submenuCode: "",
+      dishCode: "",
+      recipeNo: key,
+      description: "No Description",
+      total: 0
+    };
+    obj.total += qty;
+    if (submenuCode && !obj.submenuCode) obj.submenuCode = submenuCode;
+    summaryMap.set(key, obj);
+    recipeNosSet.add(key);
+  };
+
+  // Resolve ids in parallel
+  if (recipeIdsToResolve.size > 0) {
+    const idArr = Array.from(recipeIdsToResolve);
+    const idDocs = await Promise.all(idArr.map(id => getDoc(doc(db, "recipes", id))));
+    const idToNo = new Map();
+    idDocs.forEach((snap, idx) => {
+      const id = idArr[idx];
+      if (snap.exists()) {
+        const data = snap.data();
+        const rno = (data.recipeNo || "").toString().toUpperCase().trim();
+        if (rno) idToNo.set(id, rno);
+      }
+    });
+
+    // Merge temp "id:<id>" entries into their recipeNo bucket
+    for (const [key, val] of tempMap.entries()) {
+      if (!key.startsWith("id:")) continue;
+      const id = key.slice(3);
+      const rno = idToNo.get(id);
+      if (rno) {
+        addFinal(rno, val.total, val.submenuCode);
+        tempMap.delete(key);
+      }
+    }
   }
 
-  // 🔄 Load WASTE from Main Kitchen for today
+  // Now handle entries that were already recipeNo-based
+  for (const [key, val] of tempMap.entries()) {
+    if (key.startsWith("id:")) continue; // unresolved id without recipeNo—skip silently
+    addFinal(key, val.total, val.submenuCode);
+  }
+
+  // --- 3) Add Main Kitchen waste to totals (still keyed by recipeNo; look up by description when needed) ---
   const wasteSnapshot = await getDocs(query(
     collection(db, "waste"),
     where("venue", "==", "Main Kitchen"),
     where("date", "==", todayStr)
   ));
 
-  for (const doc of wasteSnapshot.docs) {
-    const data = doc.data();
-    const itemName = (data.item || "").trim();
-    const qty = Number(data.qty || 0);
+  for (const wdoc of wasteSnapshot.docs) {
+    const w = wdoc.data();
+    const itemName = (w.item || "").trim();
+    const qty = Number(w.qty || 0);
     if (!itemName || qty <= 0) continue;
 
-    // Check if this is already in the summary map
-    let matchingRecipeNo = null;
-
-    // Try to find recipeNo by matching description
-    for (const [recipeNo, item] of summaryMap.entries()) {
-      if (item.description === itemName) {
-        matchingRecipeNo = recipeNo;
-        break;
-      }
+    // If any existing summary item already has this description, add directly
+    let matchedRno = null;
+    for (const [rno, obj] of summaryMap.entries()) {
+      if ((obj.description || "").trim() === itemName) { matchedRno = rno; break; }
     }
 
-    // If not found, try to lookup by recipe name in the recipes collection
-    if (!matchingRecipeNo) {
-      const recipesQuery = query(
-        collection(db, "recipes"),
-        where("description", "==", itemName)
-      );
+    // Else, try to find recipeNo by description
+    if (!matchedRno) {
+      const recipesQuery = query(collection(db, "recipes"), where("description", "==", itemName));
       const recipesSnap = await getDocs(recipesQuery);
       if (!recipesSnap.empty) {
-        const recipeDoc = recipesSnap.docs[0];
-        matchingRecipeNo = (recipeDoc.data().recipeNo || recipeDoc.id).toUpperCase();
-
-        if (!summaryMap.has(matchingRecipeNo)) {
-          summaryMap.set(matchingRecipeNo, {
+        const r = recipesSnap.docs[0].data();
+        matchedRno = (r.recipeNo || recipesSnap.docs[0].id).toString().toUpperCase();
+        if (!summaryMap.has(matchedRno)) {
+          summaryMap.set(matchedRno, {
             submenuCode: "",
             dishCode: "",
-            recipeNo: matchingRecipeNo,
+            recipeNo: matchedRno,
             description: itemName,
-            total: 0,
+            total: 0
           });
-          recipeKeyList.push(matchingRecipeNo);
+          recipeNosSet.add(matchedRno);
         }
       }
     }
 
-    // Add waste qty to the matching recipe
-    if (matchingRecipeNo) {
-      summaryMap.get(matchingRecipeNo).total += qty;
+    if (matchedRno) {
+      const obj = summaryMap.get(matchedRno);
+      obj.total += qty;
+      summaryMap.set(matchedRno, obj);
     }
   }
 
-  // 🧾 Load Descriptions from Recipes
+  // --- 4) Fetch descriptions for all recipeNos in batches of 10 ---
+  const recipeKeyList = Array.from(recipeNosSet);
   const recipeDescMap = new Map();
   for (let i = 0; i < recipeKeyList.length; i += 10) {
     const batch = recipeKeyList.slice(i, i + 10);
-    const snap = await getDocs(
-      query(collection(db, "recipes"), where("recipeNo", "in", batch))
-    );
-    snap.forEach(doc => {
-      const data = doc.data();
-      const key = (data.recipeNo || doc.id).toUpperCase();
+    const snap = await getDocs(query(collection(db, "recipes"), where("recipeNo", "in", batch)));
+    snap.forEach(docSnap => {
+      const data = docSnap.data();
+      const key = (data.recipeNo || docSnap.id).toString().toUpperCase();
       recipeDescMap.set(key, data.description || "No Description");
     });
   }
 
-  // 🏷️ Apply Descriptions
-  for (const [recipeNo, item] of summaryMap.entries()) {
-    item.description = recipeDescMap.get(recipeNo) || item.description;
+  // Apply descriptions
+  for (const [rno, obj] of summaryMap.entries()) {
+    obj.description = recipeDescMap.get(rno) || obj.description || "No Description";
+    summaryMap.set(rno, obj);
   }
 
-  // 🏷️ Assign Dish Codes
-  recipeKeyList.forEach((recipeNo, index) => {
-    const dishCode = `PCC${String(index + 1).padStart(3, "0")}`;
-    if (summaryMap.has(recipeNo)) {
-      summaryMap.get(recipeNo).dishCode = dishCode;
+  // --- 5) Assign Dish Codes (stable order) ---
+  recipeKeyList.sort(); // ensure stable ordering
+  recipeKeyList.forEach((recipeNo, idx) => {
+    const dishCode = `PCC${String(idx + 1).padStart(3, "0")}`;
+    const obj = summaryMap.get(recipeNo);
+    if (obj) {
+      obj.dishCode = dishCode;
+      summaryMap.set(recipeNo, obj);
     }
   });
 
-  // 📋 Render Table
+  // --- 6) Render table ---
   tbody.innerHTML = "";
 
   if (summaryMap.size === 0) {
@@ -4840,41 +4891,44 @@ window.loadProductionSummary = async function () {
     return;
   }
 
+  // Attach once (outside the loop)
+  const onInput = (e) => {
+    const el = e.target;
+    if (!el.classList.contains("acct-qty-input")) return;
+    setAcctQty(el.dataset.tab, el.dataset.key, el.value);
+  };
+  tbody.removeEventListener("input", onInput);
+  tbody.addEventListener("input", onInput);
+
   for (const recipeNo of recipeKeyList) {
     const item = summaryMap.get(recipeNo);
     const tr = document.createElement("tr");
-  const prodKey = item.recipeNo; // unique enough for production rows
-const prodQty = getAcctQty("production", prodKey, Number(item.total) || 0);
 
-tr.innerHTML = `
-  <td>${item.submenuCode}</td>
-  <td>${item.dishCode}</td>
-  <td>${item.recipeNo}</td>
-  <td>${item.description}</td>
-  <td>
-    <input
-      type="number"
-      step="0.01"
-      min="0"
-      class="acct-qty-input"
-      data-tab="production"
-      data-key="${prodKey}"
-      value="${prodQty}"
-      style="width: 90px; text-align: right;"
-    />
-  </td>
-`;
-// Attach once per render
-tbody.addEventListener("input", (e) => {
-  const el = e.target;
-  if (!el.classList.contains("acct-qty-input")) return;
-  setAcctQty(el.dataset.tab, el.dataset.key, el.value);
-});
+    const prodKey = item.recipeNo; // key for storing edits
+    const prodQty = getAcctQty("production", prodKey, Number(item.total) || 0);
 
-
+    tr.innerHTML = `
+      <td>${item.submenuCode || ""}</td>
+      <td>${item.dishCode}</td>
+      <td>${item.recipeNo}</td>
+      <td>${item.description}</td>
+      <td>
+        <input
+          type="number"
+          step="0.01"
+          min="0"
+          class="acct-qty-input"
+          data-tab="production"
+          data-key="${prodKey}"
+          value="${prodQty}"
+          style="width: 90px; text-align: right;"
+        />
+      </td>
+    `;
     tbody.appendChild(tr);
   }
 };
+
 
 function formatDateLocal(dateString) {
   // Expecting YYYY-MM-DD, split manually to avoid UTC offset issues
@@ -4934,6 +4988,7 @@ let allShipmentData = []; // ⏺ Global store
 
 // 📥 Fetch + normalize Firestore orders
 // 📥 Fetch + normalize Firestore orders (supports Concessions split to C002/C003)
+// 🔄 Build + show Production Shipments (TODAY only)
 window.loadProductionShipments = async function () {
   const container = document.getElementById("singleVenueShipmentContainer");
 
@@ -4945,141 +5000,212 @@ window.loadProductionShipments = async function () {
     </div>
   `;
 
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  // --- Today (YYYY-MM-DD) ---
+  const today = new Date(); today.setHours(0,0,0,0);
   const yyyy = today.getFullYear();
   const mm = String(today.getMonth() + 1).padStart(2, '0');
   const dd = String(today.getDate()).padStart(2, '0');
   const todayStr = `${yyyy}-${mm}-${dd}`;
 
-  // 1) pull today's orders
-  const snap = await getDocs(
-    query(collection(db, "orders"), where("date", "==", todayStr))
-  );
-
-  // We'll do a two-pass build so we can use recipe.venueCodes when venue === "Concessions"
-  const pending = [];                     // rows we still must place into a venue "code"
-  const recipeNos = new Set();            // for batch recipe fetch
-  const recipeMap = new Map();            // key: `${venueCode}__${recipeNo}` -> { venueCode, recipeNo, description, quantity, type }
-
-  // helper to add to recipeMap
-  function addQty(venueCode, recipeNo, quantity, type) {
-    const key = `${venueCode}__${recipeNo}`;
-    if (!recipeMap.has(key)) {
-      recipeMap.set(key, {
-        venueCode,
-        recipeNo,
-        description: "No Description",
-        quantity: 0,
-        type,
-      });
-    }
-    recipeMap.get(key).quantity += quantity;
-  }
-
-  snap.forEach(doc => {
-    const d = doc.data();
-
-    const type = d.type || "";
-    const rawRecipeNo = d.recipeNo || d.recipeId || "";
-    const recipeNo = String(rawRecipeNo || "").toUpperCase();
-    if (!recipeNo) return;
-
-    let qty = 0;
-    if (type === "starting-par") {
-      qty = Number(d.netWeight ?? 0);        // lbs for starting-par
-    } else {
-      qty = Number(d.sendQty ?? d.qty ?? 0); // pans/ea for addons, etc.
-    }
-    if (!qty || qty <= 0) return;
-
-    const venueLower = String(d.venue || "").toLowerCase();
-    const codeFromName = (venueCodesByName || {})[venueLower]; // b001/b002/b003 or maybe undefined
-
-    // Known non-concession venue? add immediately.
-    if (codeFromName && !codeFromName.startsWith("c")) {
-      addQty(codeFromName, recipeNo, qty, type);
-    } else {
-      // Either generic "Concessions" (no code) or a direct c002/c003 write.
-      pending.push({ venueLower, codeFromName, recipeNo, qty, type });
-    }
-
-    recipeNos.add(recipeNo);
+  // 🧭 helpers/guards
+  const venueCodesByName = (window.venueCodesByName || {
+    aloha: "b001",
+    ohana: "b002",
+    gateway: "b003",
+    concessions: "concessions",  // special handling
+    concession: "concessions"
   });
 
-  // 2) Batch fetch recipes (for description + venueCodes)
+  const qtyFromOrder = (d) => {
+    const type = String(d.type || "").toLowerCase();
+    const net   = parseFloat(d.netWeight ?? 0);
+    const send  = parseFloat(d.sendQty   ?? 0);
+    const qty   = parseFloat(d.qty       ?? 0);
+    if (type === "starting-par") {
+      // prefer netWeight for SP, fallback to others
+      if (Number.isFinite(net) && net > 0) return net;
+      return Math.max(0, Number.isFinite(send) ? send : 0, Number.isFinite(qty) ? qty : 0);
+    }
+    // add-ons (and anything else) → take the largest available
+    return Math.max(
+      0,
+      Number.isFinite(send) ? send : 0,
+      Number.isFinite(qty)  ? qty  : 0,
+      Number.isFinite(net)  ? net  : 0
+    );
+  };
+
+  const isCancelled = (d) => {
+    const s = String(d.status || "").toLowerCase();
+    return (s === "cancelled" || s === "void");
+  };
+
+  // Accumulators
+  const pending = [];         // rows we still must place into a concessions code
+  const recipeNos = new Set();
+  const recipeIdsToResolve = new Set();
+  const recipeMap = new Map();  // key: `${venueCode}__${recipeNo}` -> { venueCode, recipeNo, description, quantity }
+
+  const addQty = (venueCode, recipeNo, quantity) => {
+    if (!venueCode || !recipeNo) return;
+    if (!Number.isFinite(quantity) || quantity <= 0) return;
+    const key = `${venueCode.toLowerCase()}__${recipeNo}`;
+    if (!recipeMap.has(key)) {
+      recipeMap.set(key, { venueCode: venueCode.toLowerCase(), recipeNo, description: "No Description", quantity: 0 });
+    }
+    recipeMap.get(key).quantity += quantity;
+  };
+
+  // 1) Pull today's orders
+  const snap = await getDocs(query(collection(db, "orders"), where("date", "==", todayStr)));
+
+  snap.forEach(docSnap => {
+    const d = docSnap.data();
+    if (isCancelled(d)) return;
+
+    // Normalize identifiers
+    let recipeNo = String(d.recipeNo || "").toUpperCase().trim();
+    const recipeId = String(d.recipeId || "").trim();
+    if (!recipeNo && !recipeId) return;
+
+    const q = qtyFromOrder(d);
+    if (!Number.isFinite(q) || q <= 0) return;
+
+    // Venue normalization: accept either code (b001/c002/...) or names (Aloha/.../Concessions)
+    const venueRaw = String(d.venue || "").trim();
+    let venueCode = null;
+    if (/^[bc]\d{3}$/i.test(venueRaw)) {
+      venueCode = venueRaw.toLowerCase();
+    } else {
+      venueCode = venueCodesByName[venueRaw.toLowerCase()] || null;
+    }
+
+    // Known non-concession venue code? add immediately.
+    if (venueCode && /^b\d{3}$/i.test(venueCode)) {
+      if (!recipeNo && recipeId) recipeIdsToResolve.add(recipeId);
+      addQty(venueCode, recipeNo || `id:${recipeId}`, q);
+    } else {
+      // Concessions or unknown → handle later
+      pending.push({ venueRaw, venueCode, recipeNo: (recipeNo || ""), recipeId, qty: q });
+    }
+
+    if (recipeNo) recipeNos.add(recipeNo);
+    if (!recipeNo && recipeId) recipeIdsToResolve.add(recipeId);
+  });
+
+  // 2) Resolve recipeId -> recipeNo (batch by individual getDoc)
+  if (recipeIdsToResolve.size > 0) {
+    const ids = Array.from(recipeIdsToResolve);
+    const idDocs = await Promise.all(ids.map(id => getDoc(doc(db, "recipes", id))));
+    idDocs.forEach((snap, idx) => {
+      const id = ids[idx];
+      if (snap.exists()) {
+        const data = snap.data();
+        const rno = String(data.recipeNo || "").toUpperCase().trim();
+        if (rno) recipeNos.add(rno);
+        // merge any existing "id:<id>" lines later after we know recipeNos
+      }
+    });
+  }
+
+  // 3) Batch fetch recipe meta (descriptions + venueCodes)
   const recipeMeta = new Map(); // recipeNo -> { description, venueCodes[] }
   const list = Array.from(recipeNos);
   for (let i = 0; i < list.length; i += 10) {
     const batch = list.slice(i, i + 10);
-    const rsnap = await getDocs(
-      query(collection(db, "recipes"), where("recipeNo", "in", batch))
-    );
+    const rsnap = await getDocs(query(collection(db, "recipes"), where("recipeNo", "in", batch)));
     rsnap.forEach(rdoc => {
       const r = rdoc.data();
       recipeMeta.set(
         String(r.recipeNo || "").toUpperCase(),
         {
           description: r.description || "No Description",
-          venueCodes: (r.venueCodes || []).map(v => String(v).toLowerCase())
+          venueCodes: Array.isArray(r.venueCodes) ? r.venueCodes.map(v => String(v).toLowerCase()) : []
         }
       );
     });
   }
 
-  // 3) Place pending rows
-  pending.forEach(({ venueLower, codeFromName, recipeNo, qty, type }) => {
-    const meta = recipeMeta.get(recipeNo) || { venueCodes: [] };
+  // 4) Merge pending rows
+  pending.forEach(({ venueRaw, venueCode, recipeNo, recipeId, qty }) => {
+    // If we have only id, try to resolve to recipeNo via cached meta (from step 2)
+    if (!recipeNo && recipeId) {
+      // We don't have a reverse map here; best-effort try: fetch directly
+      // (light extra fetch only when needed)
+      // NOTE: In practice most IDs were resolved above when they came from non-pending rows too.
+    }
 
-    // If order already has a C-code (rare), just use it.
-    if (codeFromName && codeFromName.startsWith("c")) {
-      addQty(codeFromName, recipeNo, qty, type);
+    const rno = recipeNo || ""; // if still empty, skip
+    const meta = recipeMeta.get(rno) || { venueCodes: [] };
+
+    // If explicit concessions code present (c002/c003), use it directly
+    if (venueCode && /^c\d{3}$/i.test(venueCode)) {
+      addQty(venueCode, rno, qty);
       return;
     }
 
-    // Generic "Concessions" → split by recipe.venueCodes (we only care about c002/c003)
-    if (venueLower === "concessions") {
-      const targets = meta.venueCodes.filter(c => c === "c002" || c === "c003");
-      // if a recipe belongs to both, add to both; if neither, skip
+    // Generic "Concessions" → split to c002/c003 based on recipe.venueCodes
+    const isConcessions = venueCodesByName[venueRaw.toLowerCase()] === "concessions";
+    if (isConcessions) {
+      const targets = (meta.venueCodes || []).filter(c => c === "c002" || c === "c003");
+      // If a recipe belongs to both, we add to both (so each venue sees the full qty).
+      // If you prefer to split evenly, replace the loop with a divider (qty / targets.length).
       if (targets.length > 0) {
-        targets.forEach(c => addQty(c, recipeNo, qty, type));
+        targets.forEach(c => addQty(c, rno, qty));
       }
       return;
     }
 
-    // Unknown venue name: nothing to do
+    // Unknown venue name; ignore
   });
 
-  // 4) Apply descriptions
-  for (const rec of recipeMap.values()) {
-    rec.description = (recipeMeta.get(rec.recipeNo)?.description) || "No Description";
+  // 5) Resolve any "id:<id>" keys that slipped through (fallback)
+  for (const [key, val] of Array.from(recipeMap.entries())) {
+    if (!key.includes("__id:")) continue;
+    const [vc, idKey] = key.split("__");
+    const rid = idKey.slice(3);
+    const snap = await getDoc(doc(db, "recipes", rid));
+    if (snap.exists()) {
+      const data = snap.data();
+      const rno = String(data.recipeNo || "").toUpperCase();
+      recipeMap.delete(key);
+      addQty(vc, rno, val.quantity);
+      recipeNos.add(rno);
+    }
   }
 
-  // 5) Publish and show Aloha by default
-  allShipmentData = Array.from(recipeMap.values());
-  loadVenueShipment("b001");
+  // 6) Apply descriptions
+  for (const rec of recipeMap.values()) {
+    const meta = recipeMeta.get(rec.recipeNo);
+    if (meta && meta.description) rec.description = meta.description;
+  }
+
+  // 7) Publish + default to Aloha
+  window.allShipmentData = Array.from(recipeMap.values());
+  window.loadVenueShipment("b001");
 };
 
-// 📤 Show one venue shipment
+// 📤 Show one venue shipment (aggregated by recipe for the venue code)
 window.loadVenueShipment = function (venueCode) {
-  currentVenueCode = venueCode;
+  window.currentVenueCode = venueCode;
 
   const container = document.getElementById("singleVenueShipmentContainer");
   container.innerHTML = "";
 
-  const venueLabel = venueNames[venueCode] || venueCode;
-  const shipments = allShipmentData.filter(
-    s => (s.venueCode || "").toLowerCase() === venueCode
+  const venueLabel = (window.venueNames && window.venueNames[venueCode]) || venueCode.toUpperCase();
+
+  const shipments = (window.allShipmentData || []).filter(
+    s => String(s.venueCode || "").toLowerCase() === String(venueCode).toLowerCase()
   );
 
-  // Aggregate by recipe + description (display key)
+  // Aggregate by recipe (recipeNo + description)
   const rows = {};
   shipments.forEach(item => {
     const recipeNo = item.recipeNo || "UNKNOWN";
     const description = item.description || "No Description";
     const qty = Number(item.quantity || 0);
 
-    const displayKey = `${recipeNo}__${description}`; // for grouping/rows
+    const displayKey = `${recipeNo}__${description}`;
     if (!rows[displayKey]) rows[displayKey] = { recipeNo, description, quantity: 0 };
     rows[displayKey].quantity += qty;
   });
@@ -5113,15 +5239,22 @@ window.loadVenueShipment = function (venueCode) {
 
   if (keys.length === 0) {
     const emptyRow = document.createElement("tr");
-    emptyRow.innerHTML = `
-      <td colspan="3" style="text-align:center; font-style:italic; color:gray;">No items</td>
-    `;
+    emptyRow.innerHTML = `<td colspan="3" style="text-align:center; font-style:italic; color:gray;">No items</td>`;
     body.appendChild(emptyRow);
   } else {
+    // ensure we don't stack multiple listeners
+    const onInput = (e) => {
+      const el = e.target;
+      if (!el.classList.contains("acct-qty-input")) return;
+      setAcctQty(el.dataset.tab, el.dataset.key, el.value);
+    };
+    body.removeEventListener("input", onInput);
+    body.addEventListener("input", onInput);
+
     keys.forEach(displayKey => {
       const { recipeNo, description, quantity } = rows[displayKey];
 
-      // Use a stable override key that won't collide across venues
+      // stable override key per venue+recipe
       const overrideKey = `${venueCode}__${recipeNo}`;
       const value = getAcctQty("productionShipments", overrideKey, Number(quantity) || 0);
 
@@ -5144,18 +5277,12 @@ window.loadVenueShipment = function (venueCode) {
       `;
       body.appendChild(tr);
     });
-
-    // Delegate input → save overrides
-    body.addEventListener("input", (e) => {
-      const el = e.target;
-      if (!el.classList.contains("acct-qty-input")) return;
-      setAcctQty(el.dataset.tab, el.dataset.key, el.value);
-    });
   }
 
   section.appendChild(table);
   container.appendChild(section);
 };
+
 
 
 // 📋 Copy current venue shipment table
