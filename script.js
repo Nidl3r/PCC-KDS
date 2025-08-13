@@ -2567,128 +2567,147 @@ window.sendAllMainWaste = async function () {
 
 //**Aloha Returns */
 
+// ALOHA RETURNS — with loading/empty states
 window.loadAlohaReturns = async function () {
   const tableBody = document.querySelector(".aloha-returns-table tbody");
-  tableBody.innerHTML = "";
+  if (!tableBody) return;
 
-  console.log("🔁 Loading Aloha Returns...");
+  showTableLoading(tableBody, "Loading Aloha returns…");
 
-  const todayStr = getTodayDate(); // "YYYY-MM-DD"
+  try {
+    const todayStr = getTodayDate(); // YYYY-MM-DD (HST)
 
-  const ordersRef = collection(db, "orders");
-  const q = query(
-    ordersRef,
-    where("venue", "==", "Aloha"),
-    where("status", "==", "received")
-  );
-  const snapshot = await getDocs(q);
+    // 1) Today's RECEIVED orders for Aloha
+    const ordersSnap = await getDocs(query(
+      collection(db, "orders"),
+      where("venue", "==", "Aloha"),
+      where("status", "==", "received"),
+      where("date", "==", todayStr)
+    ));
 
-  if (snapshot.empty) {
-    console.log("📭 No orders received for Aloha");
-    return;
-  }
-
-  const todayOrders = snapshot.docs
-    .map(doc => ({ id: doc.id, ...doc.data() }))
-    .filter(order => order.date === todayStr);
-
-  const returnsSnapshot = await getDocs(
-    query(collection(db, "returns"), where("venue", "==", "Aloha"))
-  );
-
-  const excludedRecipeKeys = new Set();
-  returnsSnapshot.forEach(doc => {
-    const data = doc.data();
-    const key = (data.recipeNo || data.recipeId || "").toUpperCase();
-    const returnDate = data.date;
-    if (data.status === "returned" && key && returnDate === todayStr) {
-      excludedRecipeKeys.add(key);
+    if (ordersSnap.empty) {
+      showTableEmpty(tableBody, "No orders received today for Aloha.");
+      return;
     }
-  });
 
-  console.log("🚫 Excluded keys (from today's returns):", Array.from(excludedRecipeKeys));
-  console.log(`📦 Found ${todayOrders.length} Aloha orders received today`);
-  if (todayOrders.length === 0) return;
+    // Totals by recipe key
+    const qtyByKey = new Map();
+    ordersSnap.forEach(d => {
+      const o = d.data();
+      const key = String(o.recipeNo || o.recipeId || "").toUpperCase();
+      if (!key) return;
+      const q = Number(o.qty ?? o.sendQty ?? 0) || 0;
+      if (!q) return;
+      qtyByKey.set(key, (qtyByKey.get(key) || 0) + q);
+    });
 
-  const recipeQtyMap = {};
-  todayOrders.forEach(order => {
-    const recipeKey = (order.recipeNo || order.recipeId || "").toUpperCase();
-    const qty = Number(order.qty ?? order.sendQty ?? 0);
-    if (!recipeKey) return;
-    recipeQtyMap[recipeKey] = (recipeQtyMap[recipeKey] || 0) + qty;
-  });
+    if (qtyByKey.size === 0) {
+      showTableEmpty(tableBody, "No valid items to return.");
+      return;
+    }
 
-  const validRecipes = [];
+    // 2) Exclude items already returned today
+    const returnsSnap = await getDocs(query(
+      collection(db, "returns"),
+      where("venue", "==", "Aloha"),
+      where("status", "==", "returned"),
+      where("date", "==", todayStr)
+    ));
+    const excluded = new Set();
+    returnsSnap.forEach(d => {
+      const r = d.data();
+      const k = String(r.recipeNo || r.recipeId || "").toUpperCase();
+      if (k) excluded.add(k);
+    });
 
-  for (const recipeKey in recipeQtyMap) {
-    let recipeDoc = null;
+    // 3) Resolve recipe metadata (batched by recipeNo, then fall back to id)
+    const keys = Array.from(qtyByKey.keys());
+    const byNo = [];
+    const byId = [];
+    keys.forEach(k => (/^[A-Za-z0-9\-_.]+$/.test(k) ? byNo : byId).push(k));
 
-    // Try to find by recipeNo
-    const recipeQuery = query(
-      collection(db, "recipes"),
-      where("recipeNo", "==", recipeKey)
-    );
-    const recipeSnapshot = await getDocs(recipeQuery);
+    const metaByKey = new Map();
+    const idFromNo = new Map();
 
-    if (!recipeSnapshot.empty) {
-      recipeDoc = recipeSnapshot.docs[0];
-    } else {
-      // Try to get by ID
-      const fallbackDoc = await getDoc(doc(db, "recipes", recipeKey));
-      if (fallbackDoc.exists()) {
-        recipeDoc = fallbackDoc;
+    for (let i = 0; i < byNo.length; i += 10) {
+      const batch = byNo.slice(i, i + 10);
+      const snap = await getDocs(query(
+        collection(db, "recipes"),
+        where("recipeNo", "in", batch)
+      ));
+      snap.forEach(docSnap => {
+        const data = docSnap.data();
+        const key = String(data.recipeNo || "").toUpperCase();
+        if (!key) return;
+        idFromNo.set(key, docSnap.id);
+        metaByKey.set(key, {
+          id: docSnap.id,
+          description: data.description || key,
+          uom: data.uom || "ea",
+          returnable: String(data.returns || "").toLowerCase() === "yes"
+        });
+      });
+    }
+
+    const missing = new Set(keys.filter(k => !metaByKey.has(k)));
+    for (const k of missing) {
+      const ds = await getDoc(doc(db, "recipes", k));
+      if (ds.exists()) {
+        const data = ds.data();
+        metaByKey.set(k, {
+          id: ds.id,
+          description: data.description || k,
+          uom: data.uom || "ea",
+          returnable: String(data.returns || "").toLowerCase() === "yes"
+        });
+      } else {
+        const via = idFromNo.get(k);
+        if (via) {
+          const ds2 = await getDoc(doc(db, "recipes", via));
+          if (ds2.exists()) {
+            const data = ds2.data();
+            metaByKey.set(k, {
+              id: ds2.id,
+              description: data.description || k,
+              uom: data.uom || "ea",
+              returnable: String(data.returns || "").toLowerCase() === "yes"
+            });
+          }
+        }
       }
     }
 
-    if (!recipeDoc) {
-      console.warn("❌ Could not find recipe for", recipeKey);
-      continue;
+    // 4) Render rows
+    const rows = [];
+    qtyByKey.forEach((qty, key) => {
+      const m = metaByKey.get(key);
+      if (!m || !m.returnable || excluded.has(key)) return;
+      rows.push({ id: m.id, name: m.description, uom: m.uom, qty });
+    });
+
+    if (rows.length === 0) {
+      showTableEmpty(tableBody, "No returnable Aloha items remaining for today.");
+      return;
     }
 
-    if (excludedRecipeKeys.has(recipeKey)) {
-      console.log(`⛔ Skipping already returned recipe: ${recipeKey}`);
-      continue;
+    tableBody.innerHTML = "";
+    for (const r of rows) {
+      const tr = document.createElement("tr");
+      tr.dataset.recipeId = r.id;
+      tr.innerHTML = `
+        <td>${r.name}</td>
+        <td>${r.qty} ${r.uom}</td>
+        <td><input class="return-input" type="number" min="0" value="0" style="width:60px;" /></td>
+        <td><button onclick="sendSingleReturn(this, '${r.id}')">Return</button></td>
+      `;
+      tableBody.appendChild(tr);
     }
-
-    const recipe = recipeDoc.data();
-
-    if (String(recipe.returns || "").toLowerCase() === "yes") {
-      validRecipes.push({
-        id: recipeDoc.id,
-        name: recipe.description,
-        uom: recipe.uom || "ea",
-        qty: recipeQtyMap[recipeKey]
-      });
-    } else {
-      console.log(`⛔ Not marked returnable: ${recipeKey}`);
-    }
+  } catch (err) {
+    console.error("❌ Failed to load Aloha returns:", err);
+    showTableEmpty(tableBody, "Failed to load. Please retry.");
   }
-
-  if (validRecipes.length === 0) {
-    console.log("📭 No valid returnable items for Aloha today.");
-    return;
-  }
-
-  validRecipes.forEach(recipe => {
-    const row = document.createElement("tr");
-    row.dataset.recipeId = recipe.id;
-
-    row.innerHTML = `
-      <td>${recipe.name}</td>
-      <td>${recipe.qty} ${recipe.uom}</td>
-      <td>
-        <input class="return-input" type="number" min="0" value="0" style="width: 60px;" />
-      </td>
-      <td>
-        <button onclick="sendSingleReturn(this, '${recipe.id}')">Return</button>
-      </td>
-    `;
-
-    tableBody.appendChild(row);
-  });
-
-  console.log(`✅ Loaded ${validRecipes.length} returnable recipes`);
 };
+
 
 
 window.sendSingleReturn = async function (btn, recipeId) {
@@ -4261,127 +4280,153 @@ window.sendAllOhanaWaste = async function () {
 
 //OHANA RETURNS
 // 🔁 Ohana Returns — only items RECEIVED TODAY (HST)
+// OHANA RETURNS — with loading/empty states
 window.loadOhanaReturns = async function () {
   const tableBody = document.querySelector(".ohana-returns-table tbody");
   if (!tableBody) return;
-  tableBody.innerHTML = "";
 
-  console.log("🔁 Loading Ohana Returns (today only, HST)…");
+  showTableLoading(tableBody, "Loading Ohana returns…");
 
-  // HST bounds for "today"
-  const { start, end } = getHawaiiTimestampRange(); // returns Firestore Timestamps for HST day
+  try {
+    const todayStr = getTodayDate();
 
-  // 1) Get all orders received today (any venue), filter to Ohana + status:"received"
-  const ordersQ = query(
-    collection(db, "orders"),
-    where("receivedAt", ">=", start),
-    where("receivedAt", "<", end)
-  );
-  const ordersSnap = await getDocs(ordersQ);
+    // 1) Today's RECEIVED orders for Ohana
+    const ordersSnap = await getDocs(query(
+      collection(db, "orders"),
+      where("venue", "==", "Ohana"),
+      where("status", "==", "received"),
+      where("date", "==", todayStr)
+    ));
 
-  const todaysOhanaOrders = ordersSnap.docs
-    .map(d => ({ id: d.id, ...d.data() }))
-    .filter(o => o.venue === "Ohana" && o.status === "received");
-
-  if (todaysOhanaOrders.length === 0) {
-    console.log("📭 No orders received today for Ohana");
-    return;
-  }
-
-  // 2) Build a map of total qty received per recipe (by recipeNo or recipeId)
-  const recipeQtyMap = {};
-  todaysOhanaOrders.forEach(order => {
-    const recipeKey = (order.recipeNo || order.recipeId || "").toUpperCase();
-    if (!recipeKey) return;
-    const qty = Number(order.qty ?? order.sendQty ?? 0);
-    recipeQtyMap[recipeKey] = (recipeQtyMap[recipeKey] || 0) + qty;
-  });
-
-  // 3) Find items already returned TODAY to exclude (query by returnedAt range only → filter in JS)
-  const returnsQ = query(
-    collection(db, "returns"),
-    where("returnedAt", ">=", start),
-    where("returnedAt", "<", end)
-  );
-  const returnsSnap = await getDocs(returnsQ);
-
-  const excludedRecipeKeys = new Set();
-  returnsSnap.forEach(d => {
-    const r = d.data();
-    const key = (r.recipeNo || r.recipeId || "").toUpperCase();
-    if (r.venue === "Ohana" && r.status === "returned" && key) {
-      excludedRecipeKeys.add(key);
-    }
-  });
-
-  console.log("🚫 Excluded (already returned today):", Array.from(excludedRecipeKeys));
-  console.log(`📦 Found ${todaysOhanaOrders.length} Ohana orders received today`);
-
-  // 4) Resolve recipes, keep only those marked returnable (returns == "Yes") and not excluded
-  const validRecipes = [];
-  for (const recipeKey in recipeQtyMap) {
-    if (excludedRecipeKeys.has(recipeKey)) {
-      console.log(`⛔ Skipping already returned recipe: ${recipeKey}`);
-      continue;
+    if (ordersSnap.empty) {
+      showTableEmpty(tableBody, "No orders received today for Ohana.");
+      return;
     }
 
-    // Try by recipeNo first, then fallback to doc id
-    let recipeDoc = null;
-    const byNoSnap = await getDocs(
-      query(collection(db, "recipes"), where("recipeNo", "==", recipeKey))
-    );
-    if (!byNoSnap.empty) {
-      recipeDoc = byNoSnap.docs[0];
-    } else {
-      const fallback = await getDoc(doc(db, "recipes", recipeKey));
-      if (fallback.exists()) recipeDoc = fallback;
+    const qtyByKey = new Map();
+    ordersSnap.forEach(d => {
+      const o = d.data();
+      const key = String(o.recipeNo || o.recipeId || "").toUpperCase();
+      if (!key) return;
+      const q = Number(o.qty ?? o.sendQty ?? 0) || 0;
+      if (!q) return;
+      qtyByKey.set(key, (qtyByKey.get(key) || 0) + q);
+    });
+
+    if (qtyByKey.size === 0) {
+      showTableEmpty(tableBody, "No valid items to return.");
+      return;
     }
 
-    if (!recipeDoc) {
-      console.warn("❌ Could not find recipe for", recipeKey);
-      continue;
-    }
+    // 2) Exclude items already returned today
+    const returnsSnap = await getDocs(query(
+      collection(db, "returns"),
+      where("venue", "==", "Ohana"),
+      where("status", "==", "returned"),
+      where("date", "==", todayStr)
+    ));
+    const excluded = new Set();
+    returnsSnap.forEach(d => {
+      const r = d.data();
+      const k = String(r.recipeNo || r.recipeId || "").toUpperCase();
+      if (k) excluded.add(k);
+    });
 
-    const recipe = recipeDoc.data();
-    if (String(recipe.returns || "").toLowerCase() === "yes") {
-      validRecipes.push({
-        id: recipeDoc.id,
-        name: recipe.description,
-        uom: recipe.uom || "ea",
-        qty: recipeQtyMap[recipeKey]
+    // 3) Resolve recipe metadata (same pattern as Gateway/Aloha)
+    const keys = Array.from(qtyByKey.keys());
+    const byNo = [];
+    const byId = [];
+    keys.forEach(k => (/^[A-Za-z0-9\-_.]+$/.test(k) ? byNo : byId).push(k));
+
+    const metaByKey = new Map();
+    const idFromNo = new Map();
+
+    for (let i = 0; i < byNo.length; i += 10) {
+      const batch = byNo.slice(i, i + 10);
+      const snap = await getDocs(query(
+        collection(db, "recipes"),
+        where("recipeNo", "in", batch)
+      ));
+      snap.forEach(docSnap => {
+        const data = docSnap.data();
+        const key = String(data.recipeNo || "").toUpperCase();
+        if (!key) return;
+        idFromNo.set(key, docSnap.id);
+        metaByKey.set(key, {
+          id: docSnap.id,
+          description: data.description || key,
+          uom: data.uom || "ea",
+          returnable: String(data.returns || "").toLowerCase() === "yes"
+        });
       });
-    } else {
-      console.log(`⛔ Not marked returnable: ${recipeKey}`);
     }
+
+    const missing = new Set(keys.filter(k => !metaByKey.has(k)));
+    for (const k of missing) {
+      const ds = await getDoc(doc(db, "recipes", k));
+      if (ds.exists()) {
+        const data = ds.data();
+        metaByKey.set(k, {
+          id: ds.id,
+          description: data.description || k,
+          uom: data.uom || "ea",
+          returnable: String(data.returns || "").toLowerCase() === "yes"
+        });
+      } else {
+        const via = idFromNo.get(k);
+        if (via) {
+          const ds2 = await getDoc(doc(db, "recipes", via));
+          if (ds2.exists()) {
+            const data = ds2.data();
+            metaByKey.set(k, {
+              id: ds2.id,
+              description: data.description || k,
+              uom: data.uom || "ea",
+              returnable: String(data.returns || "").toLowerCase() === "yes"
+            });
+          }
+        }
+      }
+    }
+
+    // 4) Render rows
+    const rows = [];
+    qtyByKey.forEach((qty, key) => {
+      const m = metaByKey.get(key);
+      if (!m || !m.returnable || excluded.has(key)) return;
+      rows.push({ id: m.id, name: m.description, uom: m.uom, qty });
+    });
+
+    if (rows.length === 0) {
+      showTableEmpty(tableBody, "No returnable Ohana items remaining for today.");
+      return;
+    }
+
+    tableBody.innerHTML = "";
+    for (const r of rows) {
+      const tr = document.createElement("tr");
+      tr.dataset.recipeId = r.id;
+      tr.innerHTML = `
+        <td>${r.name}</td>
+        <td>${r.qty} ${r.uom}</td>
+        <td><input class="return-input" type="number" min="0" value="0" style="width:60px;" /></td>
+        <td><button onclick="sendSingleOhanaReturn(this, '${r.id}')">Return</button></td>
+      `;
+      tableBody.appendChild(tr);
+    }
+  } catch (err) {
+    console.error("❌ Failed to load Ohana returns:", err);
+    showTableEmpty(tableBody, "Failed to load. Please retry.");
   }
-
-  if (validRecipes.length === 0) {
-    console.log("📭 No valid returnable items for Ohana today.");
-    return;
-  }
-
-  // 5) Render table
-  validRecipes.forEach(r => {
-    const row = document.createElement("tr");
-    row.dataset.recipeId = r.id;
-    row.innerHTML = `
-      <td>${r.name}</td>
-      <td>${r.qty} ${r.uom}</td>
-      <td><input class="return-input" type="number" min="0" value="0" style="width:60px;" /></td>
-      <td><button onclick="sendOhanaReturn(this, '${r.id}')">Return</button></td>
-    `;
-    tableBody.appendChild(row);
-  });
-
-  console.log(`✅ Loaded ${validRecipes.length} returnable recipes`);
 };
 
-window.sendOhanaReturn = async function (btn, recipeId) {
+// Submit a single OHANA return (adds 'date' for same-day exclusion)
+window.sendSingleOhanaReturn = async function (btn, recipeId) {
   const row = btn.closest("tr");
   const qtyInput = row.querySelector(".return-input");
   const qty = Number(qtyInput.value);
 
-  if (isNaN(qty) || qty <= 0) {
+  if (!Number.isFinite(qty) || qty <= 0) {
     alert("Please enter a valid quantity to return.");
     return;
   }
@@ -4392,17 +4437,18 @@ window.sendOhanaReturn = async function (btn, recipeId) {
       qty,
       venue: "Ohana",
       status: "returned",
+      date: getTodayDate(),              // 👈 important for exclusion
       returnedAt: serverTimestamp()
     });
 
     btn.parentElement.innerHTML = `<span style="color: green;">Returned</span>`;
     setTimeout(() => row.remove(), 800);
-    console.log(`🔁 Returned ${qty} of recipe ${recipeId}`);
   } catch (error) {
     console.error("Error returning item:", error);
     alert("Error submitting return. Please try again.");
   }
 };
+
 //OHANA STARTING PAR
 window.loadOhanaStartingPar = async function () {
   console.log("🚀 Starting Ohana par load...");
