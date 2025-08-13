@@ -979,19 +979,18 @@
 
   <div id="accounting-content" style="display:none;">
     <div class="area-tabs">
-  <button onclick="showAccountingTab('production')">Production</button>
-  <button onclick="showAccountingTab('shipments'); loadProductionShipments([]);">Production Shipments</button>
-  <button onclick="showAccountingTab('waste')">Waste</button>
-  <button onclick="showAccountingTab('lunch')">Lunch</button>
-</div>
-
+      <button onclick="showAccountingTab('production')">Production</button>
+      <button onclick="showAccountingTab('shipments'); loadProductionShipments([]);">Production Shipments</button>
+      <button onclick="showAccountingTab('waste')">Waste</button>
+      <button onclick="showAccountingTab('lunch')">Lunch</button>
+      <!-- NEW -->
+      <button onclick="showAccountingTab('analytics'); showAccountingDashboard();">Analytics</button>
+    </div>
 
     <!-- Production Section -->
     <div id="productionSection" class="accounting-section" data-sec="production">
       <h3>Production Summary</h3>
       <button onclick="copyProductionSummaryToClipboard()">Copy to Excel</button>
-
-
       <table id="productionTable">
         <thead>
           <tr>
@@ -1007,63 +1006,110 @@
     </div>
 
     <!-- Shipments Section -->
-<div id="shipmentsTab" class="accounting-section" data-sec="shipments" style="display:none;">
-  <h3>Production Shipments</h3>
-  <div class="venue-tabs">
-    <button onclick="loadVenueShipment('b001')">Aloha</button>
-    <button onclick="loadVenueShipment('b002')">Ohana</button>
-    <button onclick="loadVenueShipment('b003')">Gateway</button>
-    <button onclick="loadVenueShipment('c002')">Samoa Concessions</button>
-    <button onclick="loadVenueShipment('c003')">Maori Concessions</button>
-    <!--<button onclick="loadVenueShipment('c004')">Tongan Concessions</button> -->
-  </div>
-
-
-  <div id="singleVenueShipmentContainer"></div>
-</div>
-
+    <div id="shipmentsTab" class="accounting-section" data-sec="shipments" style="display:none;">
+      <h3>Production Shipments</h3>
+      <div class="venue-tabs">
+        <button onclick="loadVenueShipment('b001')">Aloha</button>
+        <button onclick="loadVenueShipment('b002')">Ohana</button>
+        <button onclick="loadVenueShipment('b003')">Gateway</button>
+        <button onclick="loadVenueShipment('c002')">Samoa Concessions</button>
+        <button onclick="loadVenueShipment('c003')">Maori Concessions</button>
+        <!--<button onclick="loadVenueShipment('c004')">Tongan Concessions</button> -->
+      </div>
+      <div id="singleVenueShipmentContainer"></div>
+    </div>
 
     <!-- Waste Section -->
-<div id="wasteTab" class="accounting-section" data-sec="waste" style="display:none;">
-  <h3>WASTE COMPILE</h3>
-  <button onclick="copyWasteTableToClipboard()">Copy to Excel</button>
+    <div id="wasteTab" class="accounting-section" data-sec="waste" style="display:none;">
+      <h3>WASTE COMPILE</h3>
+      <button onclick="copyWasteTableToClipboard()">Copy to Excel</button>
+      <table id="wasteTable">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Location Code</th>
+            <th>Recipe No.</th>
+            <th>Recipe Description</th>
+            <th>Quantity</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
 
-  <table id="wasteTable">
-    <thead>
-      <tr>
-        <th>Date</th>
-        <th>Location Code</th>
-        <th>Recipe No.</th>
-        <th>Recipe Description</th>
-        <th>Quantity</th>
-      </tr>
-    </thead>
-    <tbody></tbody>
-  </table>
+    <!-- Lunch Section -->
+    <div id="lunchTab" class="accounting-section" data-sec="lunch" style="display:none;">
+      <h3>LUNCH RECORDS</h3>
+      <button onclick="copyLunchTableToClipboard()">Copy to Excel</button>
+      <table id="lunchTable">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Item No.</th>
+            <th>Item</th>
+            <th>Qty</th>
+            <th>UOM</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <!-- Analytics Section -->
+    <div id="analyticsTab" class="accounting-section" data-sec="analytics" style="display:none;">
+      <section class="analytics" id="analyticsDashboard" style="margin-top:1rem;">
+        <!-- Filters -->
+        <div class="filters" style="display:flex; gap:12px; flex-wrap:wrap; align-items:end;">
+          <div>
+            <label for="fStart">Start</label><br/>
+            <input type="date" id="fStart">
+          </div>
+          <div>
+            <label for="fEnd">End</label><br/>
+            <input type="date" id="fEnd">
+          </div>
+          <div>
+            <label for="fVenue">Venue</label><br/>
+            <select id="fVenue">
+              <option value="All">All</option>
+              <option value="Aloha">Aloha</option>
+              <option value="Ohana">Ohana</option>
+              <option value="Gateway">Gateway</option>
+              <option value="Concessions">Concessions</option>
+              <option value="Main Kitchen">Main Kitchen</option>
+            </select>
+          </div>
+          <div>
+            <label for="fSection">Section</label><br/>
+            <select id="fSection">
+              <option value="All">All</option>
+            </select>
+          </div>
+          <button id="applyAnalyticsFilters">Apply Filters</button>
+          <span id="analyticsLoading" style="display:none;">⏳ loading…</span>
+        </div>
+
+        <!-- Cards -->
+        <div style="display:grid; grid-template-columns:1fr; gap:16px; margin-top:12px;">
+          <div class="card" style="padding:12px; border:1px solid #333; border-radius:12px;">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <h3 style="margin:0;">Total Cost per Day (Add-ons vs Starting-Par)</h3>
+              <button id="exportCostDailyCsv">Export CSV</button>
+            </div>
+            <canvas id="costPerDayChart" height="120"></canvas>
+            <div id="costDailyTotals" style="margin-top:8px; font-size:0.9rem;"></div>
+            <details style="margin-top:8px;">
+              <summary>Show daily item breakdown</summary>
+              <div id="costDailyBreakdown"></div>
+            </details>
+          </div>
+        </div>
+      </section>
+    </div>
+
+  </div>
 </div>
 
-<!-- Lunch Section -->
-<div id="lunchTab" class="accounting-section" data-sec="lunch" style="display:none;">
-  <h3>LUNCH RECORDS</h3>
-  <button onclick="copyLunchTableToClipboard()">Copy to Excel</button>
-
-  <table id="lunchTable">
-    <thead>
-      <tr>
-        <th>Date</th>
-        <th>Item No.</th>
-        <th>Item</th>
-        <th>Qty</th>
-        <th>UOM</th>
-      </tr>
-    </thead>
-    <tbody></tbody>
-  </table>
-</div>
-
-
-</div>
-</div>
   <!-- Chat Box -->
 
 <!-- ✅ Place the Chat Box here (outside any .screen or .station-section divs) -->

@@ -5633,3 +5633,333 @@ window.sendAllMainLunch = async function () {
     alert("⚠️ No valid lunch quantities found.");
   }
 };
+
+
+//**ANALYTICS */
+
+// ===== Analytics Dashboard (safe wrapper) =====
+(() => {
+  'use strict';
+
+  // Reuse existing state if it exists
+  window.analyticsState = window.analyticsState || {
+    start: null, end: null, venue: "All", section: "All",
+    sectionsLoaded: false,
+    charts: { costPerDay: null }
+  };
+
+  // Init dashboard once your Accounting tab shows (or call from onLoad)
+  window.initAnalyticsDashboard = async function initAnalyticsDashboard() {
+    const startEl = document.getElementById("fStart");
+    const endEl   = document.getElementById("fEnd");
+    const venueEl = document.getElementById("fVenue");
+    const sectEl  = document.getElementById("fSection");
+
+    // If filters aren't on the page yet, bail quietly
+    if (!startEl || !endEl || !venueEl || !sectEl) return;
+
+    // Default to last 7 days (Honolulu time)
+    const today = new Date();
+    const endStr = toYMD(today);
+    const start = new Date(today);
+    start.setDate(start.getDate() - 6);
+    const startStr = toYMD(start);
+
+    startEl.value = startStr;
+    endEl.value   = endStr;
+
+    // Load sections from recipes once
+    if (!window.analyticsState.sectionsLoaded) {
+      await populateSectionsDropdown(sectEl);
+      window.analyticsState.sectionsLoaded = true;
+    }
+
+    // First render
+    await runAnalytics();
+
+    // Events (guard elements)
+    const applyBtn = document.getElementById("applyAnalyticsFilters");
+    if (applyBtn) applyBtn.onclick = runAnalytics;
+
+    const exportBtn = document.getElementById("exportCostDailyCsv");
+    if (exportBtn) exportBtn.onclick = exportCostDailyCsv;
+  };
+
+  function toYMD(d) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`; // matches your Firestore date string
+  }
+
+  async function populateSectionsDropdown(selectEl) {
+    const recipesSnap = await getDocs(collection(db, "recipes"));
+    const sections = new Set();
+    recipesSnap.forEach(snap => {
+      const data = snap.data();
+      // Use your preferred field – examples seen: category, station, section.
+      const s = data.section || data.station || data.category;
+      if (s) sections.add(String(s));
+    });
+    const list = Array.from(sections).sort();
+    for (const s of list) {
+      const opt = document.createElement("option");
+      opt.value = s;
+      opt.textContent = s;
+      selectEl.appendChild(opt);
+    }
+  }
+
+  async function runAnalytics() {
+    const loading = document.getElementById("analyticsLoading");
+    if (loading) loading.style.display = "inline";
+
+    const startStr = document.getElementById("fStart")?.value || "";
+    const endStr   = document.getElementById("fEnd")?.value || "";
+    const venue    = document.getElementById("fVenue")?.value || "All";
+    const section  = document.getElementById("fSection")?.value || "All";
+
+    window.analyticsState.start = startStr;
+    window.analyticsState.end = endStr;
+    window.analyticsState.venue = venue;
+    window.analyticsState.section = section;
+
+    // Pull orders in range (type: addon | starting-par)
+    const orders = await fetchOrdersRange({ startStr, endStr, venue, section });
+
+    // Render Total Cost per Day
+    const { labels, addon, startingPar, totals, breakdown } =
+      buildCostPerDaySeries(orders);
+
+    renderCostPerDayChart(labels, addon, startingPar);
+    renderCostDailyFooter(totals);
+    renderDailyBreakdown(breakdown);
+
+    if (loading) loading.style.display = "none";
+  }
+
+  async function fetchOrdersRange({ startStr, endStr, venue, section }) {
+    const ordersRef = collection(db, "orders");
+
+    // Base query: date range (do venue/section filtering in-memory to avoid composite index needs)
+    const qBase = query(
+      ordersRef,
+      where("date", ">=", startStr),
+      where("date", "<=", endStr)
+    );
+
+    const snap = await getDocs(qBase);
+
+    const orders = [];
+    snap.forEach(s => {
+      const data = s.data();
+      // Normalize fields we rely on:
+      const t = (data.type || "").toLowerCase(); // "add-on" or "addon" or "starting-par"
+      const normalizedType =
+        t.includes("add") ? "addon" :
+        t.includes("start") ? "starting-par" : (t || "unknown");
+
+      const rec = {
+        id: s.id,
+        date: data.date,               // "YYYY-MM-DD"
+        venue: data.venue || "",
+        section: data.section || data.station || data.category || "",
+        type: normalizedType,
+        totalCost: Number(data.totalCost || 0),
+        recipeId: data.recipeId || "",
+        recipeNo: data.recipeNo || "",
+        description: data.description || data.item || "" // for later breakdowns
+      };
+
+      // Filter: venue & section
+      if (venue !== "All" && rec.venue !== venue) return;
+      if (section !== "All" && String(rec.section) !== section) return;
+
+      orders.push(rec);
+    });
+
+    return orders;
+  }
+
+  function buildCostPerDaySeries(orders) {
+    // Build continuous date labels between start..end
+    const start = window.analyticsState.start;
+    const end   = window.analyticsState.end;
+    const labels = enumerateDates(start, end); // array of "YYYY-MM-DD"
+
+    // Per-day buckets
+    const addon = labels.map(() => 0);
+    const startingPar = labels.map(() => 0);
+
+    // For footer totals + breakdown
+    let totalAddon = 0, totalStarting = 0;
+    const breakdownByDay = {}; // {date: [{item, type, cost}]}
+
+    const idx = new Map(labels.map((d, i) => [d, i]));
+
+    for (const o of orders) {
+      const i = idx.get(o.date);
+      if (i == null) continue;
+
+      if (o.type === "addon") {
+        addon[i] += o.totalCost;
+        totalAddon += o.totalCost;
+      } else if (o.type === "starting-par") {
+        startingPar[i] += o.totalCost;
+        totalStarting += o.totalCost;
+      }
+
+      if (!breakdownByDay[o.date]) breakdownByDay[o.date] = [];
+      breakdownByDay[o.date].push({
+        item: o.description || o.recipeNo || o.recipeId || "(item)",
+        type: o.type,
+        cost: o.totalCost
+      });
+    }
+
+    return {
+      labels,
+      addon,
+      startingPar,
+      totals: {
+        total: totalAddon + totalStarting,
+        addon: totalAddon,
+        startingPar: totalStarting
+      },
+      breakdown: breakdownByDay
+    };
+  }
+
+  function enumerateDates(startStr, endStr) {
+    const out = [];
+    const d = new Date(startStr + "T00:00:00");
+    const end = new Date(endStr + "T00:00:00");
+    while (d <= end) {
+      out.push(toYMD(d));
+      d.setDate(d.getDate() + 1);
+    }
+    return out;
+  }
+
+  function renderCostPerDayChart(labels, addon, startingPar) {
+    const canvas = document.getElementById("costPerDayChart");
+    if (!canvas) return; // not on page yet
+    const ctx = canvas.getContext("2d");
+
+    // Destroy previous
+    if (window.analyticsState.charts.costPerDay) {
+      window.analyticsState.charts.costPerDay.destroy();
+    }
+
+    if (typeof Chart === "undefined") {
+      console.warn("Chart.js not found — skipping chart render.");
+      return;
+    }
+
+    window.analyticsState.charts.costPerDay = new Chart(ctx, {
+      type: "bar",
+      data: {
+        labels,
+        datasets: [
+          { label: "Add‑ons", data: addon, stack: "cost" },
+          { label: "Starting‑Par", data: startingPar, stack: "cost" }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          tooltip: {
+            callbacks: {
+              footer: (items) => {
+                const sum = items.reduce((a, it) => a + (Number(it.raw) || 0), 0);
+                return `Total: $${sum.toFixed(2)}`;
+              }
+            }
+          },
+          legend: { position: "top" },
+          title: { display: false }
+        },
+        scales: {
+          x: { stacked: true },
+          y: {
+            stacked: true,
+            beginAtZero: true,
+            ticks: { callback: v => `$${Number(v).toLocaleString()}` }
+          }
+        }
+      }
+    });
+  }
+
+  function renderCostDailyFooter(totals) {
+    const el = document.getElementById("costDailyTotals");
+    if (!el) return;
+    const { venue } = window.analyticsState;
+    el.innerHTML =
+      `<strong>${venue === "All" ? "All Venues" : venue}:</strong>
+       Total $${(totals.total || 0).toFixed(2)}
+       &nbsp;•&nbsp; Add‑ons $${(totals.addon || 0).toFixed(2)}
+       &nbsp;•&nbsp; Starting‑Par $${(totals.startingPar || 0).toFixed(2)}`;
+  }
+
+  function renderDailyBreakdown(breakdownByDay) {
+    const wrap = document.getElementById("costDailyBreakdown");
+    if (!wrap) return;
+    const dates = Object.keys(breakdownByDay).sort();
+    let html = "";
+    for (const d of dates) {
+      const items = breakdownByDay[d]
+        .sort((a,b) => b.cost - a.cost)
+        .map(x => `<div style="display:flex; justify-content:space-between; gap:8px;">
+                     <span>${escapeHtml(x.item)} <em style="opacity:.7">(${x.type})</em></span>
+                     <span>$${x.cost.toFixed(2)}</span>
+                   </div>`).join("");
+      html += `<div style="margin:8px 0; padding:8px; border:1px solid #444; border-radius:8px;">
+                <div style="font-weight:600; margin-bottom:6px;">${d}</div>
+                ${items || "<em>No items</em>"}
+              </div>`;
+    }
+    wrap.innerHTML = html || "<em>No data in range.</em>";
+  }
+
+  function exportCostDailyCsv() {
+    const chart = window.analyticsState.charts.costPerDay;
+    if (!chart) return;
+    const labels = chart.data.labels;
+    const ds = chart.data.datasets;
+
+    // Build CSV: date, addon, starting-par, total
+    const rows = [["date","addon_cost","startingpar_cost","total_cost"]];
+    for (let i=0; i<labels.length; i++) {
+      const a = Number(ds[0]?.data?.[i] ?? 0);
+      const s = Number(ds[1]?.data?.[i] ?? 0);
+      rows.push([labels[i], a.toFixed(2), s.toFixed(2), (a+s).toFixed(2)]);
+    }
+
+    const csv = rows.map(r => r.join(",")).join("\n");
+    const blob = new Blob([csv], {type:"text/csv;charset=utf-8;"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `cost_per_day_${window.analyticsState.start}_to_${window.analyticsState.end}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, m =>
+      ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])
+    );
+  }
+
+  // 👉 Call this once when your Accounting tab is shown (or app init if it's visible by default)
+  window.showAccountingDashboard = function showAccountingDashboard() {
+    // Make the section visible if you hide/show screens elsewhere:
+    const sec = document.getElementById("analyticsDashboard");
+    if (sec && sec.style) sec.style.display = "block";
+    window.initAnalyticsDashboard();
+  };
+
+})();
