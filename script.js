@@ -2299,69 +2299,124 @@ window.sendSingleWaste = async function (button, recipeId) {
 };
 
 
+// ✅ Waste check that works with add-ons (item/recipeNo) and starting-par (id/no/desc)
 async function checkIfEnoughReceived(recipeId, wasteQty, venue) {
   const today = getTodayDate();
+  const epsilon = 1e-6;
 
-  // 🔎 How much was received today?
-  const ordersRef = collection(db, "orders");
-  const ordersQuery = query(
-    ordersRef,
-    where("recipeId", "==", recipeId),
-    where("venue", "==", venue),
-    where("status", "==", "received"),
-    where("date", "==", today)
-  );
-  const ordersSnap = await getDocs(ordersQuery);
+  // --- Resolve recipeNo + description from the given recipeId (waste UI passes id) ---
+  let recipeNo = "";
+  let description = "";
 
-  let totalReceived = 0;
-  ordersSnap.forEach(doc => {
-    const data = doc.data();
-    totalReceived += Number(data.sendQty || 0);
-  });
-
-  // 🧭 Resolve the recipe description (use the correct list for the venue)
-  let recipeDescription = "";
-  const venueList =
-    venue === "Aloha" ? window.alohaWasteRecipeList :
-    venue === "Gateway" ? window.gatewayWasteRecipeList :
-    venue === "Ohana" ? window.ohanaWasteRecipeList : null;
-
-  const listsToCheck = [venueList, window.cachedAlohaWasteRecipes, window.cachedGatewayWasteRecipes, window.cachedOhanaWasteRecipes]
-    .filter(Boolean);
+  const listsToCheck = [
+    venue === "Aloha"   ? window.alohaWasteRecipeList   : null,
+    venue === "Gateway" ? window.gatewayWasteRecipeList : null,
+    venue === "Ohana"   ? window.ohanaWasteRecipeList   : null,
+    window.cachedAlohaWasteRecipes,
+    window.cachedGatewayWasteRecipes,
+    window.cachedOhanaWasteRecipes
+  ].filter(Boolean);
 
   for (const list of listsToCheck) {
-    const match = list.find(r => r.id === recipeId);
-    if (match) { recipeDescription = match.description || ""; break; }
+    const hit = list.find(r => r.id === recipeId);
+    if (hit) {
+      recipeNo    = (hit.recipeNo || hit.recipe_no || "").toString();
+      description = (hit.description || "").toString();
+      break;
+    }
   }
-
-  // Fallback fetch if still unknown
-  if (!recipeDescription) {
+  if (!description || !recipeNo) {
     const snap = await getDoc(doc(db, "recipes", recipeId));
-    if (snap.exists()) recipeDescription = snap.data().description || "";
+    if (snap.exists()) {
+      const d = snap.data();
+      recipeNo    = (d.recipeNo || d.recipe_no || "").toString();
+      description = (d.description || "").toString();
+    }
   }
 
-  // 🗑️ Sum waste already recorded today for this item
-  const wasteRef = collection(db, "waste");
-  const wasteQuery = query(
-    wasteRef,
-    where("venue", "==", venue),
-    where("item", "==", recipeDescription),
-    where("date", "==", today)
-  );
-  const wasteSnap = await getDocs(wasteQuery);
+  const norm = v => (v == null ? "" : String(v).trim().toLowerCase());
+  const recId   = norm(recipeId);
+  const recNo   = norm(recipeNo);
+  const recDesc = norm(description);
 
-  let alreadyWasted = 0;
-  wasteSnap.forEach(doc => {
-    alreadyWasted += Number(doc.data().qty || 0);
+  // --- Get all today's orders for this venue (we'll filter by recipe in code) ---
+  const ordersSnap = await getDocs(query(
+    collection(db, "orders"),
+    where("date", "==", today),
+    where("venue", "==", venue)  // e.g., "Gateway"
+  ));
+
+  let totalReceived = 0;
+  let matchedOrders = 0;
+
+  ordersSnap.forEach(docSnap => {
+    const d = docSnap.data();
+
+    // Skip cancellations/voids
+    const status = norm(d.status || "sent");
+    if (status === "cancelled" || status === "void") return;
+
+    // Only count relevant types (addon & starting-par). If you want to include others, add here.
+    const typ = norm(d.type || "");
+    if (typ && !(typ === "starting-par" || typ === "addon")) return;
+
+    // Match by any identifier you store in orders
+    const dId   = norm(d.recipeId);
+    const dNo   = norm(d.recipeNo);
+    const dDesc = norm(d.recipeDescription || d.item || d.description);
+
+    const isSameRecipe =
+      (dId && dId === recId) ||
+      (dNo && dNo === recNo) ||
+      (dDesc && dDesc === recDesc);
+
+    if (!isSameRecipe) return;
+
+    // Use the largest available quantity field to avoid undercounting
+    const recNet  = parseFloat(d.netWeight ?? 0);
+    const recSend = parseFloat(d.sendQty   ?? 0);
+    const recQty  = parseFloat(d.qty       ?? 0);
+    const used = Math.max(
+      Number.isFinite(recNet)  ? recNet  : 0,
+      Number.isFinite(recSend) ? recSend : 0,
+      Number.isFinite(recQty)  ? recQty  : 0
+    );
+
+    console.log(`📦 Counted order: status=${status}, type=${typ || "(n/a)"} · recipeId=${d.recipeId} · recipeNo=${d.recipeNo} · item=${d.item} · netWeight=${recNet} · sendQty=${recSend} · qty=${recQty} → used=${used}`);
+
+    if (used > 0) {
+      totalReceived += used;
+      matchedOrders++;
+    }
   });
 
-  // ✅ Don’t exceed what was received
-  return wasteQty <= (totalReceived - alreadyWasted);
+  if (matchedOrders === 0) {
+    console.warn(`[checkIfEnoughReceived] No matching orders for ${venue} ${today} recipeId=${recipeId}. Keys used → id:${recId}, no:${recNo}, desc:${recDesc}`);
+  }
+
+  // --- Sum today's already-wasted (waste stores .item as the description) ---
+  let alreadyWasted = 0;
+  if (description) {
+    const wasteSnap = await getDocs(query(
+      collection(db, "waste"),
+      where("venue", "==", venue),
+      where("item", "==", description),
+      where("date", "==", today)
+    ));
+    wasteSnap.forEach(docSnap => {
+      const w = parseFloat(docSnap.data()?.qty ?? 0);
+      if (Number.isFinite(w)) alreadyWasted += w;
+    });
+  }
+
+  const available = totalReceived - alreadyWasted;
+
+  console.log(`[checkIfEnoughReceived] ${venue} • ${description || recipeNo || recipeId} (${recipeId})
+  totalReceived: ${totalReceived} | alreadyWasted: ${alreadyWasted} | requestedWaste: ${wasteQty} | available: ${available}`);
+
+  return parseFloat(wasteQty) <= available + epsilon;
 }
 
-//**Main kitchen waste */
-// 🧠 Persist totals by itemId
-window.mainWasteTotals = window.mainWasteTotals || {}; 
 
 window.loadMainKitchenWaste = async function () {
   const tableBody = document.querySelector(".main-waste-table tbody");
