@@ -3,13 +3,17 @@
   "version": "1.0.0",
   "description": "",
   "main": "firebaseConfig.js",
-  "scripts": {
-    "start": "live-server",
-    "emu": "firebase emulators:start --import=./.emulator-data --export-on-exit",
-    "emu:clean": "rimraf ./.emulator-data && mkdir -p ./.emulator-data",
-    "seed": "node scripts/seed-local.js",
-    "dev:local": "concurrently \"npm:emu\" \"wait-on tcp:8080 && npm run seed && npm run start\""
-  },
+"scripts": {
+  "start": "live-server --port=5500",
+  "emu": "firebase emulators:start --import=./.emulator-data --export-on-exit",
+  "emu:clean": "rimraf ./.emulator-data && mkdir -p ./.emulator-data",
+  "seed": "node scripts/seed-local.js",
+  "dev:local": "concurrently \"npm:emu\" \"wait-on tcp:8080 && npm run seed && npm run start\"",
+  "dev": "npm run dev:local"
+}
+
+
+,
   "keywords": [],
   "author": "",
   "license": "ISC",
