@@ -4881,10 +4881,11 @@ Object.entries(venueNames).forEach(([code, name]) => {
 let allShipmentData = []; // ⏺ Global store
 
 // 📥 Fetch + normalize Firestore orders
+// 📥 Fetch + normalize Firestore orders (supports Concessions split to C002/C003)
 window.loadProductionShipments = async function () {
   const container = document.getElementById("singleVenueShipmentContainer");
 
-  // 🌀 Show loading spinner immediately
+  // spinner
   container.innerHTML = `
     <div style="text-align:center; padding: 20px;">
       <div class="spinner"></div>
@@ -4894,82 +4895,118 @@ window.loadProductionShipments = async function () {
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-
   const yyyy = today.getFullYear();
   const mm = String(today.getMonth() + 1).padStart(2, '0');
   const dd = String(today.getDate()).padStart(2, '0');
   const todayStr = `${yyyy}-${mm}-${dd}`;
 
-  // ✅ Fetch only today's orders
-  const snapshot = await getDocs(
+  // 1) pull today's orders
+  const snap = await getDocs(
     query(collection(db, "orders"), where("date", "==", todayStr))
   );
 
-  const recipeMap = new Map(); // recipe key → summary object
-  const recipeNos = new Set();
+  // We'll do a two-pass build so we can use recipe.venueCodes when venue === "Concessions"
+  const pending = [];                     // rows we still must place into a venue "code"
+  const recipeNos = new Set();            // for batch recipe fetch
+  const recipeMap = new Map();            // key: `${venueCode}__${recipeNo}` -> { venueCode, recipeNo, description, quantity, type }
 
-  snapshot.forEach(doc => {
-    const data = doc.data();
-
-    const type = data.type || "";
-    const rawRecipeNo = data.recipeNo || data.recipeId || "";
-    const recipeNo = rawRecipeNo.toUpperCase();
-    if (!recipeNo) return;
-
-    const venue = (data.venue || "").toLowerCase();
-    const venueCode = venueCodesByName[venue];
-    if (!venueCode) return;
-
-    let quantity = 0;
-    if (type === "starting-par") {
-      quantity = Number(data.netWeight ?? 0);
-    } else {
-      quantity = Number(data.sendQty ?? data.qty ?? 0);
-    }
-
-    if (quantity <= 0) return;
-
+  // helper to add to recipeMap
+  function addQty(venueCode, recipeNo, quantity, type) {
     const key = `${venueCode}__${recipeNo}`;
-    recipeNos.add(recipeNo);
-
     if (!recipeMap.has(key)) {
       recipeMap.set(key, {
         venueCode,
         recipeNo,
-        quantity: 0,
         description: "No Description",
+        quantity: 0,
         type,
       });
     }
-
     recipeMap.get(key).quantity += quantity;
+  }
+
+  snap.forEach(doc => {
+    const d = doc.data();
+
+    const type = d.type || "";
+    const rawRecipeNo = d.recipeNo || d.recipeId || "";
+    const recipeNo = String(rawRecipeNo || "").toUpperCase();
+    if (!recipeNo) return;
+
+    let qty = 0;
+    if (type === "starting-par") {
+      qty = Number(d.netWeight ?? 0);        // lbs for starting-par
+    } else {
+      qty = Number(d.sendQty ?? d.qty ?? 0); // pans/ea for addons, etc.
+    }
+    if (!qty || qty <= 0) return;
+
+    const venueLower = String(d.venue || "").toLowerCase();
+    const codeFromName = (venueCodesByName || {})[venueLower]; // b001/b002/b003 or maybe undefined
+
+    // Known non-concession venue? add immediately.
+    if (codeFromName && !codeFromName.startsWith("c")) {
+      addQty(codeFromName, recipeNo, qty, type);
+    } else {
+      // Either generic "Concessions" (no code) or a direct c002/c003 write.
+      pending.push({ venueLower, codeFromName, recipeNo, qty, type });
+    }
+
+    recipeNos.add(recipeNo);
   });
 
-  // ✅ Batch fetch recipe descriptions
-  const recipeDescMap = new Map();
-  const recipeList = Array.from(recipeNos);
-  for (let i = 0; i < recipeList.length; i += 10) {
-    const batch = recipeList.slice(i, i + 10);
-    const snap = await getDocs(
+  // 2) Batch fetch recipes (for description + venueCodes)
+  const recipeMeta = new Map(); // recipeNo -> { description, venueCodes[] }
+  const list = Array.from(recipeNos);
+  for (let i = 0; i < list.length; i += 10) {
+    const batch = list.slice(i, i + 10);
+    const rsnap = await getDocs(
       query(collection(db, "recipes"), where("recipeNo", "in", batch))
     );
-    snap.forEach(doc => {
-      const data = doc.data();
-      recipeDescMap.set(data.recipeNo.toUpperCase(), data.description || "No Description");
+    rsnap.forEach(rdoc => {
+      const r = rdoc.data();
+      recipeMeta.set(
+        String(r.recipeNo || "").toUpperCase(),
+        {
+          description: r.description || "No Description",
+          venueCodes: (r.venueCodes || []).map(v => String(v).toLowerCase())
+        }
+      );
     });
   }
 
-  // ✅ Assign descriptions
-  for (const shipment of recipeMap.values()) {
-    shipment.description = recipeDescMap.get(shipment.recipeNo) || "No Description";
+  // 3) Place pending rows
+  pending.forEach(({ venueLower, codeFromName, recipeNo, qty, type }) => {
+    const meta = recipeMeta.get(recipeNo) || { venueCodes: [] };
+
+    // If order already has a C-code (rare), just use it.
+    if (codeFromName && codeFromName.startsWith("c")) {
+      addQty(codeFromName, recipeNo, qty, type);
+      return;
+    }
+
+    // Generic "Concessions" → split by recipe.venueCodes (we only care about c002/c003)
+    if (venueLower === "concessions") {
+      const targets = meta.venueCodes.filter(c => c === "c002" || c === "c003");
+      // if a recipe belongs to both, add to both; if neither, skip
+      if (targets.length > 0) {
+        targets.forEach(c => addQty(c, recipeNo, qty, type));
+      }
+      return;
+    }
+
+    // Unknown venue name: nothing to do
+  });
+
+  // 4) Apply descriptions
+  for (const rec of recipeMap.values()) {
+    rec.description = (recipeMeta.get(rec.recipeNo)?.description) || "No Description";
   }
 
+  // 5) Publish and show Aloha by default
   allShipmentData = Array.from(recipeMap.values());
-
-  // ✅ This clears the spinner and renders Aloha by default
   loadVenueShipment("b001");
 };
-
 
 // 📤 Show one venue shipment
 window.loadVenueShipment = function (venueCode) {
