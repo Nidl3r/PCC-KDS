@@ -1056,56 +1056,118 @@
     </div>
 
     <!-- Analytics Section -->
-    <div id="analyticsTab" class="accounting-section" data-sec="analytics" style="display:none;">
-      <section class="analytics" id="analyticsDashboard" style="margin-top:1rem;">
-        <!-- Filters -->
-        <div class="filters" style="display:flex; gap:12px; flex-wrap:wrap; align-items:end;">
-          <div>
-            <label for="fStart">Start</label><br/>
-            <input type="date" id="fStart">
-          </div>
-          <div>
-            <label for="fEnd">End</label><br/>
-            <input type="date" id="fEnd">
-          </div>
-          <div>
-            <label for="fVenue">Venue</label><br/>
-            <select id="fVenue">
-              <option value="All">All</option>
-              <option value="Aloha">Aloha</option>
-              <option value="Ohana">Ohana</option>
-              <option value="Gateway">Gateway</option>
-              <option value="Concessions">Concessions</option>
-              <option value="Main Kitchen">Main Kitchen</option>
-            </select>
-          </div>
-          <div>
-            <label for="fSection">Section</label><br/>
-            <select id="fSection">
-              <option value="All">All</option>
-            </select>
-          </div>
-          <button id="applyAnalyticsFilters">Apply Filters</button>
-          <span id="analyticsLoading" style="display:none;">⏳ loading…</span>
+<!-- Analytics Section -->
+<div id="analyticsTab" class="accounting-section" data-sec="analytics" style="display:none;">
+  <section class="analytics" id="analyticsDashboard" style="margin-top:1rem;">
+
+    <!-- Filters (top row) -->
+    <div class="filters" style="display:flex; gap:12px; flex-wrap:wrap; align-items:end;">
+      <div>
+        <label for="fStart">Start</label><br/>
+        <input type="date" id="fStart">
+      </div>
+      <div>
+        <label for="fEnd">End</label><br/>
+        <input type="date" id="fEnd">
+      </div>
+      <div>
+        <label for="fVenue">Venue</label><br/>
+        <select id="fVenue">
+          <option value="All">All</option>
+          <option value="Aloha">Aloha</option>
+          <option value="Ohana">Ohana</option>
+          <option value="Gateway">Gateway</option>
+          <option value="Concessions">Concessions</option>
+          <option value="Main Kitchen">Main Kitchen</option>
+        </select>
+      </div>
+      <div>
+        <label for="fSection">Section</label><br/>
+        <select id="fSection">
+          <option value="All">All</option>
+        </select>
+      </div>
+      <button id="applyAnalyticsFilters">Apply Filters</button>
+      <span id="analyticsLoading" style="display:none;">⏳ loading…</span>
+    </div>
+
+    <!-- Main layout: table left, side panel right -->
+    <div style="display:grid; grid-template-columns: 2fr 1fr; gap:16px; margin-top:12px;">
+
+      <!-- LEFT: Order detail table -->
+      <div class="card" style="padding:12px; border:1px solid #333; border-radius:12px; overflow:auto;">
+        <h3 style="margin:0 0 8px;">Order Detail</h3>
+        <table id="analyticsTable" style="width:100%; border-collapse:collapse;">
+          <thead>
+            <tr style="text-align:left; border-bottom:1px solid #444;">
+              <th>Year</th>
+              <th>Month</th>
+              <th>Day</th>
+              <th>Item No</th>
+              <th>Item Description</th>
+              <th>Item Category</th>
+              <th>Quantity</th>
+              <th>UOM</th>
+              <th style="text-align:right;">Cost</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+          <tfoot>
+            <tr style="border-top:1px solid #444;">
+              <td colspan="8" style="text-align:right;"><strong>Total</strong></td>
+              <td id="analyticsTableTotal" style="text-align:right;">$0.00</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+
+      <!-- RIGHT: Date range + breakdown + filters -->
+      <div style="display:flex; flex-direction:column; gap:16px;">
+
+        <!-- Date Range (read-only display, selection handled above) -->
+        <div class="card" style="padding:12px; border:1px solid #333; border-radius:12px;">
+          <h3 style="margin:0 0 8px;">Date Range</h3>
+          <div>From: <span id="drFrom"><script>/* filled by JS if you want */</script></span></div>
+          <div>To:&nbsp;&nbsp;&nbsp; <span id="drTo"></span></div>
         </div>
 
-        <!-- Cards -->
-        <div style="display:grid; grid-template-columns:1fr; gap:16px; margin-top:12px;">
-          <div class="card" style="padding:12px; border:1px solid #333; border-radius:12px;">
-            <div style="display:flex; justify-content:space-between; align-items:center;">
-              <h3 style="margin:0;">Total Cost per Day (Add-ons vs Starting-Par)</h3>
-              <button id="exportCostDailyCsv">Export CSV</button>
-            </div>
-            <canvas id="costPerDayChart" height="120"></canvas>
-            <div id="costDailyTotals" style="margin-top:8px; font-size:0.9rem;"></div>
-            <details style="margin-top:8px;">
-              <summary>Show daily item breakdown</summary>
-              <div id="costDailyBreakdown"></div>
-            </details>
+        <!-- Category breakdown (totals) -->
+        <div class="card" style="padding:12px; border:1px solid #333; border-radius:12px;">
+          <h3 style="margin:0 0 8px;">Item Category Breakdown</h3>
+          <table id="categoryBreakdown" style="width:100%; border-collapse:collapse;">
+            <tbody><!-- JS fills rows: Category | Cost + Total row --></tbody>
+          </table>
+        </div>
+
+        <!-- Filters: category multi-select -->
+        <div class="card" style="padding:12px; border:1px solid #333; border-radius:12px;">
+          <h3 style="margin:0 0 8px;">Item Category</h3>
+          <div id="filterCatWrap" style="display:flex; flex-wrap:wrap; gap:10px;">
+            <!-- JS injects checkboxes -->
           </div>
         </div>
-      </section>
+
+        <!-- Filters: item description search + multi-select -->
+        <div class="card" style="padding:12px; border:1px solid #333; border-radius:12px;">
+          <h3 style="margin:0 8px 8px 0;">Item Description</h3>
+          <input id="filterItemSearch" placeholder="Search items…" style="width:100%; margin-bottom:8px;">
+          <div id="filterItemWrap" style="max-height:180px; overflow:auto;">
+            <!-- JS injects checkboxes (recipeNo — description) -->
+          </div>
+        </div>
+
+      </div>
     </div>
+
+    <!-- Line chart: cost per category per day -->
+    <div class="card" style="padding:12px; border:1px solid #333; border-radius:12px; margin-top:16px;">
+      <h3 style="margin:0 0 8px;">Cost per Category per Day</h3>
+      <canvas id="categoryLineChart" height="220"></canvas>
+    </div>
+
+  </section>
+</div>
+
 
   </div>
 </div>
