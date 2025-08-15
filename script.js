@@ -5476,98 +5476,173 @@ window.copyWasteTableToClipboard = function () {
 };
 
 
+// 🧾 Accounting: show ONLY today's lunch records (HST day)
+// 🧾 Accounting: show ONLY today's lunch records (HST day) with ItemNo, Qty, UOM
 async function loadLunchAccountingTable() {
   const tbody = document.querySelector("#lunchTable tbody");
+  if (!tbody) return;
   tbody.innerHTML = "";
 
-  // 🔹 Local date formatter
-  function formatDateLocal(dateStr) {
-    const parts = dateStr.split("-");
-    if (parts.length !== 3) return dateStr;
-    const year = parseInt(parts[0], 10);
-    const month = parseInt(parts[1], 10) - 1;
-    const day = parseInt(parts[2], 10);
-    const localDate = new Date(year, month, day);
-    return `${localDate.getMonth() + 1}/${localDate.getDate()}/${localDate.getFullYear()}`;
-  }
+  // ---------- HST "today" window ----------
+  const todayStr = typeof getTodayDate === "function" ? getTodayDate() : (() => {
+    const now = new Date();
+    const hNow = new Date(now.getTime() + (-10 * 60 * 60 * 1000));
+    const y = hNow.getUTCFullYear();
+    const m = String(hNow.getUTCMonth() + 1).padStart(2, "0");
+    const d = String(hNow.getUTCDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  })();
+  const [yStr, mStr, dStr] = todayStr.split("-");
+  const y = +yStr, m = +mStr, d = +dStr;
+  const hStart = new Date(Date.UTC(y, m - 1, d, 0, 0, 0));
+  const hEnd   = new Date(Date.UTC(y, m - 1, d + 1, 0, 0, 0));
 
-  // 🥄 Preload recipes and ingredients
-  const recipeSnapshot = await getDocs(collection(db, "recipes"));
-  const recipeMap = new Map();
-  recipeSnapshot.forEach(doc => {
-    const data = doc.data();
-    if (data.description) {
-      recipeMap.set(data.description.toLowerCase(), data.recipeNo);
+  // ---------- Helpers ----------
+  const fmtDate = (val) => {
+    if (typeof val === "string") {
+      return (typeof formatDateLocal === "function") ? formatDateLocal(val) : val;
     }
+    let dt = null;
+    if (val && typeof val.toDate === "function") dt = val.toDate();
+    else if (val instanceof Date) dt = val;
+    if (!dt) return "";
+    const yyyy = dt.getFullYear();
+    const mm = String(dt.getMonth() + 1).padStart(2, "0");
+    const dd = String(dt.getDate()).padStart(2, "0");
+    const ymd = `${yyyy}-${mm}-${dd}`;
+    return (typeof formatDateLocal === "function") ? formatDateLocal(ymd) : `${mm}/${dd}/${yyyy}`;
+  };
+  const inHstWindow = (t) => {
+    if (!t) return false;
+    const ms = (t instanceof Date) ? t.getTime() : (typeof t.toDate === "function" ? t.toDate().getTime() : NaN);
+    return Number.isFinite(ms) && ms >= hStart.getTime() && ms < hEnd.getTime();
+  };
+  const numStr = (n) => {
+    const x = Number(n);
+    if (!Number.isFinite(x)) return "";
+    return (Math.abs(x % 1) < 1e-9) ? String(x) : x.toFixed(2);
+  };
+
+  // ---------- Preload catalogs for lookups ----------
+  // (You likely already have these cached elsewhere; safe to recalc here)
+  const recipesSnap = await getDocs(collection(db, "recipes"));
+  const recipesById = new Map();      // id -> recipe doc
+  const recipeNoById = new Map();     // id -> recipeNo
+  recipesSnap.forEach(docSnap => {
+    const r = { id: docSnap.id, ...docSnap.data() };
+    recipesById.set(r.id, r);
+    if (r.recipeNo) recipeNoById.set(r.id, r.recipeNo);
   });
 
-  const ingredientSnapshot = await getDocs(collection(db, "ingredients"));
-  const ingredientMap = new Map();
-  ingredientSnapshot.forEach(doc => {
-    const data = doc.data();
-    if (data.itemName) {
-      ingredientMap.set(data.itemName.toLowerCase(), data.itemNo);
-    }
+  const ingredientsSnap = await getDocs(collection(db, "ingredients"));
+  const ingredientsById = new Map();  // id -> ingredient doc
+  const itemNoById = new Map();       // id -> itemNo
+  ingredientsSnap.forEach(docSnap => {
+    const ing = { id: docSnap.id, ...docSnap.data() };
+    ingredientsById.set(ing.id, ing);
+    if (ing.itemNo) itemNoById.set(ing.id, ing.itemNo);
   });
 
-  // 🥗 Load lunch entries
-  const snapshot = await getDocs(collection(db, "lunch"));
-  const entries = snapshot.docs.map(doc => doc.data());
+  // ---------- Query lunch for today (string and timestamp fields) ----------
+  const lunchRef = collection(db, "lunch");
+  const snapStr   = await getDocs(query(lunchRef, where("date", "==", todayStr)));
+  const snapDate  = await getDocs(query(lunchRef, where("date", ">=", hStart), where("date", "<", hEnd)));
+  const snapTs    = await getDocs(query(lunchRef, where("timestamp", ">=", hStart), where("timestamp", "<", hEnd)));
+  const snapSent  = await getDocs(query(lunchRef, where("sentAt", ">=", hStart), where("sentAt", "<", hEnd)));
 
-  entries.forEach(entry => {
-    let formattedDate = "";
-    let isoDateKey = "";
+  // ---------- Build rows (dedupe by doc id) ----------
+  const rows = [];
+  const seen = new Set();
 
-    if (typeof entry.date === "string") {
-      formattedDate = formatDateLocal(entry.date);
-      isoDateKey = entry.date;
-    } else if (entry.date instanceof Timestamp || (entry.date?.seconds && entry.date?.nanoseconds)) {
-      const jsDate = entry.date.toDate ? entry.date.toDate() : new Date(entry.date.seconds * 1000);
-      formattedDate = `${jsDate.getMonth() + 1}/${jsDate.getDate()}/${jsDate.getFullYear()}`;
-      const yyyy = jsDate.getFullYear();
-      const mm = String(jsDate.getMonth() + 1).padStart(2, "0");
-      const dd = String(jsDate.getDate()).padStart(2, "0");
-      isoDateKey = `${yyyy}-${mm}-${dd}`;
-    }
+  [snapStr, snapDate, snapTs, snapSent].forEach(s => {
+    s.forEach(docSnap => {
+      if (seen.has(docSnap.id)) return;
+      seen.add(docSnap.id);
 
-    const description = entry.item || "";
-    const descKey = description.toLowerCase();
-    const itemNo = recipeMap.get(descKey) || ingredientMap.get(descKey) || "";
+      const dta = docSnap.data();
 
-    const qty = Number(entry.qty || 0);
-    const uom = entry.uom || "ea";
+      // Enforce today's HST
+      const t =
+        dta.date?.toDate?.() ||
+        dta.timestamp?.toDate?.() ||
+        dta.sentAt?.toDate?.() ||
+        null;
 
-    const overrideKey = `${isoDateKey}__${itemNo || descKey}`;
-    const value = getAcctQty("lunch", overrideKey, qty);
+      if (t) {
+        if (!inHstWindow(t)) return;
+      } else if (typeof dta.date === "string" && dta.date !== todayStr) {
+        return;
+      }
 
-    const row = document.createElement("tr");
-    row.innerHTML = `
-      <td>${formattedDate}</td>
-      <td>${itemNo}</td>
-      <td>${description}</td>
-      <td>
-        <input
-          type="number"
-          step="0.01"
-          min="0"
-          class="acct-qty-input"
-          data-tab="lunch"
-          data-key="${overrideKey}"
-          value="${value}"
-          style="width: 90px; text-align:right;"
-        />
-      </td>
-      <td>${uom}</td>
+      // Resolve item fields
+      const recipeId = dta.recipeId || null;
+      const ingredientId = dta.ingredientId || null;
+
+      // Item No.
+      // Item No.
+let itemNo =
+  dta.itemNo || dta.recipeNo || dta.ingredientNo ||
+  // match recipe description to lunch.item
+  (() => {
+    const match = Array.from(recipesById.values())
+      .find(r => r.description?.toLowerCase().trim() === (dta.item || "").toLowerCase().trim());
+    return match?.recipeNo || "";
+  })() ||
+  // fallback to ingredient match if needed
+  (() => {
+    const match = Array.from(ingredientsById.values())
+      .find(i => i.itemName?.toLowerCase().trim() === (dta.item || "").toLowerCase().trim());
+    return match?.itemNo || "";
+  })() ||
+  "";
+
+
+      // Item Name
+      let itemName =
+        dta.item || dta.description || dta.itemName || dta.name ||
+        (recipeId ? (recipesById.get(recipeId)?.description || "") : "") ||
+        (ingredientId ? (ingredientsById.get(ingredientId)?.itemName || "") : "") ||
+        "";
+
+      // UOM
+      let uom =
+        dta.uom ||
+        (recipeId ? (recipesById.get(recipeId)?.uom || "") : "") ||
+        (ingredientId ? (ingredientsById.get(ingredientId)?.baseUOM || ingredientsById.get(ingredientId)?.uom || "") : "") ||
+        "";
+
+      // Qty
+      const qty = dta.qty ?? dta.quantity ?? dta.amount ?? dta.sendQty ?? null;
+
+      const displayDate = fmtDate(t || dta.date || todayStr);
+
+      rows.push({
+        displayDate,
+        itemNo: String(itemNo || ""),
+        itemName: String(itemName || ""),
+        qty: numStr(qty),
+        uom: String(uom || "")
+      });
+    });
+  });
+
+  // Optional sort (today already)
+  rows.sort((a, b) => (a.itemName || "").localeCompare(b.itemName || "") || (a.itemNo || "").localeCompare(b.itemNo || ""));
+
+  // ---------- Render ----------
+  for (const r of rows) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${r.displayDate}</td>
+      <td>${r.itemNo}</td>
+      <td>${r.itemName}</td>
+      <td>${r.qty}</td>
+      <td>${r.uom}</td>
     `;
-    tbody.appendChild(row);
-  });
-
-  tbody.addEventListener("input", (e) => {
-    const el = e.target;
-    if (!el.classList.contains("acct-qty-input")) return;
-    setAcctQty(el.dataset.tab, el.dataset.key, el.value);
-  });
+    tbody.appendChild(tr);
+  }
 }
+
 
 
 window.copyLunchTableToClipboard = function () {
@@ -5615,7 +5690,6 @@ function showLoading(targetSelector, message = "Loading...") {
 
 
 //**LUNCH */
-
 // 🧠 Persist totals by itemId for lunch
 window.mainLunchTotals = window.mainLunchTotals || {};
 
@@ -5623,9 +5697,24 @@ window.loadMainKitchenLunch = async function () {
   const tableBody = document.querySelector(".main-lunch-table tbody");
   tableBody.innerHTML = "";
 
-  // ✅ Use cache if available
+  // 🗓 HST "today"
+  const todayStrValue = typeof getTodayDate === "function" ? getTodayDate() : (() => {
+    const now = new Date();
+    const hawaiiOffsetMs = -10 * 60 * 60 * 1000;
+    const hNow = new Date(now.getTime() + hawaiiOffsetMs);
+    const y = hNow.getUTCFullYear();
+    const m = String(hNow.getUTCMonth() + 1).padStart(2, "0");
+    const d = String(hNow.getUTCDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  })();
+
+  const [yStr, mStr, dStr] = todayStrValue.split("-");
+  const y = Number(yStr), m = Number(mStr), d = Number(dStr);
+  const hStart = new Date(Date.UTC(y, m - 1, d, 0, 0, 0));      // 00:00 HST
+  const hEnd   = new Date(Date.UTC(y, m - 1, d + 1, 0, 0, 0));  // next 00:00 HST
+
+  // ✅ Cache items (recipes + ingredients)
   if (!window.cachedMainLunchItems) {
-    // Load all recipes
     const recipesSnap = await getDocs(collection(db, "recipes"));
     const allRecipes = recipesSnap.docs.map(doc => {
       const data = doc.data();
@@ -5639,7 +5728,6 @@ window.loadMainKitchenLunch = async function () {
       };
     });
 
-    // Load all ingredients
     const ingredientsSnap = await getDocs(collection(db, "ingredients"));
     const allIngredients = ingredientsSnap.docs.map(doc => {
       const data = doc.data();
@@ -5653,14 +5741,77 @@ window.loadMainKitchenLunch = async function () {
       };
     });
 
-    // Cache combined items
     window.cachedMainLunchItems = [...allRecipes, ...allIngredients];
     console.log("📦 Cached Main Kitchen lunch items:", window.cachedMainLunchItems.length);
   }
 
+  // 📥 Load ONLY today's lunch entries (works for string + Timestamp dates)
+  window.mainLunchTotals = {}; // reset before summing
+  try {
+    const lunchRef = collection(db, "lunch");
+
+    // A) String date exactly "YYYY-MM-DD"
+    const snapStr = await getDocs(query(lunchRef, where("date", "==", todayStrValue)));
+
+    // B) Timestamp in field "date"
+    const snapTsDate = await getDocs(query(
+      lunchRef,
+      where("date", ">=", hStart),
+      where("date", "<",  hEnd)
+    ));
+
+    // C) Timestamp in "timestamp"
+    const snapTsMain = await getDocs(query(
+      lunchRef,
+      where("timestamp", ">=", hStart),
+      where("timestamp", "<",  hEnd)
+    ));
+
+    // D) Timestamp in "sentAt"
+    const snapSentAt = await getDocs(query(
+      lunchRef,
+      where("sentAt", ">=", hStart),
+      where("sentAt", "<",  hEnd)
+    ));
+
+    // De-dupe across queries
+    const byId = new Map();
+    [snapStr, snapTsDate, snapTsMain, snapSentAt].forEach(snap => {
+      snap.forEach(docSnap => byId.set(docSnap.id, docSnap.data()));
+    });
+
+    // Sum today's only
+    for (const rec of byId.values()) {
+      const id = rec.itemId || rec.recipeId || rec.ingredientId || rec.id || null;
+      const qty = Number(rec.qty ?? rec.quantity ?? rec.amount ?? 0);
+      if (!id || !Number.isFinite(qty) || qty === 0) continue;
+
+      // Guard for string date
+      if (typeof rec.date === "string" && rec.date !== todayStrValue) continue;
+
+      // Guard for Timestamp windows (any of the common fields)
+      const t =
+        rec.date?.toDate?.() ||
+        rec.timestamp?.toDate?.() ||
+        rec.sentAt?.toDate?.() ||
+        null;
+
+      if (t) {
+        const ms = t.getTime();
+        if (ms < hStart.getTime() || ms >= hEnd.getTime()) continue;
+      }
+
+      window.mainLunchTotals[id] = (window.mainLunchTotals[id] || 0) + qty;
+    }
+  } catch (err) {
+    console.error("⚠️ Failed loading today's lunch entries:", err);
+  }
+
+  // 🖨 Render
   window.mainLunchItemList = window.cachedMainLunchItems;
   renderMainLunchRows(window.mainLunchItemList);
 };
+
 
 window.renderMainLunchRows = function (items) {
   const tableBody = document.querySelector(".main-lunch-table tbody");
@@ -5672,6 +5823,7 @@ window.renderMainLunchRows = function (items) {
     row.dataset.itemType = item.type;
     row.dataset.category = item.category?.toLowerCase() || "";
 
+    // ✅ Pre-fill from today's totals only
     const savedQty = window.mainLunchTotals?.[item.id];
     const val = (savedQty ?? "").toString();
 
@@ -5714,9 +5866,7 @@ window.renderMainLunchRows = function (items) {
   enableMathOnInputs(".main-lunch-table .lunch-input", document);
 };
 
-// ❌ Remove the old addToLunchQty — no longer needed
-// window.addToLunchQty = ...  ← delete this function
-
+// Filter unchanged
 window.filterMainLunch = function () {
   const searchInput = document.getElementById("mainLunchSearch").value.trim().toLowerCase();
   const selectedCategory = document.getElementById("mainLunchCategory").value.toLowerCase();
@@ -5733,6 +5883,7 @@ window.filterMainLunch = function () {
 
   renderMainLunchRows(filtered);
 };
+
 
 window.sendSingleMainLunch = async function (button) {
   const row = button.closest("tr");
