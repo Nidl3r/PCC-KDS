@@ -2036,72 +2036,105 @@ window.sendSingleStartingPar = async function (recipeId, venue, button) {
 
 
 // ✅ Global so Send + Send All can call it
+// Prevent rapid double-clicks while a send is in progress
+window._startingParInFlight = window._startingParInFlight || new Set();
+
 window.sendStartingPar = async function (recipeId, venue, sendQty) {
   const today = getTodayDate();
+  const inFlightKey = `${today}|${venue}|${recipeId}`;
 
-  const guestCountDoc = await getDoc(doc(db, "guestCounts", today));
-  const guestCount = guestCountDoc.exists() ? Number(guestCountDoc.data()?.[venue] || 0) : 0;
-
-  const recipeSnap = await getDoc(doc(db, "recipes", recipeId));
-  if (!recipeSnap.exists()) {
-    console.warn(`❌ Recipe ${recipeId} not found`);
+  // ⛔ UI-level double-click guard
+  if (window._startingParInFlight.has(inFlightKey)) {
+    console.warn("Duplicate click blocked for:", inFlightKey);
     return;
   }
+  window._startingParInFlight.add(inFlightKey);
 
-  const recipeData = recipeSnap.data();
-  const recipeNo    = (recipeData.recipeNo || recipeId).toUpperCase();
-  const costPerUnit = Number(recipeData.cost || 0);
-  const panWeight   = Number(recipeData.panWeight || 0);
+  try {
+    // (kept for parity with your existing code)
+    const guestCountDoc = await getDoc(doc(db, "guestCounts", today));
+    const guestCount = guestCountDoc.exists() ? Number(guestCountDoc.data()?.[venue] || 0) : 0;
 
-  const isConcessions = venue === "Concessions";
-
-  let orderData;
-
-  if (isConcessions) {
-    // 💡 Input is lbs for concessions
-    const grossLbs   = Number(sendQty);
-    const netWeight  = parseFloat(Math.max(0, grossLbs - panWeight).toFixed(2)); // (optional) pan tare
-    const totalCost  = parseFloat((netWeight * costPerUnit).toFixed(2));
-
-    orderData = {
-      type: "starting-par",
-      venue,
-      recipeId,
-      recipeNo,
-      sendQty: parseFloat(grossLbs.toFixed(2)),
-      netWeight,
-      totalCost,
-      date: today,
-      status: "sent",
-      sentAt: Timestamp.now(),
-      timestamp: Timestamp.now()
-    };
-  } else {
-    // 🍽️ Buffet venues: input is PANS sent
-    const pansSent  = Number(sendQty);
-    if (!Number.isFinite(pansSent) || pansSent <= 0) {
-      alert("❌ Please enter a valid number of pans.");
+    const recipeSnap = await getDoc(doc(db, "recipes", recipeId));
+    if (!recipeSnap.exists()) {
+      console.warn(`❌ Recipe ${recipeId} not found`);
       return;
     }
-    const totalCost = parseFloat((pansSent * costPerUnit).toFixed(2));
 
-    orderData = {
-      type: "starting-par",
-      venue,
-      recipeId,
-      recipeNo,
-      pans: pansSent,            // ← store what we actually sent
-      qty: pansSent,             // (handy for simple sums)
-      totalCost,
-      date: today,
-      status: "sent",
-      sentAt: Timestamp.now(),
-      timestamp: Timestamp.now()
-    };
+    const recipeData  = recipeSnap.data();
+    const recipeNo    = (recipeData.recipeNo || recipeId).toUpperCase();
+    const costPerUnit = Number(recipeData.cost || 0);
+    const panWeight   = Number(recipeData.panWeight || 0);
+    const isConcessions = venue === "Concessions";
+
+    // 🔐 Idempotent write: same item/venue/date gets a deterministic doc id
+    const orderId  = `startingPar_${today}_${venue}_${recipeId}`;
+    const orderRef = doc(db, "orders", orderId);
+
+    // If it already exists, do not re-write (prevents double recording)
+    const existing = await getDoc(orderRef);
+    if (existing.exists()) {
+      alert("⚠️ Starting par for this item has already been sent today. Edit or delete the existing record if you need to change it.");
+      return;
+    }
+
+    let orderData;
+
+    if (isConcessions) {
+      // 💡 Concessions input is lbs
+      const grossLbs  = Number(sendQty);
+      if (!Number.isFinite(grossLbs) || grossLbs <= 0) {
+        alert("❌ Please enter a valid weight.");
+        return;
+      }
+      const netWeight = parseFloat(Math.max(0, grossLbs - panWeight).toFixed(2)); // optional tare
+      const totalCost = parseFloat((netWeight * costPerUnit).toFixed(2));
+
+      orderData = {
+        type: "starting-par",
+        venue,
+        recipeId,
+        recipeNo,
+        sendQty: parseFloat(grossLbs.toFixed(2)),
+        netWeight,
+        totalCost,
+        date: today,
+        status: "sent",
+        sentAt: Timestamp.now(),
+        timestamp: Timestamp.now()
+      };
+    } else {
+      // 🍽️ Buffet venues: input is PANS
+      const pansSent = Number(sendQty);
+      if (!Number.isFinite(pansSent) || pansSent <= 0) {
+        alert("❌ Please enter a valid number of pans.");
+        return;
+      }
+      const totalCost = parseFloat((pansSent * costPerUnit).toFixed(2));
+
+      orderData = {
+        type: "starting-par",
+        venue,
+        recipeId,
+        recipeNo,
+        pans: pansSent,   // what we actually sent
+        qty: pansSent,    // for simple sums
+        totalCost,
+        date: today,
+        status: "sent",
+        sentAt: Timestamp.now(),
+        timestamp: Timestamp.now()
+      };
+    }
+
+    await setDoc(orderRef, orderData, { merge: false });
+    console.log("✅ Starting-par sent:", orderData);
+  } catch (err) {
+    console.error("❌ Failed to send starting-par:", err);
+    throw err;
+  } finally {
+    window._startingParInFlight.delete(inFlightKey);
   }
-
-  await addDoc(collection(db, "orders"), orderData);
-  console.log("✅ Starting-par sent:", orderData);
 };
 
 
