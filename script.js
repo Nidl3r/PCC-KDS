@@ -1718,81 +1718,87 @@ function writeConcessionBaseline(currentGuests, currentSentMap /* object: recipe
 window.mainStartingQtyCache = {};      // already exists
 window.mainStartingInputCache = {};    // NEW — stores current input
 
+// --- helpers for buffet baselines (PAR at last send, per-venue) ---
+function readBuffetBaseline(venue) {
+  try { return JSON.parse(localStorage.getItem("buffetBaseline:"+venue) || "{}"); }
+  catch { return {}; }
+}
+function writeBuffetBaseline(venue, obj) {
+  try { localStorage.setItem("buffetBaseline:"+venue, JSON.stringify(obj || {})); } catch {}
+}
+
 window.loadMainKitchenStartingPars = async function () {
   console.log("🚀 Loading Main Kitchen Starting Pars...");
-
   const today = getTodayDate();
 
-  // 🔢 Guest counts (by venue) for today
-  const guestRef = doc(db, "guestCounts", today);
-  const guestSnap = await getDoc(guestRef);
-  if (!guestSnap.exists()) {
-    console.warn("⚠️ No guest counts found.");
-    return;
-  }
+  // Guest counts
+  const guestSnap = await getDoc(doc(db, "guestCounts", today));
+  if (!guestSnap.exists()) { console.warn("⚠️ No guest counts found."); return; }
   const guestCounts = guestSnap.data();
-  console.log("🌺 Guest Counts:", guestCounts);
 
-  // 📖 Recipes used by all buffet + concessions venues
-  const recipesRef = collection(db, "recipes");
-  const qRecipes = query(
-    recipesRef,
+  // Recipes (buffet + concessions)
+  const recipesSnap = await getDocs(query(
+    collection(db, "recipes"),
     where("venueCodes", "array-contains-any", ["b001", "b002", "b003", "c002", "c003", "c004"])
-  );
-  const snapshot = await getDocs(qRecipes);
-  const recipes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+  ));
+  const recipes = recipesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-  // 📦 Today’s starting-par orders (all venues)
-  const ordersRef = collection(db, "orders");
-  const q = query(
-    ordersRef,
+  // Today’s starting-par orders
+  const ordersSnap = await getDocs(query(
+    collection(db, "orders"),
     where("type", "==", "starting-par"),
     where("date", "==", today)
-  );
-  const querySnap = await getDocs(q);
+  ));
 
-  // 🧮 Aggregates (venue -> recipeId -> total sent)
-  //  - Concessions: total **weight** sent (lbs) => use netWeight, fallback to sendQty
-  //  - Others: total **pans** sent
-  const sentParMap = {};
-  const receivedParMap = {};
+  // Aggregates
+  const sentPars      = {};   // only *needed* for Concessions math (lbs)
+  const receivedPars  = {};
   const sentParStatus = {};
+  const wasSentToday  = {};   // ✅ buffet logic: boolean any doc exists today for (venue, recipeId)
 
-  querySnap.forEach(docSnap => {
-    const data = docSnap.data();
-    const venue = data.venue;
-    const recipeId = data.recipeId;
-    const status = data.status || "sent";
+  ordersSnap.forEach(s => {
+    const o = s.data();
+    const venue    = o.venue;
+    const recipeId = o.recipeId;
     if (!venue || !recipeId) return;
 
-    // ⚖️ Per-venue unit rule
-    const isConcessions = venue === "Concessions";
+    const status = String(o.status || "sent").toLowerCase();
+    const isConcessions = /concessions?/i.test(venue);
 
+    // Robust value; only used for Concessions remainder
     const sentValue = isConcessions
-      ? Number(data.netWeight ?? data.sendQty ?? 0)   // lbs
-      : Number(data.pans ?? 0);                       // pans
+      ? Number(o.netWeight ?? o.sendQty ?? o.qty ?? 0)   // lbs
+      : Number(o.pans ?? o.sendQty ?? o.qty ?? 0);       // pans (ignored for buffet logic below)
 
-    if (!sentParMap[venue]) sentParMap[venue] = {};
-    if (!sentParMap[venue][recipeId]) sentParMap[venue][recipeId] = 0;
-    sentParMap[venue][recipeId] += sentValue;
+    if (!sentPars[venue])      sentPars[venue] = {};
+    if (!receivedPars[venue])  receivedPars[venue] = {};
+    if (!sentParStatus[venue]) sentParStatus[venue] = {};
+    if (!wasSentToday[venue])  wasSentToday[venue] = {};
 
-    if (status === "received") {
-      if (!receivedParMap[venue]) receivedParMap[venue] = {};
-      receivedParMap[venue][recipeId] = true;
+    // Mark "was sent" for buffet logic
+    if (status === "sent" || status === "received") {
+      wasSentToday[venue][recipeId] = true;
     }
 
-    if (!sentParStatus[venue]) sentParStatus[venue] = {};
+    // Maintain other flags/tallies for completeness and Concessions
+    if (sentValue > 0 && (status === "sent" || status === "received")) {
+      sentPars[venue][recipeId] = (sentPars[venue][recipeId] || 0) + sentValue;
+    }
+    if (status === "received" || o.received) {
+      receivedPars[venue][recipeId] = true;
+    }
     sentParStatus[venue][recipeId] = status;
   });
 
-  // 💾 Cache for renderer (renderMainKitchenPars handles Concessions wave logic)
+  // Cache for renderer
   window.startingCache = window.startingCache || {};
   window.startingCache["MainKitchenAll"] = {
     recipes,
     guestCounts,
-    sentPars: sentParMap,     // Concessions in lbs, others in pans
-    receivedPars: receivedParMap,
-    sentParStatus
+    sentPars,         // Concessions in lbs; buffet value unused by renderer
+    receivedPars,
+    sentParStatus,
+    wasSentToday      // ✅ buffet baseline driver
   };
 
   renderMainKitchenPars();
@@ -1800,12 +1806,7 @@ window.loadMainKitchenStartingPars = async function () {
 
 window.renderMainKitchenPars = function () {
   const data = window.startingCache?.MainKitchenAll;
-  if (!data) {
-    console.warn("⚠️ No cached data found for Main Kitchen Starting Pars.");
-    return;
-  }
-
-  window.mainStartingQtyCache = window.mainStartingQtyCache || {};
+  if (!data) { console.warn("⚠️ No cached data found for Main Kitchen Starting Pars."); return; }
 
   const venueCodeMap = {
     b001: "Aloha",
@@ -1816,126 +1817,99 @@ window.renderMainKitchenPars = function () {
     c004: "Concessions"
   };
 
-  const venueFilter = document.getElementById("starting-filter-venue").value;
+  const venueFilter   = document.getElementById("starting-filter-venue").value;
   const stationFilter = document.getElementById("starting-filter-station").value;
   const table = document.querySelector("#startingParsTable");
   const tbody = table.querySelector("tbody");
   tbody.innerHTML = "";
 
-  // 🔁 Concessions wave/baseline logic
+  // Concessions wave/baseline (unchanged behavior)
   const currentConGuests = Number(data.guestCounts?.Concession || data.guestCounts?.Concessions || 0);
   const { guestBase, sentBase } = readConcessionBaseline();
-
-  // If guest count increased since last baseline, start a new wave:
-  // snapshot today's "sent pans" for Concessions so remaining = par - (sent - sentAtIncrease)
   if (currentConGuests > guestBase) {
-    writeConcessionBaseline(
-      currentConGuests,
-      (data.sentPars?.Concessions || {})   // object: recipeId -> pans already sent at the moment of the increase
-    );
+    writeConcessionBaseline(currentConGuests, (data.sentPars?.Concessions || {}));
   }
+  const { sentBase: finalSentBase } = readConcessionBaseline();
 
-  // Re-read after potential write
-  const { guestBase: finalGuestBase, sentBase: finalSentBase } = readConcessionBaseline();
-
+  const fmt = n => (Number(n) % 1 ? Number(n).toFixed(2) : Number(n));
   let totalRows = 0;
 
-  data.recipes.forEach(recipe => {
+  (data.recipes || []).forEach(recipe => {
     const station = recipe.category || "";
     if (stationFilter && station.toLowerCase() !== stationFilter.toLowerCase()) return;
 
-    const venues = recipe.venueCodes || [];
-
-    venues.forEach(code => {
+    for (const code of (recipe.venueCodes || [])) {
       const venue = venueCodeMap[code] || "Unknown";
-      if (venueFilter && venue !== venueFilter) return;
+      if (venueFilter && venue !== venueFilter) continue;
 
-      // 1) Today’s PAR (in pans)
+      // 1) Today’s PAR (pans)
       let parPans = 0;
       if (venue === "Concessions") {
-        // keep your "default" model for Concessions pars
         parPans = Number(recipe.pars?.Concession?.default || 0);
       } else {
-        const guestCount = Number(data.guestCounts?.[venue] || 0);
-        parPans = Number(recipe.pars?.[venue]?.[String(guestCount)] || 0);
+        const gc = Number(data.guestCounts?.[venue] || 0);
+        parPans = Number(recipe.pars?.[venue]?.[String(gc)] || 0);
       }
-      if (parPans <= 0) return;
+      if (parPans <= 0) continue;
 
-      // 2) Pans already sent today
-      const sentPans = Number(data.sentPars?.[venue]?.[recipe.id] ?? 0);
-
-      // 3) Remaining to show
-      let remainingPans;
-
+      // 2) Decide visibility (no "Sent" column shown)
+      let showRow = false;
       if (venue === "Concessions") {
-        // 🧠 Special rule:
-        // Hide after sending, unless Concessions guest count has increased since the baseline.
-        // We compute remaining against the "wave baseline":
         // remaining = par - (sentNow - sentAtBaseline)
         const sentAtBaseline = Number(finalSentBase?.[recipe.id] || 0);
-        const effectiveSentSinceIncrease = Math.max(0, sentPans - sentAtBaseline);
-        remainingPans = Math.max(0, parPans - effectiveSentSinceIncrease);
-
-        // If there has been no guest increase yet (current == baseline)
-        // then once you sent anything, remaining becomes 0 and the row disappears.
+        const sentNow = Number(data.sentPars?.Concessions?.[recipe.id] || 0);
+        const effectiveSentSinceIncrease = Math.max(0, sentNow - sentAtBaseline);
+        const remaining = Math.max(0, parPans - effectiveSentSinceIncrease);
+        showRow = (remaining > 0);
       } else {
-        // normal venues
-        remainingPans = Math.max(0, parPans - sentPans);
+        // Buffet baseline logic: ignore lbs, treat "sent once" as satisfied at baseline PAR
+        const baseline = readBuffetBaseline(venue);
+        const wasSent  = !!data.wasSentToday?.[venue]?.[recipe.id];
+
+        // first send today → capture baseline as current PAR
+        if (wasSent && baseline[recipe.id] == null) {
+          baseline[recipe.id] = parPans;
+          writeBuffetBaseline(venue, baseline);
+        }
+
+        // Not sent yet → show; if sent → only show when par grew past baseline
+        if (!wasSent) {
+          showRow = true;
+        } else {
+          const satisfiedAt = Number(baseline[recipe.id] || 0);
+          showRow = parPans > satisfiedAt;
+        }
       }
+      if (!showRow) continue;
 
-      if (remainingPans <= 0) return; // nothing left to send / hidden by rule
-
-      // Build row
-      const cacheKey = `${venue}|${recipe.id}`;
-      const cachedValue = (window.mainStartingQtyCache[cacheKey] ?? "").toString();
-
+      // 3) Build row with columns: Area | Item | Par Qty | UOM | Send Qty | Action
       const row = document.createElement("tr");
       row.dataset.recipeId = recipe.id;
       row.dataset.venue    = venue;
 
       row.innerHTML = `
         <td>${venue}</td>
-        <td>${recipe.description}</td>
-        <td>${remainingPans % 1 ? remainingPans.toFixed(2) : remainingPans}</td>
+        <td>${recipe.description || recipe.recipeNo || recipe.id}</td>
+        <td>${fmt(parPans)}</td>
         <td>${recipe.uom || "ea"}</td>
         <td>
-          <input
-            class="send-qty-input"
-            type="text"
-            inputmode="decimal"
-            value="${cachedValue}"
-            data-cache-key="${cacheKey}"
-            style="width: 80px; margin-left: 6px; text-align: right;"
-            placeholder="0"
-          />
+          <input class="send-qty-input" type="text" inputmode="decimal"
+                 value="" style="width:80px; margin-left:6px; text-align:right;" placeholder="0" />
         </td>
         <td>
-          <button onclick="sendSingleStartingPar('${recipe.id}', '${venue}', this)">
-            Send
-          </button>
+          <button onclick="sendSingleStartingPar('${recipe.id}', '${venue}', this)">Send</button>
         </td>
       `;
 
-      const input = row.querySelector(".send-qty-input");
-      if (input) {
-        const updateCacheFromInput = () => {
-          const v = normalizeQtyInputValue(input);
-          window.mainStartingQtyCache[cacheKey] = Number.isFinite(v) ? v : "";
-        };
-        input.addEventListener("keydown", (e) => {
-          if (e.key === "Enter") { e.preventDefault(); updateCacheFromInput(); input.select?.(); }
-        });
-        input.addEventListener("blur", updateCacheFromInput);
-      }
-
       tbody.appendChild(row);
       totalRows++;
-    });
+    }
   });
 
   enableMathOnInputs(".send-qty-input", table);
   console.log(`✅ Rendered ${totalRows} rows based on filters`);
 };
+
 
 
 document.getElementById("starting-filter-venue").addEventListener("change", () => {
@@ -2042,93 +2016,131 @@ window._startingParInFlight = window._startingParInFlight || new Set();
 window.sendStartingPar = async function (recipeId, venue, sendQty) {
   const today = getTodayDate();
   const inFlightKey = `${today}|${venue}|${recipeId}`;
-
-  // ⛔ UI-level double-click guard
-  if (window._startingParInFlight.has(inFlightKey)) {
-    console.warn("Duplicate click blocked for:", inFlightKey);
-    return;
-  }
+  if (window._startingParInFlight.has(inFlightKey)) return;
   window._startingParInFlight.add(inFlightKey);
 
   try {
-    // (kept for parity with your existing code)
+    // guest count for today's PAR lookups
     const guestCountDoc = await getDoc(doc(db, "guestCounts", today));
-    const guestCount = guestCountDoc.exists() ? Number(guestCountDoc.data()?.[venue] || 0) : 0;
+    const guestCounts = guestCountDoc.exists() ? guestCountDoc.data() : {};
+    const guestCount = Number(guestCounts?.[venue] || 0);
 
+    // recipe
     const recipeSnap = await getDoc(doc(db, "recipes", recipeId));
     if (!recipeSnap.exists()) {
       console.warn(`❌ Recipe ${recipeId} not found`);
       return;
     }
-
     const recipeData  = recipeSnap.data();
     const recipeNo    = (recipeData.recipeNo || recipeId).toUpperCase();
     const costPerUnit = Number(recipeData.cost || 0);
     const panWeight   = Number(recipeData.panWeight || 0);
-    const isConcessions = venue === "Concessions";
 
-    // 🔐 Idempotent write: same item/venue/date gets a deterministic doc id
+    const isConcessions = /concessions?/i.test(venue);
+
+    // deterministic per-day doc
     const orderId  = `startingPar_${today}_${venue}_${recipeId}`;
     const orderRef = doc(db, "orders", orderId);
-
-    // If it already exists, do not re-write (prevents double recording)
     const existing = await getDoc(orderRef);
-    if (existing.exists()) {
-      alert("⚠️ Starting par for this item has already been sent today. Edit or delete the existing record if you need to change it.");
-      return;
-    }
-
-    let orderData;
+    const nowTs = Timestamp.now();
 
     if (isConcessions) {
-      // 💡 Concessions input is lbs
-      const grossLbs  = Number(sendQty);
+      // 📦 Concessions: input is lbs (gross), record cumulative netWeight
+      const grossLbs = Number(sendQty);
       if (!Number.isFinite(grossLbs) || grossLbs <= 0) {
         alert("❌ Please enter a valid weight.");
         return;
       }
-      const netWeight = parseFloat(Math.max(0, grossLbs - panWeight).toFixed(2)); // optional tare
-      const totalCost = parseFloat((netWeight * costPerUnit).toFixed(2));
+      const netWeightAdd = parseFloat(Math.max(0, grossLbs - panWeight).toFixed(2));
+      const costAdd      = parseFloat((netWeightAdd * costPerUnit).toFixed(2));
 
-      orderData = {
-        type: "starting-par",
-        venue,
-        recipeId,
-        recipeNo,
-        sendQty: parseFloat(grossLbs.toFixed(2)),
-        netWeight,
-        totalCost,
-        date: today,
-        status: "sent",
-        sentAt: Timestamp.now(),
-        timestamp: Timestamp.now()
-      };
+      if (existing.exists()) {
+        const prev = existing.data();
+        await updateDoc(orderRef, {
+          type: "starting-par",
+          venue,
+          recipeId,
+          recipeNo,
+          // cumulative tallies
+          sendQty:  parseFloat(((Number(prev.sendQty || 0)) + grossLbs).toFixed(2)),
+          netWeight: parseFloat(((Number(prev.netWeight || 0)) + netWeightAdd).toFixed(2)),
+          totalCost: parseFloat(((Number(prev.totalCost || 0)) + costAdd).toFixed(2)),
+          status: "sent",
+          updatedAt: nowTs,
+        });
+      } else {
+        await setDoc(orderRef, {
+          type: "starting-par",
+          venue,
+          recipeId,
+          recipeNo,
+          sendQty: parseFloat(grossLbs.toFixed(2)),
+          netWeight: netWeightAdd,
+          totalCost: costAdd,
+          date: today,
+          status: "sent",
+          sentAt: nowTs,
+          timestamp: nowTs
+        });
+      }
     } else {
-      // 🍽️ Buffet venues: input is PANS
-      const pansSent = Number(sendQty);
-      if (!Number.isFinite(pansSent) || pansSent <= 0) {
+      // 🍽️ Buffet venues: input is # of pans to send now
+      const pansTyped = Number(sendQty);
+      if (!Number.isFinite(pansTyped) || pansTyped <= 0) {
         alert("❌ Please enter a valid number of pans.");
         return;
       }
-      const totalCost = parseFloat((pansSent * costPerUnit).toFixed(2));
 
-      orderData = {
-        type: "starting-par",
-        venue,
-        recipeId,
-        recipeNo,
-        pans: pansSent,   // what we actually sent
-        qty: pansSent,    // for simple sums
-        totalCost,
-        date: today,
-        status: "sent",
-        sentAt: Timestamp.now(),
-        timestamp: Timestamp.now()
-      };
+      // PAR (in pans) for current guest count
+      const currentPar =
+        Number(recipeData?.pars?.[venue]?.[String(guestCount)] || 0);
+
+      // cost for what you are sending now (not the entire PAR)
+      const costAdd = parseFloat((pansTyped * costPerUnit).toFixed(2));
+
+      if (existing.exists()) {
+        const prev = existing.data();
+        const prevPar = Number(prev.pans || 0); // previously satisfied PAR
+        const newPar  = Math.max(prevPar, currentPar); // grow to latest PAR if increased
+
+        await updateDoc(orderRef, {
+          type: "starting-par",
+          venue,
+          recipeId,
+          recipeNo,
+          // "pans" tracks satisfied PAR; "qty" accumulates actual pans sent
+          pans: newPar,
+          qty: (Number(prev.qty || 0) + pansTyped),
+          totalCost: parseFloat(((Number(prev.totalCost || 0)) + costAdd).toFixed(2)),
+          date: today,
+          status: "sent",
+          updatedAt: nowTs,
+        });
+      } else {
+        await setDoc(orderRef, {
+          type: "starting-par",
+          venue,
+          recipeId,
+          recipeNo,
+          pans: currentPar,   // ✅ satisfied PAR at time of first send
+          qty: pansTyped,     // actual pans sent now
+          totalCost: costAdd,
+          date: today,
+          status: "sent",
+          sentAt: nowTs,
+          timestamp: nowTs
+        });
+      }
+
+      // After a successful buffet send, advance the UI baseline so row hides again
+      try {
+        const base = readBuffetBaseline(venue);
+        base[recipeId] = currentPar;
+        writeBuffetBaseline(venue, base);
+      } catch {}
     }
 
-    await setDoc(orderRef, orderData, { merge: false });
-    console.log("✅ Starting-par sent:", orderData);
+    console.log("✅ Starting-par recorded:", recipeNo, venue, sendQty);
   } catch (err) {
     console.error("❌ Failed to send starting-par:", err);
     throw err;
@@ -2136,6 +2148,7 @@ window.sendStartingPar = async function (recipeId, venue, sendQty) {
     window._startingParInFlight.delete(inFlightKey);
   }
 };
+
 
 
 
