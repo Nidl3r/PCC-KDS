@@ -2240,6 +2240,14 @@ window.filterAlohaWaste = function () {
 // ❌ Remove the old addToWasteQty (no longer needed)
 // window.addToWasteQty = ...  ← delete this function
 
+// 🔧 Helper: compute net waste after pan
+function computeNetWaste(grossQty, panWeight) {
+  const pw = Number(panWeight || 0);
+  const g  = Number(grossQty || 0);
+  const net = g - (pw > 0 ? pw : 0);
+  return Math.max(0, Number.isFinite(net) ? net : 0);
+}
+
 window.sendAllWaste = async function () {
   // Scope to Aloha section only
   const rows = document.querySelectorAll(".aloha-section[data-sec='waste'] .waste-table tbody tr");
@@ -2253,9 +2261,8 @@ window.sendAllWaste = async function () {
 
     // Normalize latest input value (handles unblurred math)
     const v = normalizeQtyInputValue(input);
-    const qty = Number.isFinite(v) ? v : Number(window.alohaWasteTotals?.[recipeId] || 0);
-
-    if (!Number.isFinite(qty) || qty <= 0) continue;
+    const grossQty = Number.isFinite(v) ? v : Number(window.alohaWasteTotals?.[recipeId] || 0);
+    if (!Number.isFinite(grossQty) || grossQty <= 0) continue;
 
     const recipe = window.alohaWasteRecipeList.find(r => r.id === recipeId);
     if (!recipe) {
@@ -2263,23 +2270,35 @@ window.sendAllWaste = async function () {
       continue;
     }
 
-    const hasEnough = await checkIfEnoughReceived(recipeId, qty, "Aloha");
+    // 🥘 Subtract pan weight if defined
+    const netQty = computeNetWaste(grossQty, recipe.panWeight);
+
+    if (netQty <= 0) {
+      console.warn(`⚠️ Net waste is 0 after pan-weight subtraction for ${recipe.description}. Skipping.`);
+      continue;
+    }
+
+    // ✅ Validate after subtraction
+    const hasEnough = await checkIfEnoughReceived(recipeId, netQty, "Aloha");
     if (!hasEnough) {
-      alert(`🚫 Cannot waste ${qty} of "${recipe.description}" — more than received.`);
+      alert(`🚫 Cannot waste ${netQty} of "${recipe.description}" — more than received today after pan subtraction.`);
       continue;
     }
 
     const wasteData = {
       item: recipe.description,
       venue: "Aloha",
-      qty,
+      qty: netQty,                     // store NET
       uom: recipe.uom || "ea",
       date: today,
-      timestamp: serverTimestamp()
+      timestamp: serverTimestamp(),
+      // audit fields
+      grossQty,                        // what was typed/entered
+      panWeightUsed: Number(recipe.panWeight || 0)
     };
 
     await addDoc(collection(db, "waste"), wasteData);
-    console.log(`✅ Sent Aloha waste: ${qty} of ${recipe.description}`);
+    console.log(`✅ Sent Aloha waste: gross=${grossQty}, net=${netQty} of ${recipe.description}`);
     sentCount++;
 
     // Clear UI + cache
@@ -2300,9 +2319,9 @@ window.sendSingleWaste = async function (button, recipeId) {
 
   // Normalize last-second (handles unblurred "1+1")
   const v = normalizeQtyInputValue(input);
-  const qty = Number.isFinite(v) ? v : Number(window.alohaWasteTotals?.[recipeId] || 0);
+  const grossQty = Number.isFinite(v) ? v : Number(window.alohaWasteTotals?.[recipeId] || 0);
 
-  if (!Number.isFinite(qty) || qty <= 0) {
+  if (!Number.isFinite(grossQty) || grossQty <= 0) {
     alert("Please enter a valid quantity first.");
     return;
   }
@@ -2313,9 +2332,17 @@ window.sendSingleWaste = async function (button, recipeId) {
     return;
   }
 
-  const hasEnough = await checkIfEnoughReceived(recipeId, qty, "Aloha");
+  // 🥘 Subtract pan weight if defined
+  const netQty = computeNetWaste(grossQty, recipe.panWeight);
+  if (netQty <= 0) {
+    alert(`⚠️ Net waste is 0 after subtracting pan weight (${recipe.panWeight || 0}).`);
+    return;
+  }
+
+  // ✅ Validate after subtraction
+  const hasEnough = await checkIfEnoughReceived(recipeId, netQty, "Aloha");
   if (!hasEnough) {
-    alert(`🚫 Cannot waste ${qty} of "${recipe.description}" — more than received.`);
+    alert(`🚫 Cannot waste ${netQty} of "${recipe.description}" — more than received today after pan subtraction.`);
     return;
   }
 
@@ -2323,14 +2350,17 @@ window.sendSingleWaste = async function (button, recipeId) {
   const wasteData = {
     item: recipe.description,
     venue: "Aloha",
-    qty,
+    qty: netQty,                    // store NET
     uom: recipe.uom || "ea",
     date: today,
-    timestamp: serverTimestamp()
+    timestamp: serverTimestamp(),
+    // audit fields
+    grossQty,
+    panWeightUsed: Number(recipe.panWeight || 0)
   };
 
   await addDoc(collection(db, "waste"), wasteData);
-  console.log(`✅ Sent waste to 'waste': ${qty} of ${recipe.description}`);
+  console.log(`✅ Sent waste to 'waste': gross=${grossQty}, net=${netQty} of ${recipe.description}`);
 
   // Clear UI + cache
   input.value = "";
@@ -3353,15 +3383,25 @@ window.filterGatewayWaste = function () {
 // window.addToGatewayWasteQty = ...  ← delete this function
 
 // 🔘 Single waste sender for Gateway (math-enabled)
+// Ensure helper exists once in your bundle
+if (typeof computeNetWaste !== "function") {
+  window.computeNetWaste = function computeNetWaste(grossQty, panWeight) {
+    const pw = Number(panWeight || 0);
+    const g  = Number(grossQty || 0);
+    const net = g - (pw > 0 ? pw : 0);
+    return Math.max(0, Number.isFinite(net) ? net : 0);
+  };
+}
+
 window.sendSingleGatewayWaste = async function (button, recipeId) {
   const row = button.closest("tr");
   const input = row.querySelector(".waste-input");
 
-  // Normalize last-second (handles unblurred "1+1")
+  // Normalize math input (handles unblurred "1+1")
   const v = normalizeQtyInputValue(input);
-  const qty = Number.isFinite(v) ? v : Number(window.gatewayWasteTotals?.[recipeId] || 0);
+  const grossQty = Number.isFinite(v) ? v : Number(window.gatewayWasteTotals?.[recipeId] || 0);
 
-  if (!Number.isFinite(qty) || qty <= 0) {
+  if (!Number.isFinite(grossQty) || grossQty <= 0) {
     alert("⚠️ Please enter a valid quantity first.");
     return;
   }
@@ -3372,10 +3412,17 @@ window.sendSingleGatewayWaste = async function (button, recipeId) {
     return;
   }
 
-  // ✅ Validate against received total
-  const hasEnough = await checkIfEnoughReceived(recipeId, qty, "Gateway");
+  // 🥘 Subtract pan weight; clamp at 0
+  const netQty = computeNetWaste(grossQty, recipe.panWeight);
+  if (netQty <= 0) {
+    alert(`⚠️ Net waste is 0 after subtracting pan weight (${recipe.panWeight || 0}).`);
+    return;
+  }
+
+  // ✅ Validate AFTER subtraction
+  const hasEnough = await checkIfEnoughReceived(recipeId, netQty, "Gateway");
   if (!hasEnough) {
-    alert(`🚫 Cannot waste ${qty} of "${recipe.description}" — more than received.`);
+    alert(`🚫 Cannot waste ${netQty} of "${recipe.description}" — more than received today after pan subtraction.`);
     return;
   }
 
@@ -3383,15 +3430,18 @@ window.sendSingleGatewayWaste = async function (button, recipeId) {
   const wasteData = {
     item: recipe.description,
     venue: "Gateway",
-    qty,
+    qty: netQty,                    // store NET
     uom: recipe.uom || "ea",
     date: today,
-    timestamp: serverTimestamp()
+    timestamp: serverTimestamp(),
+    // audit
+    grossQty,
+    panWeightUsed: Number(recipe.panWeight || 0),
   };
 
   try {
     await addDoc(collection(db, "waste"), wasteData);
-    console.log(`✅ Sent Gateway waste: ${qty} of ${recipe.description}`);
+    console.log(`✅ Sent Gateway waste: gross=${grossQty}, net=${netQty} of ${recipe.description}`);
 
     // Clear UI + cache
     input.value = "";
@@ -3421,9 +3471,8 @@ window.sendAllGatewayWaste = async function () {
     const input = row.querySelector(".waste-input");
 
     const v = normalizeQtyInputValue(input);
-    const qty = Number.isFinite(v) ? v : Number(window.gatewayWasteTotals?.[recipeId] || 0);
-
-    if (!Number.isFinite(qty) || qty <= 0) continue;
+    const grossQty = Number.isFinite(v) ? v : Number(window.gatewayWasteTotals?.[recipeId] || 0);
+    if (!Number.isFinite(grossQty) || grossQty <= 0) continue;
 
     const recipe = window.gatewayWasteRecipeList.find(r => r.id === recipeId);
     if (!recipe) {
@@ -3431,27 +3480,37 @@ window.sendAllGatewayWaste = async function () {
       continue;
     }
 
-    // ✅ Check waste vs. total ordered
-    const hasEnough = await checkIfEnoughReceived(recipeId, qty, "Gateway");
+    // 🥘 Subtract pan weight; clamp at 0
+    const netQty = computeNetWaste(grossQty, recipe.panWeight);
+    if (netQty <= 0) {
+      console.warn(`⚠️ Net waste is 0 after pan-weight subtraction for ${recipe.description}. Skipping.`);
+      continue;
+    }
+
+    // ✅ Validate AFTER subtraction
+    const hasEnough = await checkIfEnoughReceived(recipeId, netQty, "Gateway");
     if (!hasEnough) {
-      alert(`🚫 Cannot waste ${qty} of "${recipe.description}" — more than received.`);
+      alert(`🚫 Cannot waste ${netQty} of "${recipe.description}" — more than received today after pan subtraction.`);
       continue;
     }
 
     const wasteData = {
       item: recipe.description,
       venue: "Gateway",
-      qty,
+      qty: netQty,                   // store NET
       uom: recipe.uom || "ea",
       date: today,
-      timestamp: serverTimestamp()
+      timestamp: serverTimestamp(),
+      // audit
+      grossQty,
+      panWeightUsed: Number(recipe.panWeight || 0),
     };
 
     await addDoc(collection(db, "waste"), wasteData);
-    console.log(`✅ Sent Gateway waste: ${qty} of ${recipe.description}`);
+    console.log(`✅ Sent Gateway waste: gross=${grossQty}, net=${netQty} of ${recipe.description}`);
     sentCount++;
 
-    // Clear UI + cache for this row
+    // Clear UI + cache
     input.value = "";
     window.gatewayWasteTotals[recipeId] = "";
   }
@@ -3462,6 +3521,7 @@ window.sendAllGatewayWaste = async function () {
     alert("⚠️ No Gateway waste entries with valid quantities.");
   }
 };
+
 
 
 //GATEWAY RETURNS
@@ -4273,15 +4333,25 @@ window.filterOhanaWaste = function () {
 // ❌ Remove the old addToOhanaWasteQty — it’s not used anymore
 // window.addToOhanaWasteQty = ...  ← delete this function
 
+// If you didn't already add this earlier, keep this helper in your file:
+if (typeof computeNetWaste !== "function") {
+  window.computeNetWaste = function computeNetWaste(grossQty, panWeight) {
+    const pw = Number(panWeight || 0);
+    const g  = Number(grossQty || 0);
+    const net = g - (pw > 0 ? pw : 0);
+    return Math.max(0, Number.isFinite(net) ? net : 0);
+  };
+}
+
 window.sendSingleOhanaWaste = async function (button, recipeId) {
   const row = button.closest("tr");
   const input = row.querySelector(".waste-input");
 
   // Normalize last-second (handles unblurred "1+1")
   const v = normalizeQtyInputValue(input);
-  const qty = Number.isFinite(v) ? v : Number(window.ohanaWasteTotals?.[recipeId] || 0);
+  const grossQty = Number.isFinite(v) ? v : Number(window.ohanaWasteTotals?.[recipeId] || 0);
 
-  if (!Number.isFinite(qty) || qty <= 0) {
+  if (!Number.isFinite(grossQty) || grossQty <= 0) {
     alert("Please enter a valid quantity first.");
     return;
   }
@@ -4292,9 +4362,17 @@ window.sendSingleOhanaWaste = async function (button, recipeId) {
     return;
   }
 
-  const hasEnough = await checkIfEnoughReceived(recipeId, qty, "Ohana");
+  // 🥘 Subtract pan weight, clamp at 0
+  const netQty = computeNetWaste(grossQty, recipe.panWeight);
+  if (netQty <= 0) {
+    alert(`⚠️ Net waste is 0 after subtracting pan weight (${recipe.panWeight || 0}).`);
+    return;
+  }
+
+  // ✅ Validate AFTER subtraction against today's received
+  const hasEnough = await checkIfEnoughReceived(recipeId, netQty, "Ohana");
   if (!hasEnough) {
-    alert(`🚫 Cannot waste ${qty} of "${recipe.description}" — more than received.`);
+    alert(`🚫 Cannot waste ${netQty} of "${recipe.description}" — more than received today after pan subtraction.`);
     return;
   }
 
@@ -4302,14 +4380,17 @@ window.sendSingleOhanaWaste = async function (button, recipeId) {
   const wasteData = {
     item: recipe.description,
     venue: "Ohana",
-    qty,
+    qty: netQty,                     // store NET amount
     uom: recipe.uom || "ea",
     date: today,
-    timestamp: serverTimestamp()
+    timestamp: serverTimestamp(),
+    // audit
+    grossQty,
+    panWeightUsed: Number(recipe.panWeight || 0)
   };
 
   await addDoc(collection(db, "waste"), wasteData);
-  console.log(`✅ Sent Ohana waste: ${qty} of ${recipe.description}`);
+  console.log(`✅ Sent Ohana waste: gross=${grossQty}, net=${netQty} of ${recipe.description}`);
 
   // Clear UI + cache
   input.value = "";
@@ -4335,9 +4416,8 @@ window.sendAllOhanaWaste = async function () {
     const input = row.querySelector(".waste-input");
 
     const v = normalizeQtyInputValue(input);
-    const qty = Number.isFinite(v) ? v : Number(window.ohanaWasteTotals?.[recipeId] || 0);
-
-    if (!Number.isFinite(qty) || qty <= 0) continue;
+    const grossQty = Number.isFinite(v) ? v : Number(window.ohanaWasteTotals?.[recipeId] || 0);
+    if (!Number.isFinite(grossQty) || grossQty <= 0) continue;
 
     const recipe = window.ohanaWasteRecipeList.find(r => r.id === recipeId);
     if (!recipe) {
@@ -4345,26 +4425,37 @@ window.sendAllOhanaWaste = async function () {
       continue;
     }
 
-    const hasEnough = await checkIfEnoughReceived(recipeId, qty, "Ohana");
+    // 🥘 Subtract pan weight, clamp at 0
+    const netQty = computeNetWaste(grossQty, recipe.panWeight);
+    if (netQty <= 0) {
+      console.warn(`⚠️ Net waste is 0 after pan-weight subtraction for ${recipe.description}. Skipping.`);
+      continue;
+    }
+
+    // ✅ Validate AFTER subtraction
+    const hasEnough = await checkIfEnoughReceived(recipeId, netQty, "Ohana");
     if (!hasEnough) {
-      alert(`🚫 Cannot waste ${qty} of "${recipe.description}" — more than received.`);
+      alert(`🚫 Cannot waste ${netQty} of "${recipe.description}" — more than received today after pan subtraction.`);
       continue;
     }
 
     const wasteData = {
       item: recipe.description,
       venue: "Ohana",
-      qty,
+      qty: netQty,                    // store NET amount
       uom: recipe.uom || "ea",
       date: today,
-      timestamp: serverTimestamp()
+      timestamp: serverTimestamp(),
+      // audit
+      grossQty,
+      panWeightUsed: Number(recipe.panWeight || 0)
     };
 
     await addDoc(collection(db, "waste"), wasteData);
-    console.log(`✅ Sent Ohana waste: ${qty} of ${recipe.description}`);
+    console.log(`✅ Sent Ohana waste: gross=${grossQty}, net=${netQty} of ${recipe.description}`);
     sentCount++;
 
-    // Clear UI + cache for this row
+    // Clear UI + cache
     input.value = "";
     window.ohanaWasteTotals[recipeId] = "";
   }
@@ -4375,6 +4466,7 @@ window.sendAllOhanaWaste = async function () {
     alert("⚠️ No Ohana waste entries with valid quantities.");
   }
 };
+
 
 
 //OHANA RETURNS
