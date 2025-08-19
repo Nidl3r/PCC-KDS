@@ -51,6 +51,13 @@ const map = {
   accounting: "Accounting"
 };
 
+// ---- global waste caches (safe defaults) ----
+window.alohaWasteTotals   = window.alohaWasteTotals   || {};
+window.ohanaWasteTotals   = window.ohanaWasteTotals   || {};
+window.gatewayWasteTotals = window.gatewayWasteTotals || {};
+window.mainWasteTotals    = window.mainWasteTotals    || {};
+
+
 // 🔄 Table loading helpers
 function showTableLoading(tbody, message = "Loading…") {
   if (!tbody) return;
@@ -69,6 +76,9 @@ function showTableEmpty(tbody, message = "No items to show.") {
       <td colspan="4" style="padding:12px;text-align:center;opacity:.7;">${message}</td>
     </tr>`;
 }
+
+
+
 
 // put this near your startup code, before loadAccountingWaste runs
 window.venueCodes = {
@@ -2248,6 +2258,29 @@ function computeNetWaste(grossQty, panWeight) {
   return Math.max(0, Number.isFinite(net) ? net : 0);
 }
 
+// 🔎 Get unit cost for a recipe (prefer cached, else look up by description)
+async function getUnitCostForRecipe(recipe) {
+  // fast path: cost already on the recipe object
+  const cached = Number(recipe?.cost ?? 0);
+  if (Number.isFinite(cached) && cached > 0) return cached;
+
+  try {
+    // fallback: find recipe by description
+    const snap = await getDocs(
+      query(collection(db, "recipes"), where("description", "==", recipe.description), limit(1))
+    );
+    if (!snap.empty) {
+      const data = snap.docs[0].data();
+      const cost = Number(data?.cost ?? 0);
+      if (Number.isFinite(cost) && cost >= 0) return cost;
+    }
+  } catch (e) {
+    console.warn("getUnitCostForRecipe lookup failed:", e);
+  }
+  return 0;
+}
+
+
 window.sendAllWaste = async function () {
   // Scope to Aloha section only
   const rows = document.querySelectorAll(".aloha-section[data-sec='waste'] .waste-table tbody tr");
@@ -2272,7 +2305,6 @@ window.sendAllWaste = async function () {
 
     // 🥘 Subtract pan weight if defined
     const netQty = computeNetWaste(grossQty, recipe.panWeight);
-
     if (netQty <= 0) {
       console.warn(`⚠️ Net waste is 0 after pan-weight subtraction for ${recipe.description}. Skipping.`);
       continue;
@@ -2285,6 +2317,10 @@ window.sendAllWaste = async function () {
       continue;
     }
 
+    // 💰 cost
+    const unitCost = await getUnitCostForRecipe(recipe);
+    const totalCost = parseFloat((unitCost * netQty).toFixed(2));
+
     const wasteData = {
       item: recipe.description,
       venue: "Aloha",
@@ -2294,11 +2330,14 @@ window.sendAllWaste = async function () {
       timestamp: serverTimestamp(),
       // audit fields
       grossQty,                        // what was typed/entered
-      panWeightUsed: Number(recipe.panWeight || 0)
+      panWeightUsed: Number(recipe.panWeight || 0),
+      // reporting
+      unitCost,
+      totalCost
     };
 
     await addDoc(collection(db, "waste"), wasteData);
-    console.log(`✅ Sent Aloha waste: gross=${grossQty}, net=${netQty} of ${recipe.description}`);
+    console.log(`✅ Sent Aloha waste: gross=${grossQty}, net=${netQty} of ${recipe.description} | $${totalCost}`);
     sentCount++;
 
     // Clear UI + cache
@@ -2346,6 +2385,10 @@ window.sendSingleWaste = async function (button, recipeId) {
     return;
   }
 
+  // 💰 cost
+  const unitCost = await getUnitCostForRecipe(recipe);
+  const totalCost = parseFloat((unitCost * netQty).toFixed(2));
+
   const today = getTodayDate();
   const wasteData = {
     item: recipe.description,
@@ -2356,11 +2399,14 @@ window.sendSingleWaste = async function (button, recipeId) {
     timestamp: serverTimestamp(),
     // audit fields
     grossQty,
-    panWeightUsed: Number(recipe.panWeight || 0)
+    panWeightUsed: Number(recipe.panWeight || 0),
+    // reporting
+    unitCost,
+    totalCost
   };
 
   await addDoc(collection(db, "waste"), wasteData);
-  console.log(`✅ Sent waste to 'waste': gross=${grossQty}, net=${netQty} of ${recipe.description}`);
+  console.log(`✅ Sent waste to 'waste': gross=${grossQty}, net=${netQty} of ${recipe.description} | $${totalCost}`);
 
   // Clear UI + cache
   input.value = "";
@@ -2625,17 +2671,25 @@ window.sendSingleMainWaste = async function (button) {
   const item = window.mainWasteItemList.find(i => i.id === itemId);
   const today = getTodayDate();
 
+  // 💰 pricing (recipes only; ingredients default to 0 unless you want otherwise)
+  const isRecipe  = (item?.type === "recipe" || item?.kind === "recipe");
+  const unitCost  = isRecipe ? await getUnitCostForRecipe({ description: item.name, cost: item.cost }) : 0;
+  const totalCost = parseFloat((unitCost * qty).toFixed(2));
+
   const wasteData = {
     item: item.name,
     venue: "Main Kitchen",
     qty,
     uom: item.uom || "ea",
     date: today,
-    timestamp: serverTimestamp()
+    timestamp: serverTimestamp(),
+    // reporting
+    unitCost,
+    totalCost
   };
 
   await addDoc(collection(db, "waste"), wasteData);
-  console.log(`✅ Sent waste: ${qty} of ${item.name}`);
+  console.log(`✅ Sent waste: ${qty} of ${item.name} | $${totalCost}`);
 
   // Clear UI + cache
   input.value = "";
@@ -2661,14 +2715,24 @@ window.sendAllMainWaste = async function () {
 
     if (Number.isFinite(qty) && qty > 0) {
       const item = window.mainWasteItemList.find(i => i.id === itemId);
+
+      // 💰 pricing
+      const isRecipe  = (item?.type === "recipe" || item?.kind === "recipe");
+      const unitCost  = isRecipe ? await getUnitCostForRecipe({ description: item.name, cost: item.cost }) : 0;
+      const totalCost = parseFloat((unitCost * qty).toFixed(2));
+
       const wasteData = {
         item: item.name,
         venue: "Main Kitchen",
         qty,
         uom: item.uom || "ea",
         date: today,
-        timestamp: serverTimestamp()
+        timestamp: serverTimestamp(),
+        // reporting
+        unitCost,
+        totalCost
       };
+
       await addDoc(collection(db, "waste"), wasteData);
       sentCount++;
 
@@ -3426,6 +3490,10 @@ window.sendSingleGatewayWaste = async function (button, recipeId) {
     return;
   }
 
+  // 💰 pricing
+  const unitCost = await getUnitCostForRecipe(recipe);
+  const totalCost = parseFloat((unitCost * netQty).toFixed(2));
+
   const today = getTodayDate();
   const wasteData = {
     item: recipe.description,
@@ -3437,11 +3505,14 @@ window.sendSingleGatewayWaste = async function (button, recipeId) {
     // audit
     grossQty,
     panWeightUsed: Number(recipe.panWeight || 0),
+    // reporting
+    unitCost,
+    totalCost,
   };
 
   try {
     await addDoc(collection(db, "waste"), wasteData);
-    console.log(`✅ Sent Gateway waste: gross=${grossQty}, net=${netQty} of ${recipe.description}`);
+    console.log(`✅ Sent Gateway waste: gross=${grossQty}, net=${netQty} of ${recipe.description} | $${totalCost}`);
 
     // Clear UI + cache
     input.value = "";
@@ -3494,6 +3565,10 @@ window.sendAllGatewayWaste = async function () {
       continue;
     }
 
+    // 💰 pricing
+    const unitCost = await getUnitCostForRecipe(recipe);
+    const totalCost = parseFloat((unitCost * netQty).toFixed(2));
+
     const wasteData = {
       item: recipe.description,
       venue: "Gateway",
@@ -3504,10 +3579,13 @@ window.sendAllGatewayWaste = async function () {
       // audit
       grossQty,
       panWeightUsed: Number(recipe.panWeight || 0),
+      // reporting
+      unitCost,
+      totalCost,
     };
 
     await addDoc(collection(db, "waste"), wasteData);
-    console.log(`✅ Sent Gateway waste: gross=${grossQty}, net=${netQty} of ${recipe.description}`);
+    console.log(`✅ Sent Gateway waste: gross=${grossQty}, net=${netQty} of ${recipe.description} | $${totalCost}`);
     sentCount++;
 
     // Clear UI + cache
@@ -4376,6 +4454,10 @@ window.sendSingleOhanaWaste = async function (button, recipeId) {
     return;
   }
 
+  // 💰 pricing
+  const unitCost = await getUnitCostForRecipe(recipe);
+  const totalCost = parseFloat((unitCost * netQty).toFixed(2));
+
   const today = getTodayDate();
   const wasteData = {
     item: recipe.description,
@@ -4386,11 +4468,14 @@ window.sendSingleOhanaWaste = async function (button, recipeId) {
     timestamp: serverTimestamp(),
     // audit
     grossQty,
-    panWeightUsed: Number(recipe.panWeight || 0)
+    panWeightUsed: Number(recipe.panWeight || 0),
+    // reporting
+    unitCost,
+    totalCost
   };
 
   await addDoc(collection(db, "waste"), wasteData);
-  console.log(`✅ Sent Ohana waste: gross=${grossQty}, net=${netQty} of ${recipe.description}`);
+  console.log(`✅ Sent Ohana waste: gross=${grossQty}, net=${netQty} of ${recipe.description} | $${totalCost}`);
 
   // Clear UI + cache
   input.value = "";
@@ -4439,6 +4524,10 @@ window.sendAllOhanaWaste = async function () {
       continue;
     }
 
+    // 💰 pricing
+    const unitCost = await getUnitCostForRecipe(recipe);
+    const totalCost = parseFloat((unitCost * netQty).toFixed(2));
+
     const wasteData = {
       item: recipe.description,
       venue: "Ohana",
@@ -4448,11 +4537,14 @@ window.sendAllOhanaWaste = async function () {
       timestamp: serverTimestamp(),
       // audit
       grossQty,
-      panWeightUsed: Number(recipe.panWeight || 0)
+      panWeightUsed: Number(recipe.panWeight || 0),
+      // reporting
+      unitCost,
+      totalCost
     };
 
     await addDoc(collection(db, "waste"), wasteData);
-    console.log(`✅ Sent Ohana waste: gross=${grossQty}, net=${netQty} of ${recipe.description}`);
+    console.log(`✅ Sent Ohana waste: gross=${grossQty}, net=${netQty} of ${recipe.description} | $${totalCost}`);
     sentCount++;
 
     // Clear UI + cache
@@ -6040,17 +6132,25 @@ window.sendSingleMainLunch = async function (button) {
   const item = window.mainLunchItemList.find(i => i.id === itemId);
   const today = getTodayDate();
 
+  // 💰 pricing (assumes recipes; ingredients default to 0 unless you want otherwise)
+  const isRecipe  = (item?.type === "recipe" || item?.kind === "recipe");
+  const unitCost  = isRecipe ? await getUnitCostForRecipe({ description: item.name, cost: item.cost }) : 0;
+  const totalCost = parseFloat((unitCost * qty).toFixed(2));
+
   const lunchData = {
     item: item.name,
     venue: "Main Kitchen",
     qty,
     uom: item.uom || "ea",
     date: today,
-    timestamp: serverTimestamp()
+    timestamp: serverTimestamp(),
+    // reporting
+    unitCost,
+    totalCost
   };
 
   await addDoc(collection(db, "lunch"), lunchData);
-  console.log(`✅ Sent lunch: ${qty} of ${item.name}`);
+  console.log(`✅ Sent lunch: ${qty} of ${item.name} | $${totalCost}`);
 
   // Clear UI + cache
   input.value = "";
@@ -6077,13 +6177,21 @@ window.sendAllMainLunch = async function () {
     if (Number.isFinite(qty) && qty > 0) {
       const item = window.mainLunchItemList.find(i => i.id === itemId);
 
+      // 💰 pricing
+      const isRecipe  = (item?.type === "recipe" || item?.kind === "recipe");
+      const unitCost  = isRecipe ? await getUnitCostForRecipe({ description: item.name, cost: item.cost }) : 0;
+      const totalCost = parseFloat((unitCost * qty).toFixed(2));
+
       const lunchData = {
         item: item.name,
         venue: "Main Kitchen",
         qty,
         uom: item.uom || "ea",
         date: today,
-        timestamp: serverTimestamp()
+        timestamp: serverTimestamp(),
+        // reporting
+        unitCost,
+        totalCost
       };
 
       await addDoc(collection(db, "lunch"), lunchData);
