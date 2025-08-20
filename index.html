@@ -132,7 +132,7 @@
     <button onclick="sendAlohaOrder(this)">Send</button>
   </div>
 
-  <!-- 💰 Cost Summary + Guest Input -->
+  <!-- 💰 Cost Summary + Live Guests -->
   <div style="display: flex; align-items: center; gap: 2rem; justify-content: space-between; margin-top: 1rem;">
     <h3>Open Orders</h3>
     <div id="alohaCostSummary" style="font-size: 1rem; display: flex; align-items: center; gap: 1.5rem;">
@@ -141,14 +141,15 @@
         $<span id="totalSpent">0.00</span>
       </div>
 
-      <div style="display: flex; flex-direction: column;">
-        <label for="alohaRemainingGuestsInput"><strong>Remaining Guests:</strong></label>
-        <input id="alohaRemainingGuestsInput" type="number" min="0" value="0" style="width: 5.5rem; padding: 4px 8px;" />
+      <!-- ✅ read-only counts -->
+      <div>
+        <strong>Remaining Guests:</strong>
+        <span id="alohaRemainingGuests">0</span>
       </div>
 
-      <div style="display: flex; flex-direction: column;">
-        <label for="guestInput"><strong>Total Guests:</strong></label>
-        <input type="number" id="guestInput" value="1" min="1" style="width: 5.5rem; padding: 4px 8px;" />
+      <div>
+        <strong>Total Guests:</strong>
+        <span id="alohaTotalGuests">0</span>
       </div>
 
       <div>
@@ -309,14 +310,14 @@
         $<span id="totalSpentOhana">0.00</span>
       </div>
 
-      <div style="display: flex; flex-direction: column;">
-        <label for="ohanaRemainingGuestsInput"><strong>Remaining Guests:</strong></label>
-        <input id="ohanaRemainingGuestsInput" type="number" min="0" value="0" style="width: 5.5rem; padding: 4px 8px;" />
+      <div>
+        <strong>Remaining Guests:</strong>
+        <span id="ohanaRemainingGuests">0</span>
       </div>
 
-      <div style="display: flex; flex-direction: column;">
-        <label for="guestInputOhana"><strong>Total Guests:</strong></label>
-        <input id="guestInputOhana" type="number" min="1" value="1" style="width: 5.5rem; padding: 4px 8px;" />
+      <div>
+        <strong>Total Guests:</strong>
+        <span id="ohanaTotalGuests">0</span>
       </div>
 
       <div>
@@ -463,29 +464,28 @@
   <div style="display: flex; align-items: center; gap: 2rem; justify-content: space-between; margin-top: 1rem;">
     <h3>Open Orders</h3>
 
-<div id="gatewayCostSummary" style="font-size: 1rem; display: flex; align-items: center; gap: 1.5rem;">
-  <div>
-    <strong>Total Spent:</strong>
-    $<span id="totalSpentGateway">0.00</span>
-  </div>
+    <div id="gatewayCostSummary" style="font-size: 1rem; display: flex; align-items: center; gap: 1.5rem;">
+      <div>
+        <strong>Total Spent:</strong>
+        $<span id="totalSpentGateway">0.00</span>
+      </div>
 
-  <div style="display: flex; flex-direction: column;">
-    <label for="gatewayRemainingGuestsInput"><strong>Remaining Guests:</strong></label>
-    <input id="gatewayRemainingGuestsInput" type="number" min="0" value="0" style="width: 5.5rem; padding: 4px 8px;" />
-  </div>
+      <!-- ✅ read-only counts fed by Firestore -->
+      <div>
+        <strong>Remaining Guests:</strong>
+        <span id="gatewayRemainingGuests">0</span>
+      </div>
 
-  <div style="display: flex; flex-direction: column;">
-    <label for="guestInputGateway"><strong>Total Guests:</strong></label>
-    <input id="guestInputGateway" type="number" min="1" value="1" style="width: 5.5rem; padding: 4px 8px;" />
-  </div>
+      <div>
+        <strong>Total Guests:</strong>
+        <span id="gatewayTotalGuests">0</span>
+      </div>
 
-  <div>
-    <strong>Cost per Guest:</strong>
-    $<span id="costPerGuestGateway">0.00</span>
-  </div>
-</div>
-
-
+      <div>
+        <strong>Cost per Guest:</strong>
+        $<span id="costPerGuestGateway">0.00</span>
+      </div>
+    </div>
   </div>
 
   <table id="gatewayTable">

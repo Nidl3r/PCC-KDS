@@ -202,68 +202,115 @@ function enableMathOnInputs(selector, scope = document) {
 
 // Update on change
 viewSelect.addEventListener("change", updateCurrentVenueFromSelect);
-
 document.addEventListener("DOMContentLoaded", () => {
   const viewSelect = document.getElementById("viewSelect");
-  const screens = document.querySelectorAll(".screen");
-  const chatBox = document.getElementById("chatBox");
+  const screens    = document.querySelectorAll(".screen");
+  const chatBox    = document.getElementById("chatBox");
 
   function showScreen(id) {
     screens.forEach(screen => {
-      screen.style.display = screen.id === id ? "block" : "none";
+      screen.style.display = (screen.id === id) ? "block" : "none";
     });
-
-    // 🔧 Optional: make sure chat stays visible
     if (chatBox) chatBox.style.display = "block";
   }
 
-  // Set initial screen
-  showScreen(viewSelect.value);
+  // --- Mirror cached Showware totals onto the Guest Count screen (inputs + labels)
+  function paintGuestCountsScreenFromCache() {
+    const g = window.showwareGuests || {};
+    const setPair = (name, vals) => {
+      if (!vals) return;
+      const total = Number(vals.total || 0);
+      const inEl  = document.getElementById(`count-${name}`);
+      const curEl = document.getElementById(`current-${name}`);
+      if (Number.isFinite(total)) {
+        if (inEl)  inEl.value = String(total);
+        if (curEl) curEl.textContent = String(total);
+      }
+    };
+    setPair("Aloha",   g.Aloha);
+    setPair("Ohana",   g.Ohana);
+    setPair("Gateway", g.Gateway);
+  }
 
-  // Change screen on selection
-  viewSelect.addEventListener("change", () => {
-    showScreen(viewSelect.value);
-    updateCurrentVenueFromSelect(); // ✅ Ensure currentVenue updates on change
+  // ---- Initial screen (guarded)
+  if (viewSelect && viewSelect.value) showScreen(viewSelect.value);
+
+  // ---- On view change: swap screens, update venue, repaint counts from cache
+  viewSelect?.addEventListener("change", () => {
+    const id = viewSelect.value;
+    showScreen(id);
+    updateCurrentVenueFromSelect?.();
+
+    try {
+      // Venue tiles
+      if (document.getElementById("gatewayTotalGuests")) {
+        typeof paintGatewayCountsFromCache === "function" && paintGatewayCountsFromCache();
+      }
+      if (document.getElementById("ohanaTotalGuests")) {
+        typeof paintOhanaCountsFromCache === "function" && paintOhanaCountsFromCache();
+      }
+      if (document.getElementById("alohaTotalGuests")) {
+        typeof paintAlohaCountsFromCache === "function" && paintAlohaCountsFromCache();
+      }
+
+      // If the Guest Count screen is in view, mirror cached totals there too.
+      // (Covers ids like 'guestCounts' or presence of the inputs.)
+      const guestCountsScreen =
+        document.getElementById("guestCounts") ||
+        document.getElementById("guestCount") ||
+        document.getElementById("guest-counts");
+      if (guestCountsScreen && guestCountsScreen.style.display !== "none") {
+        paintGuestCountsScreenFromCache();
+      }
+    } catch (e) {
+      console.debug("paint-from-cache on view change skipped:", e);
+    }
   });
 
   console.log("✅ PCC KDS App Loaded");
 
-  // 🔁 Listen to Firestore collections
-  listenToAlohaOrders?.();      
-  listenToGatewayOrders?.();    
-  listenToOhanaOrders?.();      
-  listenToConcessionOrders?.(); // ✅ Concession listener added
+  // 🔁 Firestore listeners (orders, etc.)
+  listenToAlohaOrders?.();
+  listenToGatewayOrders?.();
+  listenToOhanaOrders?.();
+  listenToConcessionOrders?.(); // ✅ Concession listener
   listenToAddonOrders?.();
-  loadGuestCounts?.();            
+
+  // 🔁 Live Showware guest totals → updates cache, tiles, and Guest Count screen
+  // (Assumes you added listenToShowwareGuests elsewhere as shared earlier)
+  listenToShowwareGuests?.();
+
+  // ✅ Seed guest counts so UI shows numbers before first snapshots tick
+  // (tolerant extractors will find the right keys)
+  forceGatewayCountsOnce?.();
+  forceOhanaCountsOnce?.();
+  forceAlohaCountsOnce?.();
 
   // 🔽 Apply category filter on load for all venues
   ["aloha", "gateway", "ohana", "concession"].forEach(area => {
     applyCategoryFilter?.(area);
   });
 
-  // 🚀 Start listeners for each station
+  // 🚀 Start per-station listeners
   ["Wok", "Fryer", "Grill", "Oven", "Pantry", "Pastry"].forEach(station => {
     listenToStationOrders?.(station);
   });
 
-  // 💰 Delay for cost summary input listeners (includes Concessions)
- setTimeout(() => {
-  ["Aloha", "Gateway", "Ohana"].forEach(venue => { // ❌ Removed "Concessions"
+  // 💰 Hook cost summaries to order changes (these should call updateCostSummaryForVenue)
+  ["Aloha", "Gateway", "Ohana"].forEach(venue => {
     listenToVenueOrdersAndUpdateCost?.(venue);
-
-    const inputId = `guestInput${venue === "Aloha" ? "" : venue}`;
-    const guestInput = document.getElementById(inputId);
-
-    if (guestInput) {
-      guestInput.addEventListener("input", () => {
-        updateCostSummaryForVenue?.(venue);
-      });
-    }
   });
-}, 250);
 
+  // 🖌️ First paint from cache if available (avoids blank labels on initial load)
+  try {
+    typeof paintGatewayCountsFromCache === "function" && paintGatewayCountsFromCache();
+    typeof paintOhanaCountsFromCache   === "function" && paintOhanaCountsFromCache();
+    typeof paintAlohaCountsFromCache   === "function" && paintAlohaCountsFromCache();
+
+    // Also mirror onto Guest Count inputs/labels immediately on load
+    paintGuestCountsScreenFromCache();
+  } catch {}
 });
-
 
 
 // 🔁 Live Firestore snapshot listener
@@ -362,6 +409,8 @@ function getTodayDate() {
 }
 
 
+
+
 // 🔄 Save guest counts to Firestore
 const guestForm = document.getElementById("guest-count-form");
 const statusDiv = document.getElementById("guest-count-status");
@@ -394,6 +443,57 @@ if (guestForm) {
     }
   });
 }
+
+// 🔁 Live Showware listener → updates cache, venue tiles, and Guest Count screen
+function listenToShowwareGuests() {
+  const q = query(
+    collection(db, window.SHOWWARE_COLL || "showwareEvents"),
+    orderBy("receivedAt", "desc"),
+    limit(1)
+  );
+
+  onSnapshot(q, (snap) => {
+    if (snap.empty) return;
+    const d = snap.docs[0].data() || {};
+
+    // 1) Extract all three from the SAME doc
+    const gw = extractGatewayCounts?.(d);
+    const oh = extractOhanaCounts?.(d);
+    const al = extractAlohaCounts?.(d);
+
+    // 2) Cache
+    window.showwareGuests = window.showwareGuests || {};
+    if (gw) window.showwareGuests.Gateway = gw;
+    if (oh) window.showwareGuests.Ohana   = oh;
+    if (al) window.showwareGuests.Aloha   = al;
+
+    // 3) Paint venue tiles (if those elements exist on current view)
+    try { gw && paintGatewayCounts?.(gw); } catch {}
+    try { oh && paintOhanaCounts?.(oh);   } catch {}
+    try { al && paintAlohaCounts?.(al);   } catch {}
+
+    // 4) Mirror TOTALS onto Guest Count screen inputs/labels
+    const mirror = (name, vals) => {
+      if (!vals) return;
+      const total = Number(vals.total || 0);
+      const inEl  = document.getElementById(`count-${name}`);
+      const curEl = document.getElementById(`current-${name}`);
+      if (Number.isFinite(total)) {
+        if (inEl)  inEl.value = String(total);
+        if (curEl) curEl.textContent = String(total);
+      }
+    };
+    mirror("Aloha",   al);
+    mirror("Ohana",   oh);
+    mirror("Gateway", gw);
+
+    // 5) Update cost/guest cards now that totals are fresh
+    ["Aloha","Gateway","Ohana"].forEach(v => {
+      try { updateCostSummaryForVenue?.(v); } catch {}
+    });
+  });
+}
+
 
 async function loadGuestCounts() {
   const docRef = doc(db, "guestCounts", getTodayDate());
@@ -986,72 +1086,62 @@ window.sendAlohaOrder = async function(button) {
   }
 };
 
-
 async function updateCostSummaryForVenue(venueName) {
   const today = getTodayDate();
-  const ordersRef = collection(db, "orders");
 
+  // 1) Sum today's spend for this venue (add-ons + starting-par)
   const q = query(
-    ordersRef,
+    collection(db, "orders"),
     where("venue", "==", venueName),
     where("date", "==", today)
   );
   const snapshot = await getDocs(q);
 
   let totalSpent = 0;
-
-  snapshot.forEach(doc => {
-    const data = doc.data();
-
-    // ✅ Sum totalCost for both addon and starting-par orders
-    if (["addon", "starting-par"].includes(data.type)) {
-      totalSpent += Number(data.totalCost || 0);
+  snapshot.forEach(s => {
+    const d = s.data();
+    if (d && (d.type === "addon" || d.type === "starting-par")) {
+      totalSpent += Number(d.totalCost || 0);
     }
   });
 
-  // 👥 Determine which HTML elements to update
-  let guestInputId = "";
-  let spentDisplayId = "";
-  let costDisplayId = "";
+  // 2) UI id map
+  const idMap = {
+    Aloha:   { spent: "totalSpent",        cost: "costPerGuest" },
+    Gateway: { spent: "totalSpentGateway", cost: "costPerGuestGateway" },
+    Ohana:   { spent: "totalSpentOhana",   cost: "costPerGuestOhana" },
+  };
+  const ids = idMap[venueName] || {};
+  const lower = venueName.toLowerCase();
 
-  switch (venueName) {
-    case "Aloha":
-      guestInputId = "guestInput";
-      spentDisplayId = "totalSpent";
-      costDisplayId = "costPerGuest";
-      break;
-    case "Gateway":
-      guestInputId = "guestInputGateway";
-      spentDisplayId = "totalSpentGateway";
-      costDisplayId = "costPerGuestGateway";
-      break;
-    case "Ohana":
-      guestInputId = "guestInputOhana";
-      spentDisplayId = "totalSpentOhana";
-      costDisplayId = "costPerGuestOhana";
-      break;
+  // Always show money total
+  if (ids.spent) document.getElementById(ids.spent).textContent = totalSpent.toFixed(2);
+
+  // 3) Prefer live Showware totals; skip zero-writes if not ready yet
+  const sw = window.showwareGuests?.[venueName];
+  if (!sw) {
+    // No guest numbers yet — don't change guest labels or cost/guest
+    return;
   }
 
-  // 📥 Get guest count from input or fallback
-  let guestCount = 0;
-  const guestInput = document.getElementById(guestInputId);
+  const guestTotal = Number(sw.total || 0);
+  const scanned    = Number(sw.scanned || 0);
+  const remainingGuests = Math.max(0, guestTotal - scanned);
 
-  if (guestInput) {
-    const rawValue = guestInput.value.trim();
-    if (rawValue === "") {
-      const guestSnap = await getDoc(doc(db, "guestCounts", venueName));
-      guestCount = guestSnap.exists() ? guestSnap.data().count : 0;
-    } else {
-      const parsed = Number(rawValue);
-      guestCount = parsed > 0 ? parsed : 1;
-    }
-  }
+  // 4) Compute cost per guest (using TOTAL guests; switch to remainingGuests if you prefer)
+  const costPerGuest = guestTotal > 0 ? totalSpent / guestTotal : 0;
 
-  const costPerGuest = guestCount > 0 ? totalSpent / guestCount : 0;
+  // 5) Write UI
+  if (ids.cost) document.getElementById(ids.cost).textContent = costPerGuest.toFixed(2);
 
-  document.getElementById(spentDisplayId).textContent = totalSpent.toFixed(2);
-  document.getElementById(costDisplayId).textContent = costPerGuest.toFixed(2);
+  const totalEl = document.getElementById(`${lower}TotalGuests`);
+  if (totalEl) totalEl.textContent = String(guestTotal);
+
+  const remEl = document.getElementById(`${lower}RemainingGuests`);
+  if (remEl) remEl.textContent = String(remainingGuests);
 }
+
+
 
 
 // next function
@@ -1075,8 +1165,100 @@ const alohaQuery = query(
   });
 }
 
+// ======================= Showware Core Helpers (hoisted) =======================
+// Only declare once, before Gateway/Ohana/Aloha code
+window.SHOWWARE_COLL = window.SHOWWARE_COLL || "showwareEvents";
+
+// number coercion
+function sw_toNum(v) {
+  if (v == null) return 0;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+// safe read of dotted paths ("a.b.c"); undefined if missing
+function sw_read(obj, path) {
+  if (!obj) return undefined;
+  const parts = String(path).split(".");
+  let cur = obj;
+  for (const p of parts) {
+    if (cur && Object.prototype.hasOwnProperty.call(cur, p)) {
+      cur = cur[p];
+    } else {
+      return undefined;
+    }
+  }
+  return cur;
+}
+
+// search candidate keys across likely containers
+function sw_findNum(d, candidates) {
+  const pools = [
+    d,
+    d?.raw,
+    d?.raw?.data,
+    d?.raw?.payload,
+    d?.payload,
+    d?.data,
+    d?.raw?.showware,
+  ];
+  for (const pool of pools) {
+    if (!pool) continue;
+    for (const key of candidates) {
+      const v = sw_read(pool, key);
+      if (v != null) return sw_toNum(v);
+    }
+  }
+  return 0;
+}
 
 
+
+
+
+function extractAlohaCounts(d = {}) {
+  const TOTAL_KEYS   = ["alohaTotal","alohaCount","aloha","aloha_total","aloha_count","AlohaTotal","AlohaCount"];
+  const SCANNED_KEYS = ["alohaScanned","alohaScan","aloha_scanned","aloha_scan","AlohaScanned","AlohaScan"];
+  const total   = sw_findNum(d, TOTAL_KEYS);
+  const scanned = sw_findNum(d, SCANNED_KEYS);
+  return { total, scanned, remaining: Math.max(0, total - scanned) };
+}
+function paintAlohaCounts(al) {
+  if (!al) return false;
+  const totalEl   = document.getElementById("alohaTotalGuests");
+  const remainEl  = document.getElementById("alohaRemainingGuests");
+  const scannedEl = document.getElementById("alohaScannedGuests");
+  if (totalEl)   totalEl.textContent   = String(sw_toNum(al.total));
+  if (remainEl)  remainEl.textContent  = String(Math.max(0, sw_toNum(al.remaining)));
+  if (scannedEl) scannedEl.textContent = String(Math.max(0, sw_toNum(al.scanned)));
+  return !!(totalEl || remainEl || scannedEl);
+}
+async function forceAlohaCountsOnce() {
+  try {
+    const qLatest = query(collection(db, window.SHOWWARE_COLL), orderBy("receivedAt","desc"), limit(1));
+    const snap = await getDocs(qLatest);
+    if (snap.empty) { console.warn(`${window.SHOWWARE_COLL} is empty for Aloha.`); return {ok:false, reason:"empty"}; }
+    const d = snap.docs[0].data() || {};
+    try {
+      const log = (l,o)=>console.log(`🔎 (Aloha) ${l}:`, o?Object.keys(o):"(none)");
+      log("doc keys", d); log("raw keys", d?.raw); log("raw.data keys", d?.raw?.data); log("raw.payload keys", d?.raw?.payload);
+    } catch {}
+    const al = extractAlohaCounts(d);
+    console.log("📡 forceAlohaCountsOnce() latest doc:", d, "→", al);
+    window.showwareGuests = window.showwareGuests || {};
+    window.showwareGuests.Aloha = al;
+    paintAlohaCounts(al);
+    try { typeof updateCostSummaryForVenue === "function" && updateCostSummaryForVenue("Aloha"); } catch {}
+    return { ok:true, data:al };
+  } catch (err) {
+    console.error("forceAlohaCountsOnce() failed:", err);
+    return { ok:false, reason:"error", err };
+  }
+}
+function paintAlohaCountsFromCache() {
+  const al = window.showwareGuests?.Aloha;
+  return al ? paintAlohaCounts(al) : false;
+}
 // ✅ Render Aloha open order table with proper timestamp + cookTime
 function renderAlohaTable(orders) {
   const tbody = document.querySelector("#alohaTable tbody");
@@ -3239,73 +3421,276 @@ function listenToGatewayOrders() {
     renderGatewayTable(orders);
   });
 }
+// ======================= Showware (Gateway) — Drop-in =======================
+// Canonical collection name (guarded so it won't double‑declare)
+window.SHOWWARE_COLL = window.SHOWWARE_COLL || "showwareEvents";
 
+/* ------------------- Local helpers (namespaced; no collisions) ------------------- */
+const gw_toNum = (v) => {
+  if (v == null) return 0;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+};
+
+// safe read of dotted paths ("a.b.c"); returns undefined if path is missing
+const gw_read = (obj, path) => {
+  if (!obj) return undefined;
+  const parts = String(path).split(".");
+  let cur = obj;
+  for (const p of parts) {
+    if (cur && Object.prototype.hasOwnProperty.call(cur, p)) {
+      cur = cur[p];
+    } else {
+      return undefined;
+    }
+  }
+  return cur;
+};
+
+// look for any candidate key in a list of likely containers
+function gw_findNum(d, candidates) {
+  const pools = [
+    d,
+    d?.raw,
+    d?.raw?.data,
+    d?.raw?.payload,
+    d?.payload,
+    d?.data,
+    d?.raw?.showware,
+  ];
+  for (const pool of pools) {
+    if (!pool) continue;
+    for (const key of candidates) {
+      const v = gw_read(pool, key);
+      if (v != null) return gw_toNum(v);
+    }
+  }
+  return 0;
+}
+
+/**
+ * Extract tolerant gateway counts from a Showware doc.
+ * Supports:
+ *   - top-level fields (e.g., gatewayCount)
+ *   - raw.* containers (raw.gatewayCount)
+ *   - an extra nesting layer (raw.payload.gatewayCount)
+ *   - multiple key name variants (camelCase / snake_case / legacy)
+ */
+function extractGatewayCounts(d = {}) {
+  // total guests variants
+  const TOTAL_KEYS = [
+    "gatewayTotal", "gatewayCount", "gateway",
+    "gateway_total", "gateway_count",
+    "GatewayTotal", "GatewayCount"
+  ];
+
+  // scanned variants
+  const SCANNED_KEYS = [
+    "gatewayScanned", "gatewayScan",
+    "gateway_scanned", "gateway_scan",
+    "GatewayScanned", "GatewayScan"
+  ];
+
+  const total   = gw_findNum(d, TOTAL_KEYS);
+  const scanned = gw_findNum(d, SCANNED_KEYS);
+
+  return {
+    total,
+    scanned,
+    remaining: Math.max(0, total - scanned),
+  };
+}
+
+/**
+ * Write Gateway numbers into the DOM if the elements exist.
+ * Never writes NaN; avoids negative values.
+ */
+function paintGatewayCounts(gw) {
+  if (!gw) return false;
+
+  const totalEl   = document.getElementById("gatewayTotalGuests");
+  const remainEl  = document.getElementById("gatewayRemainingGuests");
+  const scannedEl = document.getElementById("gatewayScannedGuests"); // optional
+
+  if (totalEl)   totalEl.textContent   = String(gw_toNum(gw.total));
+  if (remainEl)  remainEl.textContent  = String(Math.max(0, gw_toNum(gw.remaining)));
+  if (scannedEl) scannedEl.textContent = String(Math.max(0, gw_toNum(gw.scanned)));
+
+  return !!(totalEl || remainEl || scannedEl);
+}
+
+/* ------------------- SHOWWARE GATEWAY COUNTS: one‑shot fetch + DOM update ------------------- */
+async function forceGatewayCountsOnce() {
+  try {
+    const qLatest = query(
+      collection(db, window.SHOWWARE_COLL),
+      orderBy("receivedAt", "desc"),
+      limit(1)
+    );
+    const snap = await getDocs(qLatest);
+    if (snap.empty) {
+      console.warn(`${window.SHOWWARE_COLL} is empty.`);
+      return { ok: false, reason: "empty" };
+    }
+
+    const d  = snap.docs[0].data() || {};
+
+    // 🔎 Quick introspection so you can see where Showware put fields this time.
+    try {
+      const logKeys = (label, obj) => console.log(`🔎 ${label}:`, obj ? Object.keys(obj) : "(none)");
+      logKeys("doc keys", d);
+      logKeys("raw keys", d?.raw);
+      logKeys("raw.data keys", d?.raw?.data);
+      logKeys("raw.payload keys", d?.raw?.payload);
+      logKeys("payload keys", d?.payload);
+      logKeys("data keys", d?.data);
+    } catch {}
+
+    const gw = extractGatewayCounts(d);
+    console.log("📡 forceGatewayCountsOnce() latest doc:", d, "→", gw);
+
+    // cache for everyone else (aligns with your global used elsewhere)
+    window.showwareGuests = window.showwareGuests || {};
+    window.showwareGuests.Gateway = gw;
+
+    // paint if elements exist (don’t force-create)
+    paintGatewayCounts(gw);
+
+    // if your cost/guest summary depends on this, nudge it (guarded)
+    try {
+      typeof updateCostSummaryForVenue === "function" &&
+        updateCostSummaryForVenue("Gateway");
+    } catch {}
+
+    return { ok: true, data: gw };
+  } catch (err) {
+    console.error("forceGatewayCountsOnce() failed:", err);
+    return { ok: false, reason: "error", err };
+  }
+}
+
+/* ------------------- tiny helper to write from cache (no fetch) ------------------- */
+function paintGatewayCountsFromCache() {
+  const sw = window.showwareGuests?.Gateway;
+  if (!sw) return false;
+  return paintGatewayCounts(sw);
+}
+
+// expose to window (guard double-assign)
+if (!window.forceGatewayCountsOnce)      window.forceGatewayCountsOnce = forceGatewayCountsOnce;
+if (!window.paintGatewayCountsFromCache) window.paintGatewayCountsFromCache = paintGatewayCountsFromCache;
+// ✅ Safe numeric parser for Showware fields
+function sw_num(v) {
+  const x = Number(v);
+  return Number.isFinite(x) ? x : 0;
+}
+
+
+
+// ---- Gateway table renderer (with Showware counts seed) ----
 function renderGatewayTable(orders) {
   const tbody = document.querySelector("#gatewayTable tbody");
   if (!tbody) return;
 
-  // 🧼 Filter out received orders
-  orders = orders.filter(order => order.status !== "received");
+  // Normalize + filter
+  orders = Array.isArray(orders) ? orders : [];
+  orders = orders.filter(o => o && o.status !== "received");
 
+  // Clear and sort
   tbody.innerHTML = "";
-
   orders.sort((a, b) => {
-    const statusOrder = { sent: 0, "Ready to Send": 1, open: 2 };
-    const aPriority = statusOrder[a.status] ?? 3;
-    const bPriority = statusOrder[b.status] ?? 3;
-    if (aPriority !== bPriority) return aPriority - bPriority;
-
-    const timeA = a.timestamp?.toDate?.()?.getTime?.() || 0;
-    const timeB = b.timestamp?.toDate?.()?.getTime?.() || 0;
-    return timeA - timeB;
+    const orderMap = { sent: 0, "Ready to Send": 1, open: 2 };
+    const ap = orderMap[a?.status] ?? 3;
+    const bp = orderMap[b?.status] ?? 3;
+    if (ap !== bp) return ap - bp;
+    const ta = a?.timestamp?.toDate?.()?.getTime?.() || 0;
+    const tb = b?.timestamp?.toDate?.()?.getTime?.() || 0;
+    return ta - tb;
   });
 
   const now = new Date();
 
-  orders.forEach(order => {
+  for (const order of orders) {
     const row = document.createElement("tr");
 
     let createdAt = new Date();
-    if (order.timestamp?.toDate) {
-      createdAt = order.timestamp.toDate();
-    }
+    if (order?.timestamp?.toDate) createdAt = order.timestamp.toDate();
 
-    const cookTime = order.cookTime || 0;
-    const dueTime = new Date(createdAt.getTime() + cookTime * 60000);
+    const cookTime = Number(order?.cookTime || 0);
+    const dueTime  = new Date(createdAt.getTime() + cookTime * 60000);
 
-    const createdFormatted = createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const dueFormatted = dueTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const createdFormatted = createdAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    const dueFormatted     = dueTime.toLocaleTimeString([],   { hour: "2-digit", minute: "2-digit" });
 
-    if (dueTime < now) {
-      row.style.backgroundColor = "rgba(255, 0, 0, 0.15)";
-    }
+    if (dueTime < now) row.style.backgroundColor = "rgba(255, 0, 0, 0.15)";
 
     let actionsHTML = "";
-    if (order.status === "open" && order.type === "addon") {
+    if (order?.status === "open" && order?.type === "addon") {
       actionsHTML = `
         <button onclick='showEditModal(${JSON.stringify(order).replace(/"/g, "&quot;")})'>✏️</button>
         <button onclick="showDeleteModal('${order.id}')">🗑️</button>
       `;
-    } else if (["sent"].includes(order.status)) {
+    } else if (order?.status === "sent") {
       actionsHTML = `<button onclick="markOrderReceived('${order.id}', this)">✓ Receive</button>`;
     }
 
-   row.innerHTML = `
-  <td data-label="Created">${createdFormatted}</td>
-  <td data-label="Due">${dueFormatted}</td>
-  <td data-label="Item">${order.item}</td>
-  <td data-label="Qty">${order.qty}</td>
-  <td data-label="Status">${order.status}</td>
-  <td data-label="Actions">${actionsHTML}</td>
-`;
+    row.innerHTML = `
+      <td data-label="Created">${createdFormatted}</td>
+      <td data-label="Due">${dueFormatted}</td>
+      <td data-label="Item">${order?.item ?? ""}</td>
+      <td data-label="Qty">${order?.qty ?? ""}</td>
+      <td data-label="Status">${order?.status ?? ""}</td>
+      <td data-label="Actions">${actionsHTML}</td>
+    `;
     tbody.appendChild(row);
-  });
+  }
 
-  const totalGuests = window.guestCounts?.Gateway || 0;
-  const guestEl = document.getElementById("gatewayTotalGuests");
-  if (guestEl) guestEl.textContent = totalGuests;
+  // ===== Showware counts (ONLY) =====
+  const totalEl  = document.getElementById("gatewayTotalGuests");
+  const remainEl = document.getElementById("gatewayRemainingGuests");
+
+  // 1) Try cache first (populated by listener/force call)
+  const sw = window.showwareGuests?.Gateway;
+  if (sw && Number.isFinite(sw_num(sw.total))) {
+    const remaining = Math.max(0, sw_num(sw.total) - sw_num(sw.scanned));
+    if (totalEl)  totalEl.textContent  = String(sw_num(sw.total));
+    if (remainEl) remainEl.textContent = String(remaining);
+    return;
+  }
+
+  // 2) If cache not ready, seed once from Firestore and paint — do NOT write zeros
+  if (!window._seedShowwareGatewayOnce) {
+    window._seedShowwareGatewayOnce = true;
+    (async () => {
+      try {
+        const qLatest = query(
+          collection(db, window.SHOWWARE_COLL),
+          orderBy("receivedAt", "desc"),
+          limit(1)
+        );
+        const seed = await getDocs(qLatest);
+        if (seed.empty) {
+          console.warn(`[Gateway] ${window.SHOWWARE_COLL} empty; skipping paint.`);
+          return;
+        }
+        const d  = seed.docs[0].data() || {};
+        const gw = extractGatewayCounts(d);
+
+        // cache for rest of app
+        window.showwareGuests = window.showwareGuests || {};
+        window.showwareGuests.Gateway = gw;
+
+        if (totalEl)  totalEl.textContent  = String(gw.total);
+        if (remainEl) remainEl.textContent = String(gw.remaining);
+        console.log("[Gateway] Seeded from showwareEvents:", gw);
+      } catch (e) {
+        console.warn("[Gateway] Failed to seed Showware counts:", e);
+      }
+    })();
+  }
+  // If still not ready, leave existing UI values as-is (avoid 0/0 overwrite)
 }
-
+// ===================== /Showware (Gateway) — Drop-in =====================
 
 
 window.markOrderReceived = async function (orderId, button) {
@@ -3981,6 +4366,129 @@ function listenToOhanaOrders() {
     renderOhanaTable(orders);
   });
 }
+
+// ======================= Showware (Ohana) — Drop-in =======================
+// Uses same collection name as Gateway block
+window.SHOWWARE_COLL = window.SHOWWARE_COLL || "showwareEvents";
+
+/* ---- reuse tolerant helpers if present; otherwise define local fallbacks ---- */
+const oh_toNum  = (typeof gw_toNum  === "function") ? gw_toNum  : (v => Number.isFinite(Number(v)) ? Number(v) : 0);
+const oh_read   = (typeof gw_read   === "function") ? gw_read   : ((obj, path) => {
+  if (!obj) return undefined; let cur = obj;
+  for (const p of String(path).split(".")) {
+    if (cur && Object.prototype.hasOwnProperty.call(cur, p)) cur = cur[p];
+    else return undefined;
+  }
+  return cur;
+});
+const oh_findNum = (typeof gw_findNum === "function") ? gw_findNum : (d, candidates) => {
+  const pools = [d, d?.raw, d?.raw?.data, d?.raw?.payload, d?.payload, d?.data, d?.raw?.showware];
+  for (const pool of pools) {
+    if (!pool) continue;
+    for (const key of candidates) {
+      const v = oh_read(pool, key);
+      if (v != null) return oh_toNum(v);
+    }
+  }
+  return 0;
+};
+
+/**
+ * Extract tolerant Ohana counts from a Showware doc.
+ * Supports multiple containers (top-level, raw.*, raw.payload.*) and key variants.
+ */
+function extractOhanaCounts(d = {}) {
+  const TOTAL_KEYS = [
+    "ohanaTotal", "ohanaCount", "ohana",
+    "ohana_total", "ohana_count",
+    "OhanaTotal", "OhanaCount"
+  ];
+  const SCANNED_KEYS = [
+    "ohanaScanned", "ohanaScan",
+    "ohana_scanned", "ohana_scan",
+    "OhanaScanned", "OhanaScan"
+  ];
+
+  const total   = oh_findNum(d, TOTAL_KEYS);
+  const scanned = oh_findNum(d, SCANNED_KEYS);
+
+  return { total, scanned, remaining: Math.max(0, total - scanned) };
+}
+
+/** Write Ohana numbers into the DOM (IDs must exist to paint). */
+function paintOhanaCounts(oh) {
+  if (!oh) return false;
+
+  const totalEl   = document.getElementById("ohanaTotalGuests");
+  const remainEl  = document.getElementById("ohanaRemainingGuests");
+  const scannedEl = document.getElementById("ohanaScannedGuests"); // optional
+
+  if (totalEl)   totalEl.textContent   = String(oh_toNum(oh.total));
+  if (remainEl)  remainEl.textContent  = String(Math.max(0, oh_toNum(oh.remaining)));
+  if (scannedEl) scannedEl.textContent = String(Math.max(0, oh_toNum(oh.scanned)));
+
+  return !!(totalEl || remainEl || scannedEl);
+}
+
+/* ---- one‑shot fetch of latest Showware doc + cache + DOM paint ---- */
+async function forceOhanaCountsOnce() {
+  try {
+    const qLatest = query(
+      collection(db, window.SHOWWARE_COLL),
+      orderBy("receivedAt", "desc"),
+      limit(1)
+    );
+    const snap = await getDocs(qLatest);
+    if (snap.empty) {
+      console.warn(`${window.SHOWWARE_COLL} is empty for Ohana.`);
+      return { ok: false, reason: "empty" };
+    }
+
+    const d = snap.docs[0].data() || {};
+
+    // optional structural debug (comment out if noisy)
+    try {
+      const logKeys = (label, obj) => console.log(`🔎 (Ohana) ${label}:`, obj ? Object.keys(obj) : "(none)");
+      logKeys("doc keys", d);
+      logKeys("raw keys", d?.raw);
+      logKeys("raw.data keys", d?.raw?.data);
+      logKeys("raw.payload keys", d?.raw?.payload);
+    } catch {}
+
+    const oh = extractOhanaCounts(d);
+    console.log("📡 forceOhanaCountsOnce() latest doc:", d, "→", oh);
+
+    // cache alongside Gateway cache
+    window.showwareGuests = window.showwareGuests || {};
+    window.showwareGuests.Ohana = oh;
+
+    // paint if elements exist
+    paintOhanaCounts(oh);
+
+    // nudge cost summary if wired
+    try {
+      typeof updateCostSummaryForVenue === "function" &&
+        updateCostSummaryForVenue("Ohana");
+    } catch {}
+
+    return { ok: true, data: oh };
+  } catch (err) {
+    console.error("forceOhanaCountsOnce() failed:", err);
+    return { ok: false, reason: "error", err };
+  }
+}
+
+/** Paint from cache without fetching (e.g., on tab switch). */
+function paintOhanaCountsFromCache() {
+  const oh = window.showwareGuests?.Ohana;
+  if (!oh) return false;
+  return paintOhanaCounts(oh);
+}
+
+// expose (guard double-assign)
+if (!window.forceOhanaCountsOnce)      window.forceOhanaCountsOnce = forceOhanaCountsOnce;
+if (!window.paintOhanaCountsFromCache) window.paintOhanaCountsFromCache = paintOhanaCountsFromCache;
+
 
 // Render table for Ohana orders
 function renderOhanaTable(orders) {
