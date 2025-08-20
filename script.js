@@ -1086,53 +1086,112 @@ window.sendAlohaOrder = async function(button) {
   }
 };
 
+// ✅ Cost summary uses what the kitchen actually sent (netWeight) instead of 1 lb requests
+// ✅ Cost summary: only SENT orders; prefer totalCost; otherwise compute from netWeight × unit cost
 async function updateCostSummaryForVenue(venueName) {
   const today = getTodayDate();
 
-  // 1) Sum today's spend for this venue (add-ons + starting-par)
+  // Pull only today's SENT add-ons & starting-par for this venue
   const q = query(
     collection(db, "orders"),
     where("venue", "==", venueName),
-    where("date", "==", today)
+    where("date", "==", today),
+    where("status", "==", "sent"),
+    where("type", "in", ["addon", "starting-par"])
   );
   const snapshot = await getDocs(q);
 
-  let totalSpent = 0;
-  snapshot.forEach(s => {
-    const d = s.data();
-    if (d && (d.type === "addon" || d.type === "starting-par")) {
-      totalSpent += Number(d.totalCost || 0);
+  // Cache recipe costs to reduce reads
+  const recipeCostCache = new Map(); // recipeId -> cost (number)
+
+  async function getUnitCostFor(orderDoc) {
+    // Prefer cost on the order (some flows save this)
+    const orderCost = Number(orderDoc.cost ?? orderDoc.unitCost ?? 0);
+    if (orderCost > 0) return orderCost;
+
+    // Fallback: lookup recipe cost by recipeId (e.g., "r0278")
+    const recipeId = (orderDoc.recipeId || "").toString().trim();
+    if (!recipeId) return 0;
+
+    if (recipeCostCache.has(recipeId)) return recipeCostCache.get(recipeId) || 0;
+
+    try {
+      const rs = await getDoc(doc(db, "recipes", recipeId));
+      const c = rs.exists() ? Number(rs.data()?.cost || 0) : 0;
+      recipeCostCache.set(recipeId, c);
+      return c;
+    } catch (e) {
+      console.warn("⚠️ Recipe cost lookup failed:", recipeId, e);
+      recipeCostCache.set(recipeId, 0);
+      return 0;
     }
+  }
+
+  // Sum total spent
+  let totalSpent = 0;
+
+  // Build per-doc computations; await together to keep UI responsive
+  const tasks = [];
+  snapshot.forEach((s) => {
+    const d = s.data();
+    if (!d) return;
+
+    // 1) If totalCost is present, trust it (kitchen already calculated from the true send)
+    const storedTotal = Number(d.totalCost || 0);
+    if (storedTotal > 0) {
+      totalSpent += storedTotal;
+      return;
+    }
+
+    // 2) Otherwise compute: use best available quantity signal
+    const qtyForCost =
+      Number(d.netWeight) ||     // ✅ kitchen-recorded total weight (best)
+      Number(d.qty) ||           // fallback: generic qty
+      Number(d.sentQty) ||       // fallback: pans sent / send quantity
+      Number(d.requestQty) ||    // fallback: pre-send request
+      0;
+
+    if (qtyForCost <= 0) return;
+
+    tasks.push((async () => {
+      const unitCost = await getUnitCostFor(d);
+      if (unitCost > 0) totalSpent += qtyForCost * unitCost;
+    })());
   });
 
-  // 2) UI id map
+  await Promise.all(tasks);
+
+  // ---- UI ids
   const idMap = {
     Aloha:   { spent: "totalSpent",        cost: "costPerGuest" },
     Gateway: { spent: "totalSpentGateway", cost: "costPerGuestGateway" },
     Ohana:   { spent: "totalSpentOhana",   cost: "costPerGuestOhana" },
+    // Add Concessions if you have elements for it:
+    // Concessions: { spent: "totalSpentConcessions", cost: "costPerGuestConcessions" },
   };
   const ids = idMap[venueName] || {};
   const lower = venueName.toLowerCase();
 
   // Always show money total
-  if (ids.spent) document.getElementById(ids.spent).textContent = totalSpent.toFixed(2);
-
-  // 3) Prefer live Showware totals; skip zero-writes if not ready yet
-  const sw = window.showwareGuests?.[venueName];
-  if (!sw) {
-    // No guest numbers yet — don't change guest labels or cost/guest
-    return;
+  if (ids.spent) {
+    const el = document.getElementById(ids.spent);
+    if (el) el.textContent = totalSpent.toFixed(2);
   }
+
+  // Prefer live Showware totals; skip writes if not available yet
+  const sw = window.showwareGuests?.[venueName];
+  if (!sw) return;
 
   const guestTotal = Number(sw.total || 0);
   const scanned    = Number(sw.scanned || 0);
   const remainingGuests = Math.max(0, guestTotal - scanned);
 
-  // 4) Compute cost per guest (using TOTAL guests; switch to remainingGuests if you prefer)
   const costPerGuest = guestTotal > 0 ? totalSpent / guestTotal : 0;
 
-  // 5) Write UI
-  if (ids.cost) document.getElementById(ids.cost).textContent = costPerGuest.toFixed(2);
+  if (ids.cost) {
+    const el = document.getElementById(ids.cost);
+    if (el) el.textContent = costPerGuest.toFixed(2);
+  }
 
   const totalEl = document.getElementById(`${lower}TotalGuests`);
   if (totalEl) totalEl.textContent = String(guestTotal);
@@ -1140,8 +1199,6 @@ async function updateCostSummaryForVenue(venueName) {
   const remEl = document.getElementById(`${lower}RemainingGuests`);
   if (remEl) remEl.textContent = String(remainingGuests);
 }
-
-
 
 
 // next function
