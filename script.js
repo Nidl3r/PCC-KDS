@@ -2015,7 +2015,7 @@ window.renderMainKitchenPars = function () {
   const tbody = table.querySelector("tbody");
   tbody.innerHTML = "";
 
-  // Concessions wave/baseline (unchanged behavior)
+  // --- Concessions baseline (unchanged), but we will DISPLAY the remaining
   const currentConGuests = Number(data.guestCounts?.Concession || data.guestCounts?.Concessions || 0);
   const { guestBase, sentBase } = readConcessionBaseline();
   if (currentConGuests > guestBase) {
@@ -2034,7 +2034,7 @@ window.renderMainKitchenPars = function () {
       const venue = venueCodeMap[code] || "Unknown";
       if (venueFilter && venue !== venueFilter) continue;
 
-      // 1) Today’s PAR (pans)
+      // 1) Today's target PAR (pans)
       let parPans = 0;
       if (venue === "Concessions") {
         parPans = Number(recipe.pars?.Concession?.default || 0);
@@ -2044,37 +2044,25 @@ window.renderMainKitchenPars = function () {
       }
       if (parPans <= 0) continue;
 
-      // 2) Decide visibility (no "Sent" column shown)
-      let showRow = false;
+      // 2) Compute REMAINING to send
+      let remaining = 0;
+
       if (venue === "Concessions") {
-        // remaining = par - (sentNow - sentAtBaseline)
+        // Wave/baseline in lbs, but we still display the remaining PAN count here
         const sentAtBaseline = Number(finalSentBase?.[recipe.id] || 0);
-        const sentNow = Number(data.sentPars?.Concessions?.[recipe.id] || 0);
+        const sentNow = Number(data.sentPars?.Concessions?.[recipe.id] || 0); // lbs tallied by loader
         const effectiveSentSinceIncrease = Math.max(0, sentNow - sentAtBaseline);
-        const remaining = Math.max(0, parPans - effectiveSentSinceIncrease);
-        showRow = (remaining > 0);
+        remaining = Math.max(0, parPans - effectiveSentSinceIncrease);
       } else {
-        // Buffet baseline logic: ignore lbs, treat "sent once" as satisfied at baseline PAR
-        const baseline = readBuffetBaseline(venue);
-        const wasSent  = !!data.wasSentToday?.[venue]?.[recipe.id];
-
-        // first send today → capture baseline as current PAR
-        if (wasSent && baseline[recipe.id] == null) {
-          baseline[recipe.id] = parPans;
-          writeBuffetBaseline(venue, baseline);
-        }
-
-        // Not sent yet → show; if sent → only show when par grew past baseline
-        if (!wasSent) {
-          showRow = true;
-        } else {
-          const satisfiedAt = Number(baseline[recipe.id] || 0);
-          showRow = parPans > satisfiedAt;
-        }
+        // Buffet venues: “target − total sent today (pans)”
+        const sentPansToday = Number(data.sentPars?.[venue]?.[recipe.id] || 0);
+        remaining = Math.max(0, parPans - sentPansToday);
       }
-      if (!showRow) continue;
 
-      // 3) Build row with columns: Area | Item | Par Qty | UOM | Send Qty | Action
+      // Only show if something is still needed
+      if (remaining <= 0) continue;
+
+      // 3) Build row: Area | Item | Par Qty (REMAINING) | UOM | Send Qty (blank) | Action
       const row = document.createElement("tr");
       row.dataset.recipeId = recipe.id;
       row.dataset.venue    = venue;
@@ -2082,7 +2070,7 @@ window.renderMainKitchenPars = function () {
       row.innerHTML = `
         <td>${venue}</td>
         <td>${recipe.description || recipe.recipeNo || recipe.id}</td>
-        <td>${fmt(parPans)}</td>
+        <td>${fmt(remaining)}</td>
         <td>${recipe.uom || "ea"}</td>
         <td>
           <input class="send-qty-input" type="text" inputmode="decimal"
@@ -2092,15 +2080,15 @@ window.renderMainKitchenPars = function () {
           <button onclick="sendSingleStartingPar('${recipe.id}', '${venue}', this)">Send</button>
         </td>
       `;
-
       tbody.appendChild(row);
       totalRows++;
     }
   });
 
   enableMathOnInputs(".send-qty-input", table);
-  console.log(`✅ Rendered ${totalRows} rows based on filters`);
+  console.log(`✅ Rendered ${totalRows} rows (Par Qty now shows remaining = target − sent; Send Qty left blank).`);
 };
+
 
 
 
