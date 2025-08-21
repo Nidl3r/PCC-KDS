@@ -214,18 +214,42 @@ document.addEventListener("DOMContentLoaded", () => {
     if (chatBox) chatBox.style.display = "block";
   }
 
-  // --- Mirror cached Showware totals onto the Guest Count screen (inputs + labels)
+  // --- tiny local helpers for notes (safe if your global versions exist too)
+  function setGuestNotes(name, val) {
+    const txt = (val == null || Number.isNaN(Number(val)))
+      ? "(current: —)"
+      : `(current: ${Number(val)})`;
+
+    const sum = document.getElementById(`current-${name}`);
+    if (sum) sum.textContent = txt;
+
+    const inline = document.getElementById(`note-${name}`);
+    if (inline) inline.textContent = txt;
+  }
+  function setSelectIfPresent(id, v) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    // ensure option exists so .value will stick even if not in preset list
+    if (![...el.options].some(o => Number(o.value) === Number(v))) {
+      const opt = document.createElement("option");
+      opt.value = String(v);
+      opt.textContent = String(v);
+      el.appendChild(opt);
+    }
+    el.value = String(v);
+  }
+
+  // --- Mirror cached Showware totals onto the Guest Count screen (inputs + labels + notes)
   function paintGuestCountsScreenFromCache() {
     const g = window.showwareGuests || {};
     const setPair = (name, vals) => {
       if (!vals) return;
       const total = Number(vals.total || 0);
-      const inEl  = document.getElementById(`count-${name}`);
-      const curEl = document.getElementById(`current-${name}`);
-      if (Number.isFinite(total)) {
-        if (inEl)  inEl.value = String(total);
-        if (curEl) curEl.textContent = String(total);
-      }
+      if (!Number.isFinite(total)) return;
+
+      setSelectIfPresent(`count-${name}`, total);
+      // write both the summary and inline note, if present
+      setGuestNotes(name, total);
     };
     setPair("Aloha",   g.Aloha);
     setPair("Ohana",   g.Ohana);
@@ -254,11 +278,13 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       // If the Guest Count screen is in view, mirror cached totals there too.
-      // (Covers ids like 'guestCounts' or presence of the inputs.)
+      // ✅ includes your actual id "guest-count"
       const guestCountsScreen =
         document.getElementById("guestCounts") ||
         document.getElementById("guestCount") ||
-        document.getElementById("guest-counts");
+        document.getElementById("guest-counts") ||
+        document.getElementById("guest-count");
+
       if (guestCountsScreen && guestCountsScreen.style.display !== "none") {
         paintGuestCountsScreenFromCache();
       }
@@ -277,11 +303,9 @@ document.addEventListener("DOMContentLoaded", () => {
   listenToAddonOrders?.();
 
   // 🔁 Live Showware guest totals → updates cache, tiles, and Guest Count screen
-  // (Assumes you added listenToShowwareGuests elsewhere as shared earlier)
   listenToShowwareGuests?.();
 
   // ✅ Seed guest counts so UI shows numbers before first snapshots tick
-  // (tolerant extractors will find the right keys)
   forceGatewayCountsOnce?.();
   forceOhanaCountsOnce?.();
   forceAlohaCountsOnce?.();
@@ -310,7 +334,17 @@ document.addEventListener("DOMContentLoaded", () => {
     // Also mirror onto Guest Count inputs/labels immediately on load
     paintGuestCountsScreenFromCache();
   } catch {}
+
+  // 🔄 Hydrate guest count selects/notes from Firestore and keep them live
+  // (uses the loadGuestCounts() and listenToGuestCountsLive() you added earlier)
+  try {
+    typeof loadGuestCounts === "function" && loadGuestCounts();
+    typeof listenToGuestCountsLive === "function" && listenToGuestCountsLive();
+  } catch (e) {
+    console.debug("guestCounts hydrate/listen skipped:", e);
+  }
 });
+
 
 
 // 🔁 Live Firestore snapshot listener
@@ -429,11 +463,25 @@ if (guestForm) {
     try {
       const ref = doc(db, "guestCounts", getTodayDate());
       const existingDoc = await getDoc(ref);
+
       if (existingDoc.exists()) {
         await setDoc(ref, { ...existingDoc.data(), ...counts }, { merge: true });
       } else {
         await setDoc(ref, counts);
       }
+
+      // ✅ Update notes and summaries immediately
+      ["Aloha", "Ohana", "Gateway"].forEach(name => {
+        const val = counts[name];
+        const txt = `(current: ${val})`;
+
+        const summary = document.getElementById(`current-${name}`);
+        if (summary) summary.textContent = txt;
+
+        const inline = document.getElementById(`note-${name}`);
+        if (inline) inline.textContent = txt;
+      });
+
       statusDiv.textContent = "✅ Guest counts saved!";
       statusDiv.style.color = "lightgreen";
     } catch (error) {
@@ -443,6 +491,7 @@ if (guestForm) {
     }
   });
 }
+
 
 // 🔁 Live Showware listener → updates cache, venue tiles, and Guest Count screen
 function listenToShowwareGuests() {
@@ -495,29 +544,73 @@ function listenToShowwareGuests() {
 }
 
 
+// ===== Load today's guest counts and hydrate UI =====
 async function loadGuestCounts() {
-  const docRef = doc(db, "guestCounts", getTodayDate());
-  const docSnap = await getDoc(docRef);
-  if (docSnap.exists()) {
-    const data = docSnap.data();
+  const todayId = getTodayDate();
+  const ref = doc(db, "guestCounts", todayId);
 
-    if (data.Aloha) {
-      document.getElementById("count-Aloha").value = data.Aloha;
-      document.getElementById("current-Aloha").textContent = data.Aloha;
-    }
+  try {
+    const snap = await getDoc(ref);
+    const data = snap.exists() ? (snap.data() || {}) : {};
 
-    if (data.Ohana) {
-      document.getElementById("count-Ohana").value = data.Ohana;
-      document.getElementById("current-Ohana").textContent = data.Ohana;
-    }
+    ["Aloha", "Ohana", "Gateway"].forEach((name) => {
+      const v = toInt(data?.[name]);
 
-    if (data.Gateway) {
-      document.getElementById("count-Gateway").value = data.Gateway;
-      document.getElementById("current-Gateway").textContent = data.Gateway;
-    }
+      if (v != null) {
+        ensureOption(`count-${name}`, v);   // make sure select has this exact value
+        setSelectValue(`count-${name}`, v); // select it
+        setGuestNotes(name, v);             // "(current: v)" for both summary + inline note
+      } else {
+        // no saved value — clear notes but keep selects editable
+        setGuestNotes(name, null);
+      }
+    });
+  } catch (err) {
+    console.error("loadGuestCounts() failed:", err);
   }
 }
 
+// ---- helpers ----
+function toInt(x) {
+  const n = Number(x);
+  return Number.isFinite(n) ? n : null;
+}
+
+function ensureOption(selectId, value) {
+  const sel = document.getElementById(selectId);
+  if (!sel) return;
+  const exists = Array.from(sel.options).some((o) => Number(o.value) === Number(value));
+  if (!exists) {
+    const opt = document.createElement("option");
+    opt.value = String(value);
+    opt.textContent = String(value);
+    sel.appendChild(opt);
+  }
+}
+
+function setSelectValue(selectId, value) {
+  const el = document.getElementById(selectId);
+  if (el) el.value = String(value);
+}
+
+function setGuestNotes(name, valueOrNull) {
+  const txt = valueOrNull == null ? "(current: —)" : `(current: ${valueOrNull})`;
+
+  // summary block (e.g., <span id="current-Aloha">…</span>)
+  const summary = document.getElementById(`current-${name}`);
+  if (summary) summary.textContent = txt;
+
+  // inline note next to the select (e.g., <span id="note-Aloha">…</span>)
+  const inline = document.getElementById(`note-${name}`);
+  if (inline) inline.textContent = txt;
+}
+
+function listenToGuestCountsLive() {
+  const ref = doc(db, "guestCounts", getTodayDate());
+  onSnapshot(ref, (snap) => {
+    if (snap.exists()) mirrorGuestCountsToUI(snap.data());
+  });
+}
 
 const placeholderUser = "testUser";
 
@@ -1958,6 +2051,32 @@ function writeConcessionBaseline(currentGuests, currentSentMap /* object: recipe
   localStorage.setItem(guestKey, String(currentGuests));
   localStorage.setItem(sentKey, JSON.stringify(currentSentMap || {}));
 }
+
+// --- utilities to keep notes synced ---
+function setGuestNote(name, val) {
+  const el = document.getElementById(`current-${name}`);
+  if (!el) return;
+  const num = Number(val);
+  el.textContent = Number.isFinite(num) ? `(current: ${num})` : `(current: —)`;
+}
+function mirrorGuestCountsToUI(data = {}) {
+  ["Aloha","Gateway","Ohana"].forEach(name => {
+    const sel = document.getElementById(`count-${name}`);
+    const v = Number(data?.[name] ?? NaN);
+    if (sel && Number.isFinite(v)) {
+      // ensure the option exists so the value can be selected
+      if (![...sel.options].some(o => Number(o.value) === v)) {
+        const opt = document.createElement("option");
+        opt.value = String(v);
+        opt.text = String(v);
+        sel.appendChild(opt);
+      }
+      sel.value = String(v);
+    }
+    setGuestNote(name, v);
+  });
+}
+
 
 
 //** Kitchen functions */

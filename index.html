@@ -38,13 +38,13 @@
   <h2>Guest Count</h2>
   <form id="guest-count-form" class="form-grid">
     <div id="current-guest-counts" class="guest-count-summary">
-  <h3>Current Guest Counts</h3>
-  <p>Aloha: <span id="current-Aloha">—</span></p>
-  <p>Ohana: <span id="current-Ohana">—</span></p>
-  <p>Gateway: <span id="current-Gateway">—</span></p>
-</div>
+      <h3>Current Guest Counts</h3>
+      <p>Aloha: <span id="current-Aloha">(current: —)</span></p>
+      <p>Ohana: <span id="current-Ohana">(current: —)</span></p>
+      <p>Gateway: <span id="current-Gateway">(current: —)</span></p>
+    </div>
 
-    <div class="form-group">
+    <div class="form-group select-with-note">
       <label for="count-Aloha">Aloha Guests</label>
       <select id="count-Aloha" class="styled-select">
         <option value="200">200</option>
@@ -52,9 +52,10 @@
         <option value="300">300</option>
         <option value="350">350</option>
       </select>
+      <span id="note-Aloha" class="current-note">(current: —)</span>
     </div>
 
-    <div class="form-group">
+    <div class="form-group select-with-note">
       <label for="count-Ohana">Ohana Guests</label>
       <select id="count-Ohana" class="styled-select">
         <option value="75">75</option>
@@ -63,9 +64,10 @@
         <option value="150">150</option>
         <option value="175">175</option>
       </select>
+      <span id="note-Ohana" class="current-note">(current: —)</span>
     </div>
 
-    <div class="form-group">
+    <div class="form-group select-with-note">
       <label for="count-Gateway">Gateway Guests</label>
       <select id="count-Gateway" class="styled-select">
         <option value="250">250</option>
@@ -85,6 +87,7 @@
         <option value="950">950</option>
         <option value="1000">1000</option>
       </select>
+      <span id="note-Gateway" class="current-note">(current: —)</span>
     </div>
 
     <button type="submit" class="save-btn">Save Guest Counts</button>
