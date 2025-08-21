@@ -2649,14 +2649,16 @@ window.sendSingleWaste = async function (button, recipeId) {
 
 
 // ✅ Waste check that works with add-ons (item/recipeNo) and starting-par (id/no/desc)
+// ✅ Availability = received starting/addon − received returns (net) − already wasted
 async function checkIfEnoughReceived(recipeId, wasteQty, venue) {
   const today = getTodayDate();
   const epsilon = 1e-6;
 
-  // --- Resolve recipeNo + description from the given recipeId (waste UI passes id) ---
-  let recipeNo = "";
-  let description = "";
+  // ---------- Resolve description/recipeNo/panWeight/uom ----------
+  let recipeNo = "", description = "", panWeight = 0, uom = "";
+  const norm = v => (v == null ? "" : String(v).trim().toLowerCase());
 
+  // Try in‑memory lists first (fast)
   const listsToCheck = [
     venue === "Aloha"   ? window.alohaWasteRecipeList   : null,
     venue === "Gateway" ? window.gatewayWasteRecipeList : null,
@@ -2671,6 +2673,8 @@ async function checkIfEnoughReceived(recipeId, wasteQty, venue) {
     if (hit) {
       recipeNo    = (hit.recipeNo || hit.recipe_no || "").toString();
       description = (hit.description || "").toString();
+      panWeight   = Number(hit.panWeight || 0);
+      uom         = (hit.uom || "").toString().toLowerCase();
       break;
     }
   }
@@ -2680,19 +2684,20 @@ async function checkIfEnoughReceived(recipeId, wasteQty, venue) {
       const d = snap.data();
       recipeNo    = (d.recipeNo || d.recipe_no || "").toString();
       description = (d.description || "").toString();
+      panWeight   = Number(d.panWeight || 0);
+      uom         = (d.uom || "").toString().toLowerCase();
     }
   }
 
-  const norm = v => (v == null ? "" : String(v).trim().toLowerCase());
   const recId   = norm(recipeId);
   const recNo   = norm(recipeNo);
   const recDesc = norm(description);
 
-  // --- Get all today's orders for this venue (we'll filter by recipe in code) ---
+  // ---------- Sum today's RECEIVED starting-par & addons for this recipe ----------
   const ordersSnap = await getDocs(query(
     collection(db, "orders"),
     where("date", "==", today),
-    where("venue", "==", venue)  // e.g., "Gateway"
+    where("venue", "==", venue)
   ));
 
   let totalReceived = 0;
@@ -2700,16 +2705,19 @@ async function checkIfEnoughReceived(recipeId, wasteQty, venue) {
 
   ordersSnap.forEach(docSnap => {
     const d = docSnap.data();
-
-    // Skip cancellations/voids
     const status = norm(d.status || "sent");
     if (status === "cancelled" || status === "void") return;
 
-    // Only count relevant types (addon & starting-par). If you want to include others, add here.
     const typ = norm(d.type || "");
-    if (typ && !(typ === "starting-par" || typ === "addon")) return;
+    if (!(typ === "starting-par" || typ === "addon")) return;
 
-    // Match by any identifier you store in orders
+    // Only count starting-par when actually RECEIVED
+    if (typ === "starting-par") {
+      const recvd = (d.received === true) || status === "received";
+      if (!recvd) return;
+    }
+
+    // Match by any identifier you store
     const dId   = norm(d.recipeId);
     const dNo   = norm(d.recipeNo);
     const dDesc = norm(d.recipeDescription || d.item || d.description);
@@ -2721,7 +2729,7 @@ async function checkIfEnoughReceived(recipeId, wasteQty, venue) {
 
     if (!isSameRecipe) return;
 
-    // Use the largest available quantity field to avoid undercounting
+    // Prefer net figures if present
     const recNet  = parseFloat(d.netWeight ?? 0);
     const recSend = parseFloat(d.sendQty   ?? 0);
     const recQty  = parseFloat(d.qty       ?? 0);
@@ -2731,19 +2739,66 @@ async function checkIfEnoughReceived(recipeId, wasteQty, venue) {
       Number.isFinite(recQty)  ? recQty  : 0
     );
 
-    console.log(`📦 Counted order: status=${status}, type=${typ || "(n/a)"} · recipeId=${d.recipeId} · recipeNo=${d.recipeNo} · item=${d.item} · netWeight=${recNet} · sendQty=${recSend} · qty=${recQty} → used=${used}`);
-
     if (used > 0) {
       totalReceived += used;
       matchedOrders++;
     }
+
+    console.log(`📦 Counted order → type=${typ} status=${status} id=${d.recipeId} no=${d.recipeNo} item=${d.item} net=${recNet} send=${recSend} qty=${recQty} → +${used}`);
   });
 
   if (matchedOrders === 0) {
-    console.warn(`[checkIfEnoughReceived] No matching orders for ${venue} ${today} recipeId=${recipeId}. Keys used → id:${recId}, no:${recNo}, desc:${recDesc}`);
+    console.warn(`[checkIfEnoughReceived] No matching orders for ${venue} ${today} recipeId=${recipeId}. Keys → id:${recId}, no:${recNo}, desc:${recDesc}`);
   }
 
-  // --- Sum today's already-wasted (waste stores .item as the description) ---
+  // ---------- Sum today's RECEIVED returns (NET), subtracting pan weight when needed ----------
+  let returnedNet = 0;
+
+  const returnsSnap = await getDocs(query(
+    collection(db, "returns"),
+    where("venue", "==", venue),
+    where("date", "==", today),
+    where("status", "==", "received")
+  ));
+
+  returnsSnap.forEach(docSnap => {
+    const r = docSnap.data();
+
+    // Match the same recipe
+    const rId   = norm(r.recipeId);
+    const rNo   = norm(r.recipeNo);
+    const rDesc = norm(r.item || r.recipeDescription || r.description);
+    const same =
+      (rId && rId === recId) ||
+      (rNo && rNo === recNo) ||
+      (rDesc && rDesc === recDesc);
+    if (!same) return;
+
+    // Try to interpret r as NET first; otherwise compute net from gross - panWeight
+    let net = 0;
+
+    // 1) If your return writer stored NET in qty (recommended)
+    const qty = Number(r.qty ?? 0);
+    const grossQty = Number(r.grossQty ?? 0);
+    const pwUsed = Number(r.panWeightUsed ?? NaN);
+
+    if (grossQty > 0 && Number.isFinite(pwUsed)) {
+      net = Math.max(0, grossQty - pwUsed);
+    } else if (qty > 0 && r.isNet === true) {
+      net = qty;
+    } else if (qty > 0 && (r.netQty != null)) {
+      net = Number(r.netQty) || 0;
+    } else if (qty > 0) {
+      // Fallback: if lbs, subtract panWeight from qty; else assume qty is net
+      net = (uom === "lb" && panWeight > 0) ? Math.max(0, qty - panWeight) : qty;
+    }
+
+    if (net > 0) returnedNet += net;
+
+    console.log(`↩️ Counted return → id=${r.recipeId} no=${r.recipeNo} item=${r.item} qty=${qty} gross=${grossQty} pwUsed=${pwUsed} uom=${uom} panWeight=${panWeight} → net=${net}`);
+  });
+
+  // ---------- Sum today's already-wasted (waste stores .item as description) ----------
   let alreadyWasted = 0;
   if (description) {
     const wasteSnap = await getDocs(query(
@@ -2758,10 +2813,12 @@ async function checkIfEnoughReceived(recipeId, wasteQty, venue) {
     });
   }
 
-  const available = totalReceived - alreadyWasted;
+  // ---------- Final availability ----------
+  const available = totalReceived - returnedNet - alreadyWasted;
 
   console.log(`[checkIfEnoughReceived] ${venue} • ${description || recipeNo || recipeId} (${recipeId})
-  totalReceived: ${totalReceived} | alreadyWasted: ${alreadyWasted} | requestedWaste: ${wasteQty} | available: ${available}`);
+  starting+addons(received): ${totalReceived.toFixed(3)} | returns(received, net): ${returnedNet.toFixed(3)} | wasted: ${alreadyWasted.toFixed(3)}
+  requested waste: ${Number(wasteQty).toFixed(3)} | available: ${available.toFixed(3)}`);
 
   return parseFloat(wasteQty) <= available + epsilon;
 }
@@ -2988,6 +3045,7 @@ window.sendAllMainWaste = async function () {
 //**Aloha Returns */
 
 // ALOHA RETURNS — with loading/empty states
+// 🔁 Aloha Returns — only items RECEIVED TODAY (HST), minus returns already sent/received today
 window.loadAlohaReturns = async function () {
   const tableBody = document.querySelector(".aloha-returns-table tbody");
   if (!tableBody) return;
@@ -3010,15 +3068,26 @@ window.loadAlohaReturns = async function () {
       return;
     }
 
-    // Totals by recipe key
-    const qtyByKey = new Map();
+    // Totals by recipe key (prefer net figures if present)
+    const qtyByKey = new Map(); // KEY = recipeNo or recipeId (upper)
+    const idFromNo = new Map(); // recipeNo -> recipeId
     ordersSnap.forEach(d => {
       const o = d.data();
       const key = String(o.recipeNo || o.recipeId || "").toUpperCase();
       if (!key) return;
-      const q = Number(o.qty ?? o.sendQty ?? 0) || 0;
-      if (!q) return;
-      qtyByKey.set(key, (qtyByKey.get(key) || 0) + q);
+
+      const recNet  = Number(o.netWeight ?? 0);
+      const recSend = Number(o.sendQty   ?? 0);
+      const recQty  = Number(o.qty       ?? 0);
+      const used = Math.max(
+        Number.isFinite(recNet)  ? recNet  : 0,
+        Number.isFinite(recSend) ? recSend : 0,
+        Number.isFinite(recQty)  ? recQty  : 0
+      );
+      if (!used) return;
+
+      qtyByKey.set(key, (qtyByKey.get(key) || 0) + used);
+      if (o.recipeNo && o.recipeId) idFromNo.set(String(o.recipeNo).toUpperCase(), String(o.recipeId));
     });
 
     if (qtyByKey.size === 0) {
@@ -3026,29 +3095,30 @@ window.loadAlohaReturns = async function () {
       return;
     }
 
-    // 2) Exclude items already returned today
+    // 2) Returns already made today (subtract; supports partial returns)
     const returnsSnap = await getDocs(query(
       collection(db, "returns"),
       where("venue", "==", "Aloha"),
-      where("status", "==", "returned"),
-      where("date", "==", todayStr)
+      where("date", "==", todayStr),
+      where("status", "in", ["sent", "received"])
     ));
-    const excluded = new Set();
+    const returnedByKey = new Map();
     returnsSnap.forEach(d => {
       const r = d.data();
       const k = String(r.recipeNo || r.recipeId || "").toUpperCase();
-      if (k) excluded.add(k);
+      if (!k) return;
+      const q = Number(r.qty ?? r.netQty ?? 0) || 0; // qty is NET in our writer
+      returnedByKey.set(k, (returnedByKey.get(k) || 0) + q);
     });
 
     // 3) Resolve recipe metadata (batched by recipeNo, then fall back to id)
     const keys = Array.from(qtyByKey.keys());
-    const byNo = [];
-    const byId = [];
+    const byNo = [], byId = [];
     keys.forEach(k => (/^[A-Za-z0-9\-_.]+$/.test(k) ? byNo : byId).push(k));
 
     const metaByKey = new Map();
-    const idFromNo = new Map();
 
+    // Lookup by recipeNo (in chunks of 10)
     for (let i = 0; i < byNo.length; i += 10) {
       const batch = byNo.slice(i, i + 10);
       const snap = await getDocs(query(
@@ -3059,28 +3129,32 @@ window.loadAlohaReturns = async function () {
         const data = docSnap.data();
         const key = String(data.recipeNo || "").toUpperCase();
         if (!key) return;
-        idFromNo.set(key, docSnap.id);
         metaByKey.set(key, {
           id: docSnap.id,
+          recipeNo: data.recipeNo || "",
           description: data.description || key,
-          uom: data.uom || "ea",
+          uom: (data.uom || "ea").toLowerCase(),
+          panWeight: Number(data.panWeight || 0),
           returnable: String(data.returns || "").toLowerCase() === "yes"
         });
       });
     }
 
-    const missing = new Set(keys.filter(k => !metaByKey.has(k)));
-    for (const k of missing) {
+    // Lookup by recipeId (direct)
+    for (const k of byId) {
       const ds = await getDoc(doc(db, "recipes", k));
       if (ds.exists()) {
         const data = ds.data();
         metaByKey.set(k, {
           id: ds.id,
+          recipeNo: data.recipeNo || "",
           description: data.description || k,
-          uom: data.uom || "ea",
+          uom: (data.uom || "ea").toLowerCase(),
+          panWeight: Number(data.panWeight || 0),
           returnable: String(data.returns || "").toLowerCase() === "yes"
         });
       } else {
+        // Try via idFromNo mapping (if any)
         const via = idFromNo.get(k);
         if (via) {
           const ds2 = await getDoc(doc(db, "recipes", via));
@@ -3088,8 +3162,10 @@ window.loadAlohaReturns = async function () {
             const data = ds2.data();
             metaByKey.set(k, {
               id: ds2.id,
+              recipeNo: data.recipeNo || "",
               description: data.description || k,
-              uom: data.uom || "ea",
+              uom: (data.uom || "ea").toLowerCase(),
+              panWeight: Number(data.panWeight || 0),
               returnable: String(data.returns || "").toLowerCase() === "yes"
             });
           }
@@ -3097,12 +3173,24 @@ window.loadAlohaReturns = async function () {
       }
     }
 
-    // 4) Render rows
+    // 4) Build rows: remaining = received - returnedToday
     const rows = [];
-    qtyByKey.forEach((qty, key) => {
+    qtyByKey.forEach((receivedQty, key) => {
       const m = metaByKey.get(key);
-      if (!m || !m.returnable || excluded.has(key)) return;
-      rows.push({ id: m.id, name: m.description, uom: m.uom, qty });
+      if (!m || !m.returnable) return;
+
+      const already = returnedByKey.get(key) || 0;
+      const remaining = Math.max(0, receivedQty - already);
+      if (remaining <= 0) return;
+
+      rows.push({
+        id: m.id,
+        recipeNo: m.recipeNo,
+        name: m.description,
+        uom: m.uom,
+        panWeight: m.panWeight,
+        qty: remaining
+      });
     });
 
     if (rows.length === 0) {
@@ -3110,16 +3198,26 @@ window.loadAlohaReturns = async function () {
       return;
     }
 
+    // 5) Render table
     tableBody.innerHTML = "";
     for (const r of rows) {
       const tr = document.createElement("tr");
-      tr.dataset.recipeId = r.id;
-      tr.innerHTML = `
-        <td>${r.name}</td>
-        <td>${r.qty} ${r.uom}</td>
-        <td><input class="return-input" type="number" min="0" value="0" style="width:60px;" /></td>
-        <td><button onclick="sendSingleReturn(this, '${r.id}')">Return</button></td>
-      `;
+      tr.dataset.recipeId   = r.id;
+      tr.dataset.uom        = r.uom;
+      tr.dataset.panWeight  = String(r.panWeight || 0);
+     tr.innerHTML = `
+  <td>${r.name}</td>
+  <td>${r.qty} ${r.uom}</td>
+  <td>
+    <input class="return-input" type="number" min="0" step="0.01" 
+           placeholder="0" value="" style="width:80px;" />
+    ${r.uom === "lb" && r.panWeight > 0 
+      ? `<div style="font-size:11px;color:#777;">Pan wt: ${r.panWeight}</div>` 
+      : ""}
+  </td>
+  <td><button onclick="sendSingleAlohaReturn(this, '${r.id}')">Return</button></td>
+`;
+
       tableBody.appendChild(tr);
     }
   } catch (err) {
@@ -3129,41 +3227,72 @@ window.loadAlohaReturns = async function () {
 };
 
 
-
-window.sendSingleReturn = async function (btn, recipeId) {
+// ➤ Submit a single ALOHA return (stores NET qty; keeps gross & panWeightUsed for audit)
+window.sendSingleAlohaReturn = async function (btn, recipeId) {
   const row = btn.closest("tr");
   const qtyInput = row.querySelector(".return-input");
-  const qty = Number(qtyInput.value);
+  const raw = qtyInput?.value ?? "0";
 
-  if (isNaN(qty) || qty <= 0) {
+  // Support math inputs if normalizeQtyInputValue exists
+  let gross = 0;
+  try {
+    gross = typeof normalizeQtyInputValue === "function"
+      ? Number(normalizeQtyInputValue(qtyInput))
+      : Number(raw);
+  } catch {
+    gross = Number(raw);
+  }
+
+  if (!Number.isFinite(gross) || gross <= 0) {
     alert("Please enter a valid quantity to return.");
     return;
   }
 
+  const uom = (row.dataset.uom || "ea").toLowerCase();
+  const panWeight = Number(row.dataset.panWeight || 0);
+  const net = (uom === "lb" && panWeight > 0) ? Math.max(0, gross - panWeight) : gross;
+
+  if (net <= 0) {
+    alert(`Net return is 0 after subtracting pan weight (${panWeight}).`);
+    return;
+  }
+
   try {
-    await addDoc(collection(db, "returns"), {
-      recipeId: recipeId,
-      qty: qty,
-      venue: "Aloha",
-      status: "returned",
-      returnedAt: serverTimestamp()
-    });
+    // Pull a little metadata for nicer records
+    const recipeSnap = await getDoc(doc(db, "recipes", recipeId));
+    const rd = recipeSnap.exists() ? recipeSnap.data() : {};
+    const recipeNo = rd.recipeNo || "";
+    const description = rd.description || row.cells?.[0]?.textContent || recipeNo || recipeId;
 
-    // ✅ Show confirmation
-    const cell = btn.parentElement;
-    cell.innerHTML = `<span style="color: green;">Returned</span>`;
+// inside sendSingleAlohaReturn addDoc(...)
+await addDoc(collection(db, "returns"), {
+  item: description,
+  recipeId,
+  recipeNo,
+  venue: "Aloha",
+  date: getTodayDate(),
+  uom,
+  qty: net,
+  grossQty: gross,
+  panWeightUsed: (uom === "lb" ? panWeight : 0),
+  isNet: true,
+  status: "returned",            // 👈 was "sent" — change to "returned"
+  timestamp: serverTimestamp(),
+  returnedAt: serverTimestamp()
+});
 
-    // 🧼 Optional: hide the row after short delay
-    setTimeout(() => {
-      row.remove();
-    }, 800); // give users a moment to see the confirmation
 
-    console.log(`🔁 Returned ${qty} of recipe ${recipeId}`);
+    // UI confirmation
+    btn.parentElement.innerHTML = `<span style="color: green;">Returned</span>`;
+    setTimeout(() => row.remove(), 800);
+
+    console.log(`↩️ Aloha return: gross=${gross}, net=${net} for ${description} (${recipeId})`);
   } catch (error) {
     console.error("Error returning item:", error);
     alert("Error submitting return. Please try again.");
   }
 };
+
 
 //** main kitchen return */
 // 🔁 Main Kitchen Returns — only today's (HST) without composite index
@@ -3233,100 +3362,114 @@ window.loadMainKitchenReturns = async function () {
 };
 
 
+// ================== Main Kitchen Returns ==================
 
-// ✅ Receive one
+// In-flight guard to prevent double clicks
+window.__receivingReturns = window.__receivingReturns || new Set();
+
+/**
+ * Receive a single return row:
+ * 1) Flip return -> status: "received", receivedAt
+ * 2) Apply allocation across today's orders (FIFO)
+ * 3) Update UI
+ */
 window.receiveMainReturn = async function (returnId, button) {
   const row = button.closest("tr");
+  const tableBody = document.querySelector(".main-returns-table tbody");
+  if (!returnId || !row) return;
+
+  if (window.__receivingReturns.has(returnId)) return;
+  window.__receivingReturns.add(returnId);
+  button.disabled = true;
+
   try {
     const returnRef = doc(db, "returns", returnId);
+
+    // 1) Flip to received
     await updateDoc(returnRef, {
       status: "received",
       receivedAt: serverTimestamp()
     });
+
+    // 2) Fetch the fresh doc and apply its effect to orders
+    const freshSnap = await getDoc(returnRef);
+    if (freshSnap.exists() && typeof applyReceivedReturnToOrders === "function") {
+      await applyReceivedReturnToOrders(freshSnap);
+    } else {
+      console.warn("applyReceivedReturnToOrders helper missing or return not found.");
+    }
+
+    // 3) UI feedback
     button.parentElement.innerHTML = `<span style="color: green;">Received</span>`;
     setTimeout(() => row.remove(), 800);
-    console.log(`📦 Marked main kitchen return ${returnId} as received.`);
-    // toggle Receive All if table empties
+
+    // Disable "Receive All" if table is empty
     const btnAll = document.getElementById("receiveAllMainReturns");
-    if (btnAll) btnAll.disabled = document.querySelectorAll(".main-returns-table tbody tr").length === 0;
+    if (btnAll && tableBody) {
+      // slight delay so row removal has occurred
+      setTimeout(() => {
+        btnAll.disabled = tableBody.querySelectorAll("tr").length === 0;
+      }, 300);
+    }
+
+    console.log(`✅ Received return ${returnId} and applied to orders.`);
   } catch (error) {
     console.error("❌ Error receiving return:", error);
     alert("Failed to receive item. Try again.");
+    button.disabled = false;
+  } finally {
+    window.__receivingReturns.delete(returnId);
   }
 };
 
-// ✅ Receive all visible (today's) rows
+
+/**
+ * Receive all visible rows:
+ * - Iterates rows and calls the same logic as single receive
+ * - Processes sequentially to keep logs tidy and avoid quota spikes
+ */
 window.receiveAllMainReturns = async function () {
-  const rows = Array.from(document.querySelectorAll(".main-returns-table tbody tr"));
-  if (rows.length === 0) return;
+  const tableBody = document.querySelector(".main-returns-table tbody");
+  const rows = Array.from(tableBody?.querySelectorAll("tr") || []);
+  if (!rows.length) return;
 
-  try {
-    // Update all in parallel (safe enough here)
-    await Promise.all(rows.map(async (row) => {
-      const id = row.getAttribute("data-return-id");
-      const ref = doc(db, "returns", id);
-      await updateDoc(ref, { status: "received", receivedAt: serverTimestamp() });
-    }));
+  const btnAll = document.getElementById("receiveAllMainReturns");
+  if (btnAll) btnAll.disabled = true;
 
-    // Quick UI sweep
-    rows.forEach(row => row.remove());
-    const btnAll = document.getElementById("receiveAllMainReturns");
-    if (btnAll) btnAll.disabled = true;
+  let okCount = 0, errCount = 0;
 
-    console.log(`📦 Received all (${rows.length}) returns for today.`);
-  } catch (err) {
-    console.error("❌ Error receiving all returns:", err);
-    alert("Failed to receive all. Some items may still be pending.");
+  for (const row of rows) {
+    const id = row.getAttribute("data-return-id");
+    const btn = row.querySelector("button, .receive-btn");
+    try {
+      await window.receiveMainReturn(id, btn || { closest: () => row, parentElement: { innerHTML: "" }, disabled: false });
+      okCount++;
+      // small delay to allow UI to breathe
+      await new Promise(r => setTimeout(r, 50));
+    } catch (e) {
+      console.error("❌ Error receiving one of the returns:", e);
+      errCount++;
+    }
   }
+
+  // Final UI state
+  if (tableBody) {
+    const left = tableBody.querySelectorAll("tr").length;
+    if (btnAll) btnAll.disabled = left === 0;
+  }
+
+  console.log(`📦 Receive All complete. Success: ${okCount}, Failed: ${errCount}`);
 };
 
 
+/**
+ * (Optional) Legacy alias if other code calls `receiveReturn(btn, returnId)`
+ * Keeps compatibility and routes to the main handler.
+ */
 window.receiveReturn = async function (btn, returnId) {
-  const row = btn.closest("tr");
-
-  try {
-    const returnRef = doc(db, "returns", returnId);
-    await updateDoc(returnRef, {
-      status: "received",
-      receivedAt: serverTimestamp()
-    });
-
-    // Replace button with confirmation
-    btn.parentElement.innerHTML = `<span style="color: green;">Received</span>`;
-    setTimeout(() => {
-      row.remove();
-    }, 800);
-
-    console.log(`📦 Marked return ${returnId} as received.`);
-  } catch (error) {
-    console.error("❌ Error receiving return:", error);
-    alert("Failed to receive item. Try again.");
-  }
+  return window.receiveMainReturn(returnId, btn);
 };
-window.receiveMainReturn = async function (returnId, button) {
-  const row = button.closest("tr");
 
-  try {
-    const returnRef = doc(db, "returns", returnId);
-    await updateDoc(returnRef, {
-      status: "received",
-      receivedAt: serverTimestamp()
-    });
-
-    // Replace button with confirmation
-    button.parentElement.innerHTML = `<span style="color: green;">Received</span>`;
-
-    // Remove row after short delay
-    setTimeout(() => {
-      row.remove();
-    }, 800);
-
-    console.log(`📦 Marked main kitchen return ${returnId} as received.`);
-  } catch (error) {
-    console.error("❌ Error receiving return:", error);
-    alert("Failed to receive item. Try again.");
-  }
-};
 window.filterMainKitchenReturns = function () {
   const selectedVenue = document.getElementById("mainReturnsVenueFilter").value;
   const rows = document.querySelectorAll(".main-returns-table tbody tr");
@@ -4034,6 +4177,7 @@ window.sendAllGatewayWaste = async function () {
 
 //GATEWAY RETURNS
 // GATEWAY RETURNS — fast + with loading animation
+// 🔁 Gateway Returns — only items RECEIVED TODAY (HST), minus returns already sent/received today
 window.loadGatewayReturns = async function () {
   const tableBody = document.querySelector(".gateway-returns-table tbody");
   if (!tableBody) return;
@@ -4042,7 +4186,7 @@ window.loadGatewayReturns = async function () {
   try {
     const todayStr = getTodayDate(); // "YYYY-MM-DD" in HST
 
-    // 1) Get today's received Gateway orders
+    // 1) Get today's RECEIVED Gateway orders
     const ordersSnap = await getDocs(query(
       collection(db, "orders"),
       where("venue", "==", "Gateway"),
@@ -4055,15 +4199,28 @@ window.loadGatewayReturns = async function () {
       return;
     }
 
-    // Build qty totals by recipe key (recipeNo or recipeId)
+    // Build qty totals by recipe key (prefer net figures if present)
     const recipeQtyMap = new Map(); // KEY -> total qty
+    const idFromNo     = new Map(); // recipeNo -> doc.id
     ordersSnap.forEach(d => {
       const o = d.data();
       const key = String(o.recipeNo || o.recipeId || "").toUpperCase();
       if (!key) return;
-      const qty = Number(o.qty ?? o.sendQty ?? 0) || 0;
-      if (!qty) return;
-      recipeQtyMap.set(key, (recipeQtyMap.get(key) || 0) + qty);
+
+      const recNet  = Number(o.netWeight ?? 0);
+      const recSend = Number(o.sendQty   ?? 0);
+      const recQty  = Number(o.qty       ?? 0);
+      const used = Math.max(
+        Number.isFinite(recNet)  ? recNet  : 0,
+        Number.isFinite(recSend) ? recSend : 0,
+        Number.isFinite(recQty)  ? recQty  : 0
+      );
+      if (!used) return;
+
+      recipeQtyMap.set(key, (recipeQtyMap.get(key) || 0) + used);
+      if (o.recipeNo && o.recipeId) {
+        idFromNo.set(String(o.recipeNo).toUpperCase(), String(o.recipeId));
+      }
     });
 
     if (recipeQtyMap.size === 0) {
@@ -4071,31 +4228,31 @@ window.loadGatewayReturns = async function () {
       return;
     }
 
-    // 2) Exclude items already returned today (status=returned, date=today)
+    // 2) Returns already made today (subtract; supports partial returns)
     const returnsSnap = await getDocs(query(
       collection(db, "returns"),
       where("venue", "==", "Gateway"),
-      where("status", "==", "returned"),
-      where("date", "==", todayStr)
+      where("date", "==", todayStr),
+      where("status", "in", ["sent", "returned", "received"])
     ));
-    const excluded = new Set();
+    const returnedByKey = new Map();
     returnsSnap.forEach(d => {
       const r = d.data();
       const k = String(r.recipeNo || r.recipeId || "").toUpperCase();
-      if (k) excluded.add(k);
+      if (!k) return;
+      const q = Number(r.qty ?? r.netQty ?? 0) || 0; // qty is NET in our writer
+      returnedByKey.set(k, (returnedByKey.get(k) || 0) + q);
     });
 
-    // 3) Batch-fetch recipe docs by recipeNo (in chunks of 10), fall back to by-ID when needed
-    const allKeys = Array.from(recipeQtyMap.keys());
-    const byNoKeys = [];
-    const fallbackIds = [];
-    // Heuristic: assume alphanumeric codes are recipeNo; still fall back if not found.
-    allKeys.forEach(k => /^[A-Za-z0-9\-_.]+$/.test(k) ? byNoKeys.push(k) : fallbackIds.push(k));
+    // 3) Batch-fetch recipe docs by recipeNo (in chunks of 10), fall back to by-ID
+    const allKeys   = Array.from(recipeQtyMap.keys());
+    const byNoKeys  = [];
+    const byIdKeys  = [];
+    allKeys.forEach(k => (/^[A-Za-z0-9\-_.]+$/.test(k) ? byNoKeys : byIdKeys).push(k));
 
-    const recipeDesc = new Map();   // KEY -> {id, description, uom, returnsFlag}
-    const idFromNo   = new Map();   // RECIPE NO -> doc.id
+    const recipeMeta = new Map(); // KEY -> {id, recipeNo, description, uom, panWeight, returnable}
 
-    // batch by recipeNo via "in" (≤10 per query)
+    // by recipeNo
     for (let i = 0; i < byNoKeys.length; i += 10) {
       const batch = byNoKeys.slice(i, i + 10);
       const snap = await getDocs(query(
@@ -4106,59 +4263,67 @@ window.loadGatewayReturns = async function () {
         const data = docSnap.data();
         const key = String(data.recipeNo || "").toUpperCase();
         if (!key) return;
-        idFromNo.set(key, docSnap.id);
-        recipeDesc.set(key, {
+        recipeMeta.set(key, {
           id: docSnap.id,
+          recipeNo: data.recipeNo || "",
           description: data.description || key,
-          uom: data.uom || "ea",
-          returnsFlag: String(data.returns || "").toLowerCase() === "yes"
+          uom: (data.uom || "ea").toLowerCase(),
+          panWeight: Number(data.panWeight || 0),
+          returnable: String(data.returns || "").toLowerCase() === "yes"
         });
       });
     }
 
-    // Try fallbacks (direct doc by id) and any recipeNos not found above
-    const stillMissing = new Set(allKeys.filter(k => !recipeDesc.has(k)));
-    for (const key of stillMissing) {
-      // try doc(id==key)
-      const docSnap = await getDoc(doc(db, "recipes", key));
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        recipeDesc.set(key, {
-          id: docSnap.id,
-          description: data.description || key,
-          uom: data.uom || "ea",
-          returnsFlag: String(data.returns || "").toLowerCase() === "yes"
+    // by recipeId (direct)
+    for (const k of byIdKeys) {
+      const ds = await getDoc(doc(db, "recipes", k));
+      if (ds.exists()) {
+        const data = ds.data();
+        recipeMeta.set(k, {
+          id: ds.id,
+          recipeNo: data.recipeNo || "",
+          description: data.description || k,
+          uom: (data.uom || "ea").toLowerCase(),
+          panWeight: Number(data.panWeight || 0),
+          returnable: String(data.returns || "").toLowerCase() === "yes"
         });
-        continue;
-      }
-      // try mapping from a found id via recipeNo record (when we have idFromNo)
-      const idViaNo = idFromNo.get(key);
-      if (idViaNo) {
-        const ds = await getDoc(doc(db, "recipes", idViaNo));
-        if (ds.exists()) {
-          const data = ds.data();
-          recipeDesc.set(key, {
-            id: ds.id,
-            description: data.description || key,
-            uom: data.uom || "ea",
-            returnsFlag: String(data.returns || "").toLowerCase() === "yes"
-          });
+      } else {
+        // try idFromNo mapping
+        const via = idFromNo.get(k);
+        if (via) {
+          const ds2 = await getDoc(doc(db, "recipes", via));
+          if (ds2.exists()) {
+            const data = ds2.data();
+            recipeMeta.set(k, {
+              id: ds2.id,
+              recipeNo: data.recipeNo || "",
+              description: data.description || k,
+              uom: (data.uom || "ea").toLowerCase(),
+              panWeight: Number(data.panWeight || 0),
+              returnable: String(data.returns || "").toLowerCase() === "yes"
+            });
+          }
         }
       }
     }
 
-    // 4) Build final list
+    // 4) Build final list: remaining = received - returnedToday
     const rows = [];
     recipeQtyMap.forEach((qty, key) => {
-      if (excluded.has(key)) return; // already returned today
-      const meta = recipeDesc.get(key);
-      if (!meta) return;             // no recipe info
-      if (!meta.returnsFlag) return; // not returnable
+      const meta = recipeMeta.get(key);
+      if (!meta || !meta.returnable) return;
+
+      const already = returnedByKey.get(key) || 0;
+      const remaining = Math.max(0, qty - already);
+      if (remaining <= 0) return;
+
       rows.push({
         id: meta.id,
+        recipeNo: meta.recipeNo,
         name: meta.description,
         uom: meta.uom,
-        qty
+        panWeight: meta.panWeight,
+        qty: remaining
       });
     });
 
@@ -4171,17 +4336,27 @@ window.loadGatewayReturns = async function () {
     tableBody.innerHTML = "";
     for (const r of rows) {
       const tr = document.createElement("tr");
-      tr.dataset.recipeId = r.id;
-      tr.innerHTML = `
-        <td>${r.name}</td>
-        <td>${r.qty} ${r.uom}</td>
-        <td><input class="return-input" type="number" min="0" value="0" style="width: 60px;" /></td>
-        <td><button onclick="sendSingleGatewayReturn(this, '${r.id}')">Return</button></td>
-      `;
+      tr.dataset.recipeId  = r.id;
+      tr.dataset.uom       = r.uom;
+      tr.dataset.panWeight = String(r.panWeight || 0);
+      // Example for Gateway row render
+tr.innerHTML = `
+  <td>${r.name}</td>
+  <td>${r.qty} ${r.uom}</td>
+  <td>
+    <input class="return-input" type="number" min="0" step="0.01"
+           placeholder="0" value="" style="width:80px;" />
+    ${r.uom === "lb" && r.panWeight > 0
+      ? `<div style="font-size:11px;color:#777;">Pan wt: ${r.panWeight}</div>` 
+      : ""}
+  </td>
+  <td><button onclick="sendSingleGatewayReturn(this, '${r.id}')">Return</button></td>
+`;
+
       tableBody.appendChild(tr);
     }
 
-    console.log(`✅ Loaded ${rows.length} returnable recipes`);
+    console.log(`✅ Loaded ${rows.length} Gateway returnable recipes`);
   } catch (err) {
     console.error("❌ Failed to load Gateway returns:", err);
     showTableEmpty(tableBody, "Failed to load. Please retry.");
@@ -4189,33 +4364,64 @@ window.loadGatewayReturns = async function () {
 };
 
 
+// ➤ Submit a single GATEWAY return (stores NET qty; keeps gross & panWeightUsed for audit)
 window.sendSingleGatewayReturn = async function (btn, recipeId) {
   const row = btn.closest("tr");
   const qtyInput = row.querySelector(".return-input");
-  const qty = Number(qtyInput.value);
+  const raw = qtyInput?.value ?? "0";
 
-  if (isNaN(qty) || qty <= 0) {
+  // Support mini math inputs if you use normalizeQtyInputValue
+  let gross = 0;
+  try {
+    gross = typeof normalizeQtyInputValue === "function"
+      ? Number(normalizeQtyInputValue(qtyInput))
+      : Number(raw);
+  } catch {
+    gross = Number(raw);
+  }
+
+  if (!Number.isFinite(gross) || gross <= 0) {
     alert("Please enter a valid quantity to return.");
     return;
   }
 
+  const uom = (row.dataset.uom || "ea").toLowerCase();
+  const panWeight = Number(row.dataset.panWeight || 0);
+  const net = (uom === "lb" && panWeight > 0) ? Math.max(0, gross - panWeight) : gross;
+
+  if (net <= 0) {
+    alert(`Net return is 0 after subtracting pan weight (${panWeight}).`);
+    return;
+  }
+
   try {
+    // Grab a bit of metadata for a nicer record
+    const recipeSnap = await getDoc(doc(db, "recipes", recipeId));
+    const rd = recipeSnap.exists() ? recipeSnap.data() : {};
+    const recipeNo = rd.recipeNo || "";
+    const description = rd.description || row.cells?.[0]?.textContent || recipeNo || recipeId;
+
     await addDoc(collection(db, "returns"), {
-      recipeId: recipeId,
-      qty: qty,
+      item: description,
+      recipeId,
+      recipeNo,
       venue: "Gateway",
-      status: "returned",
+      date: getTodayDate(),
+      uom,
+      qty: net,                        // ✅ NET
+      grossQty: gross,                 // audit
+      panWeightUsed: (uom === "lb" ? panWeight : 0),
+      isNet: true,
+      status: "returned",              // 👈 Main Kitchen sees it immediately
+      timestamp: serverTimestamp(),
       returnedAt: serverTimestamp()
     });
 
     const cell = btn.parentElement;
     cell.innerHTML = `<span style="color: green;">Returned</span>`;
+    setTimeout(() => { row.remove(); }, 800);
 
-    setTimeout(() => {
-      row.remove();
-    }, 800);
-
-    console.log(`🔁 Returned ${qty} of recipe ${recipeId}`);
+    console.log(`↩️ Gateway return: gross=${gross}, net=${net} for ${description} (${recipeId})`);
   } catch (error) {
     console.error("Error returning item:", error);
     alert("Error submitting return. Please try again.");
@@ -5112,11 +5318,231 @@ window.sendAllOhanaWaste = async function () {
   }
 };
 
+// 🔎 Robust recipe resolver with memoization & multi-key lookup
+// Accepts either a Firestore doc id (e.g., "r0180") or a recipeNo (e.g., "R0180")
+window.__recipeCoreCache = window.__recipeCoreCache || new Map();
+
+async function _getRecipeCore(recipeKey) {
+  try {
+    const keyStr = String(recipeKey || "").trim();
+    if (!keyStr) return _mkFallback("", "empty-key");
+
+    // ---- Memoized? ----
+    if (window.__recipeCoreCache.has(keyStr)) return window.__recipeCoreCache.get(keyStr);
+
+    const normId = keyStr.toLowerCase();
+    const normNo = keyStr.toUpperCase();
+
+    // Heuristic: looks like a recipeNo if it starts with a letter and digits (e.g., R0331)
+    const looksLikeRecipeNo = /^[A-Za-z]\d{3,5}$/.test(normNo);
+
+    // ---- 1) In-memory lists (fast path) by id or recipeNo ----
+    const lists = [
+      window.alohaWasteRecipeList,
+      window.gatewayWasteRecipeList,
+      window.ohanaWasteRecipeList,
+      window.cachedAlohaWasteRecipes,
+      window.cachedGatewayWasteRecipes,
+      window.cachedOhanaWasteRecipes
+    ].filter(Boolean);
+
+    for (const list of lists) {
+      const hit = list.find(r => {
+        const rid = String(r.id || "").toLowerCase();
+        const rno = String(r.recipeNo || r.recipe_no || "").toUpperCase();
+        return rid === normId || (looksLikeRecipeNo && rno === normNo);
+      });
+      if (hit) {
+        const out = _mkFromData(hit, hit.id || normId, "cache");
+        window.__recipeCoreCache.set(keyStr, out);
+        return out;
+      }
+    }
+
+    // ---- 2) Firestore by doc id ----
+    if (typeof getDoc === "function" && typeof doc === "function") {
+      const byIdSnap = await getDoc(doc(db, "recipes", normId));
+      if (byIdSnap.exists()) {
+        const out = _mkFromData(byIdSnap.data(), byIdSnap.id, "docId");
+        window.__recipeCoreCache.set(keyStr, out);
+        return out;
+      }
+    }
+
+    // ---- 3) Firestore by recipeNo (and legacy recipe_no) ----
+    if (looksLikeRecipeNo && typeof getDocs === "function" && typeof query === "function" && typeof where === "function" && typeof collection === "function") {
+      // Try recipeNo == normNo
+      let got = null;
+
+      // Primary field
+      const q1 = query(collection(db, "recipes"), where("recipeNo", "==", normNo));
+      const s1 = await getDocs(q1);
+      if (!s1.empty) {
+        const d = s1.docs[0];
+        got = _mkFromData(d.data(), d.id, "recipeNo");
+      } else {
+        // Legacy field name
+        const q2 = query(collection(db, "recipes"), where("recipe_no", "==", normNo));
+        const s2 = await getDocs(q2);
+        if (!s2.empty) {
+          const d = s2.docs[0];
+          got = _mkFromData(d.data(), d.id, "recipe_no");
+        }
+      }
+
+      if (got) {
+        window.__recipeCoreCache.set(keyStr, got);
+        return got;
+      }
+    }
+
+    // ---- Fallback ----
+    const fb = _mkFallback(normId, "not-found");
+    window.__recipeCoreCache.set(keyStr, fb);
+    return fb;
+  } catch (err) {
+    console.warn("_getRecipeCore error:", err);
+    return _mkFallback(String(recipeKey || ""), "error");
+  }
+
+  // ------- helpers -------
+  function _mkFromData(d, docId, source) {
+    // normalize fields
+    const recipeNo = String(d?.recipeNo || d?.recipe_no || "").toUpperCase();
+    const description = String(d?.description || d?.item || recipeNo || docId || "");
+    const panWeight = Number(d?.panWeight || 0);
+    const uom = String(d?.uom || "ea").toLowerCase();
+    const cost = Number(d?.cost || 0);
+    const returns = String(d?.returns || "").toLowerCase() === "yes";
+    const station = String(d?.station || "");
+    const category = String(d?.category || "");
+    const venueCodes = Array.isArray(d?.venueCodes) ? d.venueCodes.slice() : [];
+
+    return {
+      id: docId,            // Firestore doc id
+      recipeId: docId,      // alias (handy in some callers)
+      recipeNo,             // e.g., "R0331"
+      description,          // human name
+      panWeight,            // lbs to subtract if uom === "lb"
+      uom,                  // "lb", "ea", etc.
+      cost,                 // unit cost if present
+      returns,              // true if "Yes"
+      station,
+      category,
+      venueCodes,           // e.g., ["b001", "b002"]
+      source                // "cache" | "docId" | "recipeNo" | "recipe_no" | "not-found" | "error"
+    };
+  }
+
+  function _mkFallback(docId, source) {
+    return {
+      id: docId,
+      recipeId: docId,
+      recipeNo: "",
+      description: "",
+      panWeight: 0,
+      uom: "",
+      cost: 0,
+      returns: false,
+      station: "",
+      category: "",
+      venueCodes: [],
+      source
+    };
+  }
+}
+
+
+// ---- Config: set to true if you want to overwrite orders.qty (and totalCost) on return
+const OVERWRITE_QTY_ON_RETURN = true;
+
+// Apply a RECEIVED return to today's matching orders (FIFO by sentAt)
+// - Increments per-order returnedNet
+// - Always writes qtyNet = originalQty - returnedNet
+// - If OVERWRITE_QTY_ON_RETURN === true, also overwrites qty (and totalCost if cost present)
+async function applyReceivedReturnToOrders(returnDoc) {
+  const r = returnDoc.data();
+  const todayStr = r.date;
+  const venue    = r.venue;
+  const recipeId = r.recipeId;
+  let remaining  = Number(r.qty || 0);
+
+  if (!todayStr || !venue || !recipeId || !(remaining > 0)) {
+    console.warn("applyReceivedReturnToOrders: missing fields or zero qty", r);
+    return;
+  }
+
+  // Pull today's RECEIVED orders for this recipe/venue
+  const qSnap = await getDocs(query(
+    collection(db, "orders"),
+    where("date", "==", todayStr),
+    where("venue", "==", venue),
+    where("recipeId", "==", recipeId),
+    where("status", "==", "received")
+  ));
+  if (qSnap.empty) {
+    console.warn("applyReceivedReturnToOrders: no matching received orders found", r);
+    return;
+  }
+
+  // FIFO by sentAt (fallback to timestamp)
+  const orders = qSnap.docs
+    .map(d => ({ ref: d.ref, data: d.data() }))
+    .sort((a, b) => {
+      const ta = (a.data.sentAt?.toMillis?.() || a.data.timestamp?.toMillis?.() || 0);
+      const tb = (b.data.sentAt?.toMillis?.() || b.data.timestamp?.toMillis?.() || 0);
+      return ta - tb;
+    });
+
+  for (const { ref, data: o } of orders) {
+    if (remaining <= 0) break;
+
+    // pick the original "sent qty" baseline once; prefer your existing fields
+    const originalQty = Number(
+      Number.isFinite(o.qtyNet) && o._baselineLocked   // if you've locked a baseline before
+        ? o._originalQty
+        : (o.qty ?? o.netWeight ?? o.sendQty ?? 0)
+    ) || 0;
+
+    const alreadyReturned = Number(o.returnedNet || 0);
+    const available = Math.max(0, originalQty - alreadyReturned);
+    if (available <= 0) continue;
+
+    const take = Math.min(available, remaining);
+    const newReturned = alreadyReturned + take;
+    const qtyNet = Math.max(0, originalQty - newReturned);
+
+    const unitCost = Number(o.cost || 0);
+    const updates = {
+      // track cumulative return and a stable “net” field
+      returnedNet: newReturned,
+      qtyNet: qtyNet,
+      // remember the original baseline so we don't double-shrink on subsequent passes
+      _originalQty: originalQty,
+      _baselineLocked: true
+    };
+
+    if (OVERWRITE_QTY_ON_RETURN) {
+      updates.qty = qtyNet; // ✅ overwrite the visible qty
+      if (unitCost > 0) updates.totalCost = +(qtyNet * unitCost).toFixed(2);
+    } else {
+      if (unitCost > 0) updates.totalCostNet = +(qtyNet * unitCost).toFixed(2);
+    }
+
+    await updateDoc(ref, updates);
+    remaining -= take;
+  }
+
+  if (remaining > 1e-6) {
+    console.warn(`applyReceivedReturnToOrders: ${remaining} unallocated (all orders consumed).`);
+  }
+}
+
 
 
 //OHANA RETURNS
-// 🔁 Ohana Returns — only items RECEIVED TODAY (HST)
-// OHANA RETURNS — with loading/empty states
+// 🔁 Ohana Returns — only items RECEIVED TODAY (HST), minus returns already sent/received today
+// Keeps your loading/empty states helpers.
 window.loadOhanaReturns = async function () {
   const tableBody = document.querySelector(".ohana-returns-table tbody");
   if (!tableBody) return;
@@ -5139,14 +5565,24 @@ window.loadOhanaReturns = async function () {
       return;
     }
 
-    const qtyByKey = new Map();
+    // Sum qty by recipe key (prefer netWeight/qty/sendQty)
+    const qtyByKey = new Map(); // KEY = recipeNo or recipeId (upper)
+    const idFromNo = new Map(); // recipeNo -> recipeId
     ordersSnap.forEach(d => {
       const o = d.data();
       const key = String(o.recipeNo || o.recipeId || "").toUpperCase();
       if (!key) return;
-      const q = Number(o.qty ?? o.sendQty ?? 0) || 0;
-      if (!q) return;
-      qtyByKey.set(key, (qtyByKey.get(key) || 0) + q);
+      const recNet  = Number(o.netWeight ?? 0);
+      const recSend = Number(o.sendQty   ?? 0);
+      const recQty  = Number(o.qty       ?? 0);
+      const used = Math.max(
+        Number.isFinite(recNet)  ? recNet  : 0,
+        Number.isFinite(recSend) ? recSend : 0,
+        Number.isFinite(recQty)  ? recQty  : 0
+      );
+      if (!used) return;
+      qtyByKey.set(key, (qtyByKey.get(key) || 0) + used);
+      if (o.recipeNo && o.recipeId) idFromNo.set(String(o.recipeNo).toUpperCase(), String(o.recipeId));
     });
 
     if (qtyByKey.size === 0) {
@@ -5154,29 +5590,31 @@ window.loadOhanaReturns = async function () {
       return;
     }
 
-    // 2) Exclude items already returned today
+    // 2) Returns already made today (exclude or subtract)
+    // We subtract qty so multiple partial returns are supported.
     const returnsSnap = await getDocs(query(
       collection(db, "returns"),
       where("venue", "==", "Ohana"),
-      where("status", "==", "returned"),
-      where("date", "==", todayStr)
+      where("date", "==", todayStr),
+      where("status", "in", ["sent", "received"])
     ));
-    const excluded = new Set();
+    const returnedByKey = new Map(); // KEY = recipeNo or recipeId (upper)
     returnsSnap.forEach(d => {
       const r = d.data();
       const k = String(r.recipeNo || r.recipeId || "").toUpperCase();
-      if (k) excluded.add(k);
+      if (!k) return;
+      const q = Number(r.qty ?? r.netQty ?? 0) || 0; // qty is NET in our writer
+      returnedByKey.set(k, (returnedByKey.get(k) || 0) + q);
     });
 
-    // 3) Resolve recipe metadata (same pattern as Gateway/Aloha)
+    // 3) Resolve recipe metadata (uom, description, panWeight, returnable)
     const keys = Array.from(qtyByKey.keys());
-    const byNo = [];
-    const byId = [];
+    const byNo = [], byId = [];
     keys.forEach(k => (/^[A-Za-z0-9\-_.]+$/.test(k) ? byNo : byId).push(k));
 
     const metaByKey = new Map();
-    const idFromNo = new Map();
 
+    // Lookup by recipeNo (batch in chunks of 10 for 'in' operator)
     for (let i = 0; i < byNo.length; i += 10) {
       const batch = byNo.slice(i, i + 10);
       const snap = await getDocs(query(
@@ -5187,28 +5625,32 @@ window.loadOhanaReturns = async function () {
         const data = docSnap.data();
         const key = String(data.recipeNo || "").toUpperCase();
         if (!key) return;
-        idFromNo.set(key, docSnap.id);
         metaByKey.set(key, {
           id: docSnap.id,
+          recipeNo: data.recipeNo || "",
           description: data.description || key,
-          uom: data.uom || "ea",
+          uom: (data.uom || "ea").toLowerCase(),
+          panWeight: Number(data.panWeight || 0),
           returnable: String(data.returns || "").toLowerCase() === "yes"
         });
       });
     }
 
-    const missing = new Set(keys.filter(k => !metaByKey.has(k)));
-    for (const k of missing) {
+    // Lookup by recipeId (direct)
+    for (const k of byId) {
       const ds = await getDoc(doc(db, "recipes", k));
       if (ds.exists()) {
         const data = ds.data();
         metaByKey.set(k, {
           id: ds.id,
+          recipeNo: data.recipeNo || "",
           description: data.description || k,
-          uom: data.uom || "ea",
+          uom: (data.uom || "ea").toLowerCase(),
+          panWeight: Number(data.panWeight || 0),
           returnable: String(data.returns || "").toLowerCase() === "yes"
         });
       } else {
+        // Try mapping via recipeNo -> recipeId if present
         const via = idFromNo.get(k);
         if (via) {
           const ds2 = await getDoc(doc(db, "recipes", via));
@@ -5216,8 +5658,10 @@ window.loadOhanaReturns = async function () {
             const data = ds2.data();
             metaByKey.set(k, {
               id: ds2.id,
+              recipeNo: data.recipeNo || "",
               description: data.description || k,
-              uom: data.uom || "ea",
+              uom: (data.uom || "ea").toLowerCase(),
+              panWeight: Number(data.panWeight || 0),
               returnable: String(data.returns || "").toLowerCase() === "yes"
             });
           }
@@ -5225,12 +5669,17 @@ window.loadOhanaReturns = async function () {
       }
     }
 
-    // 4) Render rows
+    // 4) Build rows: remaining = received - returnedToday
     const rows = [];
-    qtyByKey.forEach((qty, key) => {
+    qtyByKey.forEach((receivedQty, key) => {
       const m = metaByKey.get(key);
-      if (!m || !m.returnable || excluded.has(key)) return;
-      rows.push({ id: m.id, name: m.description, uom: m.uom, qty });
+      if (!m || !m.returnable) return;
+
+      const already = returnedByKey.get(key) || 0;
+      const remaining = Math.max(0, receivedQty - already);
+      if (remaining <= 0) return;
+
+      rows.push({ id: m.id, recipeNo: m.recipeNo, name: m.description, uom: m.uom, panWeight: m.panWeight, qty: remaining });
     });
 
     if (rows.length === 0) {
@@ -5238,16 +5687,26 @@ window.loadOhanaReturns = async function () {
       return;
     }
 
+    // 5) Render table
     tableBody.innerHTML = "";
     for (const r of rows) {
       const tr = document.createElement("tr");
       tr.dataset.recipeId = r.id;
-      tr.innerHTML = `
-        <td>${r.name}</td>
-        <td>${r.qty} ${r.uom}</td>
-        <td><input class="return-input" type="number" min="0" value="0" style="width:60px;" /></td>
-        <td><button onclick="sendSingleOhanaReturn(this, '${r.id}')">Return</button></td>
-      `;
+      tr.dataset.uom = r.uom;
+      tr.dataset.panWeight = String(r.panWeight || 0);
+     tr.innerHTML = `
+  <td>${r.name}</td>
+  <td>${r.qty} ${r.uom}</td>
+  <td>
+    <input class="return-input" type="number" min="0" step="0.01" 
+           placeholder="0" value="" style="width:80px;" />
+    ${r.uom === "lb" && r.panWeight > 0 
+      ? `<div style="font-size:11px;color:#777;">Pan wt: ${r.panWeight}</div>` 
+      : ""}
+  </td>
+  <td><button onclick="sendSingleOhanaReturn(this, '${r.id}')">Return</button></td>
+`;
+
       tableBody.appendChild(tr);
     }
   } catch (err) {
@@ -5256,36 +5715,65 @@ window.loadOhanaReturns = async function () {
   }
 };
 
-// Submit a single OHANA return (adds 'date' for same-day exclusion)
+// ➤ Submit a single OHANA return (stores NET qty, keeps gross & panWeightUsed for audit)
+//    Status starts as "sent". Accounting only deducts once Main marks it "received".
+// ➤ Submit a single OHANA return (writes minimal schema Main Kitchen expects)
 window.sendSingleOhanaReturn = async function (btn, recipeId) {
   const row = btn.closest("tr");
   const qtyInput = row.querySelector(".return-input");
-  const qty = Number(qtyInput.value);
+  const raw = qtyInput?.value ?? "0";
 
-  if (!Number.isFinite(qty) || qty <= 0) {
+  // If you have normalizeQtyInputValue, use it; else Number(raw)
+  let gross = 0;
+  try {
+    gross = typeof normalizeQtyInputValue === "function"
+      ? Number(normalizeQtyInputValue(qtyInput))
+      : Number(raw);
+  } catch {
+    gross = Number(raw);
+  }
+
+  if (!Number.isFinite(gross) || gross <= 0) {
     alert("Please enter a valid quantity to return.");
+    return;
+  }
+
+  // subtract pan weight if UOM is lb
+  const uom = (row.dataset.uom || "ea").toLowerCase();
+  const panWeight = Number(row.dataset.panWeight || 0);
+  const net = (uom === "lb" && panWeight > 0) ? Math.max(0, gross - panWeight) : gross;
+
+  if (net <= 0) {
+    alert(`Net return is 0 after subtracting pan weight (${panWeight}).`);
     return;
   }
 
   try {
     await addDoc(collection(db, "returns"), {
-      recipeId,
-      qty,
+      // 🔑 minimal fields you showed in your collection
+      date: getTodayDate(),            // "YYYY-MM-DD"
+      qty: net,                        // store NET so accounting is correct
+      recipeId: recipeId,
       venue: "Ohana",
-      status: "returned",
-      date: getTodayDate(),              // 👈 important for exclusion
-      returnedAt: serverTimestamp()
+      status: "returned",              // 👈 Main Kitchen listener expects this
+      returnedAt: serverTimestamp(),   // when Ohana sent the return
+
+      // (Optional audit fields — safe to keep; ignore if you prefer minimal)
+      grossQty: gross,
+      panWeightUsed: (uom === "lb" ? panWeight : 0),
     });
 
+    // UI feedback
     btn.parentElement.innerHTML = `<span style="color: green;">Returned</span>`;
     setTimeout(() => row.remove(), 800);
-  } catch (error) {
-    console.error("Error returning item:", error);
+  } catch (err) {
+    console.error("Error submitting return:", err);
     alert("Error submitting return. Please try again.");
   }
 };
 
-//OHANA STARTING PAR
+
+
 window.loadOhanaStartingPar = async function () {
   console.log("🚀 Starting Ohana par load...");
 
@@ -5357,6 +5845,7 @@ window.loadOhanaStartingPar = async function () {
 
   renderStartingStatus("Ohana", window.startingCache["Ohana"]);
 };
+
 
 
 
