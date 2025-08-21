@@ -171,6 +171,27 @@ function normalizeQtyInputValue(input) {
   }
   return NaN;
 }
+// === Saved Guest Counts (for pars) ===
+window.guestCountsSaved = window.guestCountsSaved || { Aloha: null, Ohana: null, Gateway: null };
+
+function setGuestCountSaved(name, val) {
+  const n = Number(val);
+  window.guestCountsSaved[name] = Number.isFinite(n) ? n : null;
+}
+
+function getGuestCountFor(venue) {
+  // venue is "Aloha" | "Ohana" | "Gateway"
+  const saved = window.guestCountsSaved?.[venue];
+  if (Number.isFinite(saved)) return saved;
+
+  // fallback to the select value if user just changed it and hasn't saved yet
+  const sel = document.getElementById(`count-${venue}`);
+  if (sel) {
+    const v = Number(sel.value);
+    if (Number.isFinite(v)) return v;
+  }
+  return 0;
+}
 
 /**
  * Attach Enter/blur handlers that evaluate math expressions for matching inputs.
@@ -216,16 +237,17 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // --- tiny local helpers for notes (safe if your global versions exist too)
   function setGuestNotes(name, val) {
-    const txt = (val == null || Number.isNaN(Number(val)))
-      ? "(current: —)"
-      : `(current: ${Number(val)})`;
+  const txt = (val == null || Number.isNaN(Number(val)))
+    ? "—"
+    : String(Number(val));
 
-    const sum = document.getElementById(`current-${name}`);
-    if (sum) sum.textContent = txt;
+  const sum = document.getElementById(`current-${name}`);
+  if (sum) sum.textContent = txt;
 
-    const inline = document.getElementById(`note-${name}`);
-    if (inline) inline.textContent = txt;
-  }
+  const inline = document.getElementById(`note-${name}`);
+  if (inline) inline.textContent = txt;
+}
+
   function setSelectIfPresent(id, v) {
     const el = document.getElementById(id);
     if (!el) return;
@@ -239,22 +261,25 @@ document.addEventListener("DOMContentLoaded", () => {
     el.value = String(v);
   }
 
-  // --- Mirror cached Showware totals onto the Guest Count screen (inputs + labels + notes)
-  function paintGuestCountsScreenFromCache() {
-    const g = window.showwareGuests || {};
-    const setPair = (name, vals) => {
-      if (!vals) return;
-      const total = Number(vals.total || 0);
-      if (!Number.isFinite(total)) return;
+// --- Mirror cached Showware totals onto the Guest Count screen (labels only)
+function paintGuestCountsScreenFromCache() {
+  const g = window.showwareGuests || {};
+  const write = (name, vals) => {
+    if (!vals) return;
+    const total = Number(vals.total || 0);
+    if (!Number.isFinite(total)) return;
 
-      setSelectIfPresent(`count-${name}`, total);
-      // write both the summary and inline note, if present
-      setGuestNotes(name, total);
-    };
-    setPair("Aloha",   g.Aloha);
-    setPair("Ohana",   g.Ohana);
-    setPair("Gateway", g.Gateway);
-  }
+    // ✅ labels only (top "Current Guest Counts")
+    const curEl = document.getElementById(`current-${name}`);
+    if (curEl) curEl.textContent = String(total);
+
+    // ❌ do NOT set the dropdown from Showware
+    // setSelectIfPresent(`count-${name}`, total);  <-- remove
+  };
+  write("Aloha",   g.Aloha);
+  write("Ohana",   g.Ohana);
+  write("Gateway", g.Gateway);
+}
 
   // ---- Initial screen (guarded)
   if (viewSelect && viewSelect.value) showScreen(viewSelect.value);
@@ -473,7 +498,7 @@ if (guestForm) {
       // ✅ Update notes and summaries immediately
       ["Aloha", "Ohana", "Gateway"].forEach(name => {
         const val = counts[name];
-        const txt = `(current: ${val})`;
+         const txt = String(val);  // just the number
 
         const summary = document.getElementById(`current-${name}`);
         if (summary) summary.textContent = txt;
@@ -522,19 +547,24 @@ function listenToShowwareGuests() {
     try { al && paintAlohaCounts?.(al);   } catch {}
 
     // 4) Mirror TOTALS onto Guest Count screen inputs/labels
-    const mirror = (name, vals) => {
-      if (!vals) return;
-      const total = Number(vals.total || 0);
-      const inEl  = document.getElementById(`count-${name}`);
-      const curEl = document.getElementById(`current-${name}`);
-      if (Number.isFinite(total)) {
-        if (inEl)  inEl.value = String(total);
-        if (curEl) curEl.textContent = String(total);
-      }
-    };
-    mirror("Aloha",   al);
-    mirror("Ohana",   oh);
-    mirror("Gateway", gw);
+// 4) Mirror TOTALS onto Guest Count screen (labels only; selects come from guestCounts)
+const mirror = (name, vals) => {
+  if (!vals) return;
+  const total = Number(vals.total || 0);
+  if (!Number.isFinite(total)) return;
+
+  // ✅ labels
+  const curEl = document.getElementById(`current-${name}`);
+  if (curEl) curEl.textContent = String(total);
+
+  // ❌ don't touch selects here
+  // const inEl = document.getElementById(`count-${name}`);
+  // if (inEl) inEl.value = String(total);
+};
+mirror("Aloha",   al);
+mirror("Ohana",   oh);
+mirror("Gateway", gw);
+
 
     // 5) Update cost/guest cards now that totals are fresh
     ["Aloha","Gateway","Ohana"].forEach(v => {
@@ -542,6 +572,33 @@ function listenToShowwareGuests() {
     });
   });
 }
+
+
+// ===== Ensure Showware-first guest note helpers exist (define BEFORE use) =====
+(function ensureGuestNoteHelpers(){
+  // live total from showwareEvents cache (window.showwareGuests)
+  if (typeof window.swHasTotal !== "function") {
+    window.swHasTotal = function(name){
+      const t = Number(window?.showwareGuests?.[name]?.total);
+      return Number.isFinite(t) ? t : null;
+    };
+  }
+
+// write guest count to both summary and inline note, preferring Showware
+if (typeof window.setGuestNotesPreferShowware !== "function") {
+  window.setGuestNotesPreferShowware = function(name, fallbackVal){
+    const live = window.swHasTotal(name);
+    const val  = live ?? (Number.isFinite(Number(fallbackVal)) ? Number(fallbackVal) : null);
+    const txt  = val == null ? "—" : String(val);
+
+    const summary = document.getElementById(`current-${name}`);
+    if (summary) summary.textContent = txt;
+
+    const inline = document.getElementById(`note-${name}`);
+    if (inline) inline.textContent = txt;
+  };
+}
+})();
 
 
 // ===== Load today's guest counts and hydrate UI =====
@@ -554,21 +611,32 @@ async function loadGuestCounts() {
     const data = snap.exists() ? (snap.data() || {}) : {};
 
     ["Aloha", "Ohana", "Gateway"].forEach((name) => {
-      const v = toInt(data?.[name]);
+      const saved = Number(data?.[name]);
+      // cache for pars
+      setGuestCountSaved(name, saved);
 
-      if (v != null) {
-        ensureOption(`count-${name}`, v);   // make sure select has this exact value
-        setSelectValue(`count-${name}`, v); // select it
-        setGuestNotes(name, v);             // "(current: v)" for both summary + inline note
-      } else {
-        // no saved value — clear notes but keep selects editable
-        setGuestNotes(name, null);
+      // Pre-select the dropdowns from guestCounts (saved values)
+      const sel = document.getElementById(`count-${name}`);
+      if (sel && Number.isFinite(saved)) {
+        if (![...sel.options].some(o => Number(o.value) === saved)) {
+          const opt = document.createElement("option");
+          opt.value = String(saved);
+          opt.textContent = String(saved);
+          sel.appendChild(opt);
+        }
+        sel.value = String(saved);
       }
+
+      // Notes: prefer Showware live totals; fall back to saved if Showware absent
+      setGuestNotesPreferShowware(name, saved);
     });
   } catch (err) {
     console.error("loadGuestCounts() failed:", err);
+    ["Aloha","Ohana","Gateway"].forEach(name => setGuestCountSaved(name, null));
   }
 }
+
+
 
 // ---- helpers ----
 function toInt(x) {
@@ -593,24 +661,57 @@ function setSelectValue(selectId, value) {
   if (el) el.value = String(value);
 }
 
-function setGuestNotes(name, valueOrNull) {
-  const txt = valueOrNull == null ? "(current: —)" : `(current: ${valueOrNull})`;
+(function ensureGuestNoteHelpers(){
+  if (typeof window.swHasTotal !== "function") {
+    window.swHasTotal = function(name){
+      const t = Number(window?.showwareGuests?.[name]?.total);
+      return Number.isFinite(t) ? t : null;
+    };
+  }
 
-  // summary block (e.g., <span id="current-Aloha">…</span>)
-  const summary = document.getElementById(`current-${name}`);
-  if (summary) summary.textContent = txt;
+  if (typeof window.setGuestNotesPreferShowware !== "function") {
+    window.setGuestNotesPreferShowware = function(name, fallbackVal){
+      const live = window.swHasTotal(name);
+      const val  = live ?? (Number.isFinite(Number(fallbackVal)) ? Number(fallbackVal) : null);
 
-  // inline note next to the select (e.g., <span id="note-Aloha">…</span>)
-  const inline = document.getElementById(`note-${name}`);
-  if (inline) inline.textContent = txt;
-}
+      // 👇 just show the number (or — if null)
+      const txt  = val == null ? "—" : String(val);
+
+      const summary = document.getElementById(`current-${name}`);
+      if (summary) summary.textContent = txt;
+    };
+  }
+})();
+
 
 function listenToGuestCountsLive() {
   const ref = doc(db, "guestCounts", getTodayDate());
   onSnapshot(ref, (snap) => {
-    if (snap.exists()) mirrorGuestCountsToUI(snap.data());
+    const data = snap.exists() ? (snap.data() || {}) : {};
+    ["Aloha","Ohana","Gateway"].forEach((name) => {
+      const saved = Number(data?.[name]);
+
+      // keep cache up to date for pars
+      setGuestCountSaved(name, saved);
+
+      // keep selects aligned with saved doc (user can still change before saving)
+      const sel = document.getElementById(`count-${name}`);
+      if (sel && Number.isFinite(saved)) {
+        if (![...sel.options].some(o => Number(o.value) === saved)) {
+          const opt = document.createElement("option");
+          opt.value = String(saved);
+          opt.textContent = String(saved);
+          sel.appendChild(opt);
+        }
+        sel.value = String(saved);
+      }
+
+      // notes remain Showware-first
+      setGuestNotesPreferShowware(name, saved);
+    });
   });
 }
+
 
 const placeholderUser = "testUser";
 
@@ -2057,8 +2158,9 @@ function setGuestNote(name, val) {
   const el = document.getElementById(`current-${name}`);
   if (!el) return;
   const num = Number(val);
-  el.textContent = Number.isFinite(num) ? `(current: ${num})` : `(current: —)`;
+  el.textContent = Number.isFinite(num) ? String(num) : "—";
 }
+
 function mirrorGuestCountsToUI(data = {}) {
   ["Aloha","Gateway","Ohana"].forEach(name => {
     const sel = document.getElementById(`count-${name}`);
