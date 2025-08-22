@@ -808,15 +808,7 @@ window.showKitchenSection = function (sectionId) {
 //Kitchen add ons
 // Kitchen add ons
 const kitchenSendQtyCache = {};
-
 function renderKitchen(orders, { skipCache = false } = {}) {
-  // ✅ Only cache the full list if not skipping
-  if (!skipCache) {
-    window.kitchenFullOrderList = [...orders]; // preserve original
-  }
-
-  window.kitchenOrderCache = orders;
-
   const container = document.getElementById("kitchenTable").querySelector("tbody");
   if (!container) return;
 
@@ -835,8 +827,16 @@ function renderKitchen(orders, { skipCache = false } = {}) {
     return timeA - timeB;
   });
 
-  // ❌ Filter out grill items from Gateway only
-  orders = orders.filter(order => !(order.venue === "Gateway" && order.station === "Grill"));
+  // 🔒 Hide ALL Wok & Grill items from the Main Kitchen table (any venue)
+  orders = orders.filter(
+    o => !["Wok", "Grill"].includes((o.station || "").trim())
+  );
+
+  // ✅ Cache the filtered list so search won't re‑show Wok/Grill items
+  if (!skipCache) {
+    window.kitchenFullOrderList = [...orders];
+  }
+  window.kitchenOrderCache = orders;
 
   orders.forEach(order => {
     const row = document.createElement("tr");
@@ -887,36 +887,29 @@ function renderKitchen(orders, { skipCache = false } = {}) {
     const id = input.getAttribute("data-order-id");
 
     const setEnabledFromValue = () => {
-      // Evaluate math safely (requires evaluateMathExpression helper)
       const v = evaluateMathExpression(input.value);
       const isValid = Number.isFinite(v) && v > 0;
       if (sendBtn) sendBtn.disabled = !isValid;
     };
 
-    // Live enable/disable while typing
-    input.addEventListener("input", () => {
-      setEnabledFromValue();
-    });
+    input.addEventListener("input", setEnabledFromValue);
 
-    // Normalize + cache on Enter
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
         e.preventDefault();
-        const v = normalizeQtyInputValue(input); // writes normalized number back to input
+        const v = normalizeQtyInputValue(input);
         kitchenSendQtyCache[id] = Number.isFinite(v) ? v : "";
         setEnabledFromValue();
         input.select?.();
       }
     });
 
-    // Normalize + cache on blur
     input.addEventListener("blur", () => {
       const v = normalizeQtyInputValue(input);
       kitchenSendQtyCache[id] = Number.isFinite(v) ? v : "";
       setEnabledFromValue();
     });
 
-    // Set initial enabled state based on cached value
     setEnabledFromValue();
   });
 
