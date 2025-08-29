@@ -520,13 +520,35 @@ if (guestForm) {
 
 // 🔁 Live Showware listener → updates cache, venue tiles, and Guest Count screen
 function listenToShowwareGuests() {
-  const q = query(
+  const qLatest = query(
     collection(db, window.SHOWWARE_COLL || "showwareEvents"),
     orderBy("receivedAt", "desc"),
     limit(1)
   );
 
-  onSnapshot(q, (snap) => {
+  // last-seen totals so we only refresh when something actually changes
+  window._swLastTotals = window._swLastTotals || { Aloha: null, Ohana: null, Gateway: null };
+  let refreshTimer = null;
+
+  // small helpers
+  const liveTotal = (name, obj) => {
+    const v = Number(obj?.total || 0);
+    return Number.isFinite(v) ? v : null;
+  };
+  const sectionVisible = (rootId) => {
+    const root = document.getElementById(rootId);
+    if (!root) return false;
+    const sec = root.querySelector(".starting-section");
+    return !!(sec && root.style.display !== "none" && sec.style.display !== "none");
+  };
+  const setGuestInfoIfVisible = (id, val) => {
+    const el = document.getElementById(id);
+    if (el && sectionVisible(id.includes("aloha") ? "aloha" : "ohana")) {
+      el.textContent = `👥 Guest Count: ${val}`;
+    }
+  };
+
+  onSnapshot(qLatest, (snap) => {
     if (snap.empty) return;
     const d = snap.docs[0].data() || {};
 
@@ -546,30 +568,61 @@ function listenToShowwareGuests() {
     try { oh && paintOhanaCounts?.(oh);   } catch {}
     try { al && paintAlohaCounts?.(al);   } catch {}
 
-    // 4) Mirror TOTALS onto Guest Count screen inputs/labels
-// 4) Mirror TOTALS onto Guest Count screen (labels only; selects come from guestCounts)
-const mirror = (name, vals) => {
-  if (!vals) return;
-  const total = Number(vals.total || 0);
-  if (!Number.isFinite(total)) return;
+    // 4) Mirror TOTALS onto Guest Count screen (labels only; selects come from guestCounts)
+    const mirror = (name, vals) => {
+      if (!vals) return;
+      const total = Number(vals.total || 0);
+      if (!Number.isFinite(total)) return;
+      const curEl = document.getElementById(`current-${name}`);
+      if (curEl) curEl.textContent = String(total);
+    };
+    mirror("Aloha",   al);
+    mirror("Ohana",   oh);
+    mirror("Gateway", gw);
 
-  // ✅ labels
-  const curEl = document.getElementById(`current-${name}`);
-  if (curEl) curEl.textContent = String(total);
-
-  // ❌ don't touch selects here
-  // const inEl = document.getElementById(`count-${name}`);
-  // if (inEl) inEl.value = String(total);
-};
-mirror("Aloha",   al);
-mirror("Ohana",   oh);
-mirror("Gateway", gw);
-
-
-    // 5) Update cost/guest cards now that totals are fresh
+    // 5) Update cost/guest cards now that totals are fresh (safe no-ops if the UI isn’t present)
     ["Aloha","Gateway","Ohana"].forEach(v => {
       try { updateCostSummaryForVenue?.(v); } catch {}
     });
+
+    // 6) If totals changed, refresh Starting Pars so R0425 matches LIVE totals instantly
+    const changed = {
+      Aloha:   liveTotal("Aloha",   al),
+      Ohana:   liveTotal("Ohana",   oh),
+      Gateway: liveTotal("Gateway", gw),
+    };
+    let anyChanged = false;
+    Object.keys(changed).forEach(name => {
+      const val = changed[name];
+      if (val != null && val !== window._swLastTotals[name]) {
+        window._swLastTotals[name] = val;
+        anyChanged = true;
+      }
+    });
+    if (!anyChanged) return;
+
+    // Debounce in case multiple venues update in a single doc
+    if (refreshTimer) clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(() => {
+      try {
+        // Update the little guest labels on Aloha/Ohana starting screens (if visible)
+        if (changed.Aloha != null) setGuestInfoIfVisible("alohaGuestInfo", changed.Aloha);
+        if (changed.Ohana != null) setGuestInfoIfVisible("ohanaGuestInfo", changed.Ohana);
+
+        // Refresh venue starting pars that are visible (R0425 uses live total in render)
+        if (sectionVisible("aloha") && typeof loadAlohaStartingPar === "function") {
+          loadAlohaStartingPar();
+        }
+        if (sectionVisible("ohana") && typeof loadOhanaStartingPar === "function") {
+          loadOhanaStartingPar();
+        }
+        if (sectionVisible("main-kitchen") && typeof loadMainKitchenStartingPars === "function") {
+          loadMainKitchenStartingPars();
+        }
+      } catch (e) {
+        console.debug("showware live refresh skipped:", e);
+      }
+    }, 120);
   });
 }
 
@@ -686,8 +739,62 @@ function setSelectValue(selectId, value) {
 
 function listenToGuestCountsLive() {
   const ref = doc(db, "guestCounts", getTodayDate());
+
+  // Keep last-seen values so we only refresh when something actually changes
+  window._lastGuestCounts = window._lastGuestCounts || { Aloha: null, Ohana: null, Gateway: null };
+  let refreshTimer = null;
+
+  // Quick helpers (scoped here so we don't pollute globals)
+  const ensureOption = (selectId, value) => {
+    const sel = document.getElementById(selectId);
+    if (!sel) return;
+    const exists = Array.from(sel.options).some(o => Number(o.value) === Number(value));
+    if (!exists) {
+      const opt = document.createElement("option");
+      opt.value = String(value);
+      opt.textContent = String(value);
+      sel.appendChild(opt);
+    }
+  };
+  const isStartingVisible = (rootId) => {
+    const root = document.getElementById(rootId);
+    const sec  = root?.querySelector(".starting-section");
+    return !!(root && sec && root.style.display !== "none" && sec.style.display !== "none");
+  };
+  const scheduleRefreshesIfNeeded = (changed) => {
+    // Debounce a tiny bit in case all three change at once
+    if (refreshTimer) clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(() => {
+      try {
+        // Refresh venue Starting Pars that are currently on-screen
+        if (changed.Aloha && isStartingVisible("aloha") && typeof loadAlohaStartingPar === "function") {
+          loadAlohaStartingPar();
+        }
+        if (changed.Ohana && isStartingVisible("ohana") && typeof loadOhanaStartingPar === "function") {
+          loadOhanaStartingPar();
+        }
+        if ((changed.Aloha || changed.Ohana || changed.Gateway) &&
+            isStartingVisible("main-kitchen") &&
+            typeof loadMainKitchenStartingPars === "function") {
+          loadMainKitchenStartingPars();
+        }
+
+        // Update cost/guest cards (safe to call; they no-op if elements missing)
+        ["Aloha","Gateway","Ohana"].forEach(v => {
+          if (changed[v] && typeof updateCostSummaryForVenue === "function") {
+            updateCostSummaryForVenue(v);
+          }
+        });
+      } catch (e) {
+        console.debug("guestCount live refresh skipped:", e);
+      }
+    }, 120);
+  };
+
   onSnapshot(ref, (snap) => {
     const data = snap.exists() ? (snap.data() || {}) : {};
+    const changed = { Aloha: false, Ohana: false, Gateway: false };
+
     ["Aloha","Ohana","Gateway"].forEach((name) => {
       const saved = Number(data?.[name]);
 
@@ -695,22 +802,31 @@ function listenToGuestCountsLive() {
       setGuestCountSaved(name, saved);
 
       // keep selects aligned with saved doc (user can still change before saving)
-      const sel = document.getElementById(`count-${name}`);
+      const selId = `count-${name}`;
+      const sel = document.getElementById(selId);
       if (sel && Number.isFinite(saved)) {
-        if (![...sel.options].some(o => Number(o.value) === saved)) {
-          const opt = document.createElement("option");
-          opt.value = String(saved);
-          opt.textContent = String(saved);
-          sel.appendChild(opt);
-        }
+        ensureOption(selId, saved);
         sel.value = String(saved);
       }
 
       // notes remain Showware-first
       setGuestNotesPreferShowware(name, saved);
+
+      // detect changes vs last snapshot
+      const last = window._lastGuestCounts[name];
+      if (Number.isFinite(saved) && saved !== last) {
+        changed[name] = true;
+        window._lastGuestCounts[name] = saved;
+      }
     });
+
+    // If any venue changed, refresh visible Starting Pars + cost cards
+    if (changed.Aloha || changed.Ohana || changed.Gateway) {
+      scheduleRefreshesIfNeeded(changed);
+    }
   });
 }
+
 
 
 const placeholderUser = "testUser";
@@ -1685,6 +1801,15 @@ document.getElementById("confirmDeleteBtn").addEventListener("click", async () =
 });
 
 //**aloha starting screen */
+// === Add once near your helpers ===
+function isPineappleShells(rec) {
+  const no  = String(rec?.recipeNo || "").toUpperCase().trim();
+  const desc = String(rec?.description || "").toLowerCase();
+  return no === "R0425" || /pineapple\s*shell/.test(desc);
+}
+
+//**aloha starting screen */
+//**aloha starting screen */
 window.loadAlohaStartingPar = async function () {
   console.log("🚀 Starting Aloha par load...");
 
@@ -1694,15 +1819,24 @@ window.loadAlohaStartingPar = async function () {
 
   if (!guestSnap.exists()) {
     console.warn("❌ No guestCounts document found for today:", today);
-    document.getElementById("alohaGuestInfo").textContent = "⚠️ No guest count for today.";
+    const info = document.getElementById("alohaGuestInfo");
+    if (info) info.textContent = "⚠️ No guest count for today.";
     return;
   }
 
   const guestData = guestSnap.data();
   console.log("🌺 Full guest data:", guestData);
 
-  const guestCount = Number(guestData?.Aloha || 0);
-  document.getElementById("alohaGuestInfo").textContent = `👥 Guest Count: ${guestCount}`;
+  // Saved (Firestore) guest count
+  const savedGuestCount = Number(guestData?.Aloha || 0);
+  // Live Showware total if available
+  const liveShowware = (typeof window.swHasTotal === "function") ? window.swHasTotal("Aloha") : null;
+
+  // Display: prefer live Showware on the label
+  // ✅ Group to avoid '??' + '||' mixing error
+  const displayCount = ((liveShowware ?? savedGuestCount) || 0);
+  const infoEl = document.getElementById("alohaGuestInfo");
+  if (infoEl) infoEl.textContent = `👥 Guest Count: ${displayCount}`;
 
   // 🔍 Load recipes for Aloha (venueCode b001)
   const recipesRef = collection(db, "recipes");
@@ -1736,14 +1870,25 @@ window.loadAlohaStartingPar = async function () {
     }
   });
 
-  // 🧮 parQty = target based on guest count; sentQty = sum(sendQty)
+  // 🧮 parQty:
+  //   • Normal items: use r.pars.Aloha[savedGuestCount]
+  //   • R0425 (Pineapple Shells): force to *live* Showware total if available, else saved
   const computedRecipes = recipes.map(r => {
-    const targetPar = Number(r.pars?.Aloha?.[String(guestCount)] || 0);
-    const sentQty   = Number(sentQtyByRecipe[r.id] || 0);
+    const targetFromPars = Number(r.pars?.Aloha?.[String(savedGuestCount)] || 0);
+    const sentQty        = Number(sentQtyByRecipe[r.id] || 0);
+
+    const recipeNo = String(r.recipeNo || "").toUpperCase().trim();
+    const isR0425  = recipeNo === "R0425" || /pineapple\s*shell/i.test(String(r.description || ""));
+
+    const overridePar = isR0425
+      // ✅ Group to avoid '??' + '||' mixing error
+      ? Number(((liveShowware ?? savedGuestCount) || 0))
+      : targetFromPars;
+
     return {
       ...r,
-      targetPar,
-      parQty: targetPar, // exact target, not remaining
+      targetPar: overridePar,
+      parQty: overridePar,
       sentQty
     };
   });
@@ -1752,21 +1897,25 @@ window.loadAlohaStartingPar = async function () {
   window.startingCache = window.startingCache || {};
   window.startingCache["Aloha"] = {
     recipes: computedRecipes,
-    guestCount,
-    sentPars: sentQtyByRecipe, // kept for compatibility
+    guestCount: savedGuestCount, // keep saved in cache
+    sentPars: sentQtyByRecipe,
     receivedPars
   };
 
   renderStartingStatus("Aloha", window.startingCache["Aloha"]);
 };
 
-
 window.renderStartingStatus = async function (venue, data) {
   const tbody = document.getElementById(`${venue.toLowerCase()}ParTableBody`);
   if (!tbody) return;
 
   const categoryFilter = document.getElementById(`${venue.toLowerCase()}-starting-category`)?.value || "";
+
+  // Base guestCount comes from cache (saved Firestore number)
   const guestCount = Number(data?.guestCount || 0);
+  // For R0425 on Aloha/Ohana, prefer Showware live total if present
+  const liveShowware = (typeof window.swHasTotal === "function") ? window.swHasTotal(venue) : null;
+
   tbody.innerHTML = "";
   let matchedCount = 0;
 
@@ -1782,9 +1931,6 @@ window.renderStartingStatus = async function (venue, data) {
   ));
 
   // Build separate totals:
-  //   • totalPansByRecipe = sum of "pans"
-  //   • totalQtyByRecipe  = sum of "sendQty" (fallback "qty")
-  //   • pendingPansByRecipe = pans that are not yet received (for Receive button)
   const totalPansByRecipe   = new Map();
   const totalQtyByRecipe    = new Map();
   const pendingPansByRecipe = new Map();
@@ -1814,18 +1960,27 @@ window.renderStartingStatus = async function (venue, data) {
 
     if (categoryFilter && (recipe.category || "").toLowerCase() !== categoryFilter.toLowerCase()) return;
 
+    const recipeNo = String(recipe.recipeNo || "").toUpperCase().trim();
+    const isR0425  = recipeNo === "R0425" || /pineapple\s*shell/i.test(String(recipe.description || ""));
+
     // Target PAR (pans) for this venue
     let targetPans = 0;
     if (venue === "Concessions") {
       targetPans = Number(recipe.pars?.Concession?.default || 0);
     } else {
-      targetPans = Number(recipe.pars?.[venue]?.[String(guestCount)] || 0);
+      // For Pineapple Shells on Aloha/Ohana, use LIVE Showware total if present
+      if ((venue === "Aloha" || venue === "Ohana") && isR0425 && Number.isFinite(liveShowware)) {
+        targetPans = Number(liveShowware || 0);
+      } else {
+        // Everyone else keeps the saved-count keyed PAR table
+        targetPans = Number(recipe.pars?.[venue]?.[String(guestCount)] || 0);
+      }
     }
     if (targetPans <= 0) return;
 
-    // Sent & Pending (pans + qty shown; pending = pans not yet received)
+    // Sent & Pending
     const sentPans    = Number(totalPansByRecipe.get(recipeId) || 0);
-    const sentQty     = Number(totalQtyByRecipe.get(recipeId)  || data?.sentPars?.[recipeId] || 0); // keep legacy fallback
+    const sentQty     = Number(totalQtyByRecipe.get(recipeId)  || data?.sentPars?.[recipeId] || 0);
     const pendingPans = Number(pendingPansByRecipe.get(recipeId) || 0);
 
     // Hide if fully satisfied and nothing pending
@@ -2281,7 +2436,6 @@ window.loadMainKitchenStartingPars = async function () {
 
   renderMainKitchenPars();
 };
-
 window.renderMainKitchenPars = function () {
   const data = window.startingCache?.MainKitchenAll;
   if (!data) { console.warn("⚠️ No cached data found for Main Kitchen Starting Pars."); return; }
@@ -2301,7 +2455,7 @@ window.renderMainKitchenPars = function () {
   const tbody = table.querySelector("tbody");
   tbody.innerHTML = "";
 
-  // --- Concessions baseline (unchanged), but we will DISPLAY the remaining
+  // --- Concessions baseline (unchanged)
   const currentConGuests = Number(data.guestCounts?.Concession || data.guestCounts?.Concessions || 0);
   const { guestBase, sentBase } = readConcessionBaseline();
   if (currentConGuests > guestBase) {
@@ -2322,11 +2476,21 @@ window.renderMainKitchenPars = function () {
 
       // 1) Today's target PAR (pans)
       let parPans = 0;
+
       if (venue === "Concessions") {
         parPans = Number(recipe.pars?.Concession?.default || 0);
       } else {
-        const gc = Number(data.guestCounts?.[venue] || 0);
-        parPans = Number(recipe.pars?.[venue]?.[String(gc)] || 0);
+        // --- Aloha/Ohana Pineapple Shells override: use LIVE Showware total if available
+        const recipeNo = String(recipe.recipeNo || "").toUpperCase().trim();
+        const isPineappleShells = (recipeNo === "R0425") || /pineapple\s*shell/i.test(String(recipe.description || ""));
+        const live = (typeof window.swHasTotal === "function") ? window.swHasTotal(venue) : null;
+
+        if ((venue === "Aloha" || venue === "Ohana") && isPineappleShells && Number.isFinite(live)) {
+          parPans = Number(live); // target = live Showware guest total
+        } else {
+          const gc = Number(data.guestCounts?.[venue] || 0);
+          parPans = Number(recipe.pars?.[venue]?.[String(gc)] || 0);
+        }
       }
       if (parPans <= 0) continue;
 
@@ -2334,7 +2498,7 @@ window.renderMainKitchenPars = function () {
       let remaining = 0;
 
       if (venue === "Concessions") {
-        // Wave/baseline in lbs, but we still display the remaining PAN count here
+        // Wave/baseline in lbs, but display remaining PAN count here
         const sentAtBaseline = Number(finalSentBase?.[recipe.id] || 0);
         const sentNow = Number(data.sentPars?.Concessions?.[recipe.id] || 0); // lbs tallied by loader
         const effectiveSentSinceIncrease = Math.max(0, sentNow - sentAtBaseline);
@@ -2348,7 +2512,7 @@ window.renderMainKitchenPars = function () {
       // Only show if something is still needed
       if (remaining <= 0) continue;
 
-      // 3) Build row: Area | Item | Par Qty (REMAINING) | UOM | Send Qty (blank) | Action
+      // 3) Build row: Area | Item | Par Qty (REMAINING) | UOM | Send Qty | Action
       const row = document.createElement("tr");
       row.dataset.recipeId = recipe.id;
       row.dataset.venue    = venue;
@@ -2372,7 +2536,7 @@ window.renderMainKitchenPars = function () {
   });
 
   enableMathOnInputs(".send-qty-input", table);
-  console.log(`✅ Rendered ${totalRows} rows (Par Qty now shows remaining = target − sent; Send Qty left blank).`);
+  console.log(`✅ Rendered ${totalRows} rows (Par Qty shows remaining = target − sent; Pineapple Shells target = LIVE Showware for Aloha/Ohana).`);
 };
 
 
@@ -2718,8 +2882,6 @@ window.filterAlohaWaste = function () {
   window.loadAlohaWaste(filtered);
 };
 
-// ❌ Remove the old addToWasteQty (no longer needed)
-// window.addToWasteQty = ...  ← delete this function
 
 // 🔧 Helper: compute net waste after pan
 function computeNetWaste(grossQty, panWeight) {
@@ -6017,7 +6179,6 @@ window.sendSingleOhanaReturn = async function (btn, recipeId) {
 };
 
 
-
 window.loadOhanaStartingPar = async function () {
   console.log("🚀 Starting Ohana par load...");
 
@@ -6027,21 +6188,31 @@ window.loadOhanaStartingPar = async function () {
 
   if (!guestSnap.exists()) {
     console.warn("❌ No guestCounts document found for today:", today);
-    document.getElementById("ohanaGuestInfo").textContent = "⚠️ No guest count for today.";
+    const info = document.getElementById("ohanaGuestInfo");
+    if (info) info.textContent = "⚠️ No guest count for today.";
     return;
   }
 
   const guestData = guestSnap.data();
-  const guestCount = Number(guestData?.Ohana || 0);
-  document.getElementById("ohanaGuestInfo").textContent = `👥 Guest Count: ${guestCount}`;
+  console.log("🌺 Full Ohana guest data:", guestData);
 
-  // recipes for Ohana (b002)
+  // Saved (Firestore) guest count
+  const savedGuestCount = Number(guestData?.Ohana || 0);
+  // Live Showware total if available
+  const liveShowware = (typeof window.swHasTotal === "function") ? window.swHasTotal("Ohana") : null;
+
+  // Display: prefer live Showware on the label
+  const displayCount = ((liveShowware ?? savedGuestCount) || 0); // grouped to avoid TS error
+  const infoEl = document.getElementById("ohanaGuestInfo");
+  if (infoEl) infoEl.textContent = `👥 Guest Count: ${displayCount}`;
+
+  // 🔍 Load recipes for Ohana (venueCode b002)
   const recipesRef = collection(db, "recipes");
   const q = query(recipesRef, where("venueCodes", "array-contains", "b002"));
   const snapshot = await getDocs(q);
   const recipes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-  // today's starting-par orders for Ohana
+  // 🔁 Today's starting-par orders for Ohana
   const ordersQuery = query(
     collection(db, "orders"),
     where("type", "==", "starting-par"),
@@ -6050,40 +6221,51 @@ window.loadOhanaStartingPar = async function () {
   );
   const ordersSnap = await getDocs(ordersQuery);
 
-  // Sum ALL sent per recipeId (compat: pans OR sendQty OR qty); track any received
+  // 👉 Aggregate Firestore sendQty per recipeId (mirror Aloha)
   const sentQtyByRecipe = {};
   const receivedPars = {};
-
   ordersSnap.forEach(docSnap => {
     const o = docSnap.data();
     const recipeId = o.recipeId;
     if (!recipeId) return;
 
-    const sentVal = Number(o.pans ?? o.sendQty ?? o.qty ?? 0);
-    if (sentVal > 0) {
-      sentQtyByRecipe[recipeId] = (sentQtyByRecipe[recipeId] || 0) + sentVal;
-    }
+    const sentQty = Number(o.sendQty ?? 0);
+    sentQtyByRecipe[recipeId] = (sentQtyByRecipe[recipeId] || 0) + sentQty;
 
     if (o.received || o.status === "received") {
       receivedPars[recipeId] = true;
     }
   });
 
-  // Build display model:
-  //  - parQty = target pans for today's guest count
-  //  - sentQty = total sent today (received + pending), using compat fields
+  // 🧮 parQty:
+  //   • Normal items: use r.pars.Ohana[savedGuestCount]
+  //   • R0425 (Pineapple Shells): force to *live* Showware total if available, else saved
   const computedRecipes = recipes.map(r => {
-    const targetPar = Number(r.pars?.Ohana?.[String(guestCount)] || 0);
-    const sentQty   = Number(sentQtyByRecipe[r.id] || 0);
-    return { ...r, targetPar, parQty: targetPar, sentQty };
+    const targetFromPars = Number(r.pars?.Ohana?.[String(savedGuestCount)] || 0);
+    const sentQty        = Number(sentQtyByRecipe[r.id] || 0);
+
+    const recipeNo = String(r.recipeNo || "").toUpperCase().trim();
+    const isR0425  = recipeNo === "R0425" || /pineapple\s*shell/i.test(String(r.description || ""));
+
+    const overridePar = isR0425
+      ? Number(((liveShowware ?? savedGuestCount) || 0)) // grouped to avoid TS error
+      : targetFromPars;
+
+    return {
+      ...r,
+      targetPar: overridePar,
+      parQty: overridePar, // exact target, not remaining
+      sentQty
+    };
   });
 
-  // cache & render
+  // 🗂️ Cache & render
   window.startingCache = window.startingCache || {};
   window.startingCache["Ohana"] = {
     recipes: computedRecipes,
-    guestCount,
-    sentPars: sentQtyByRecipe, // used by renderer
+    // Keep saved guest count in cache; renderer will prefer live for R0425
+    guestCount: savedGuestCount,
+    sentPars: sentQtyByRecipe,
     receivedPars
   };
 
