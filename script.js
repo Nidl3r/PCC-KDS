@@ -6671,12 +6671,157 @@ window.loadProductionShipments = async function () {
   window.loadVenueShipment("b001");
 };
 
+
+
+// === Sync Production Shipment override → today's orders doc(s) ===
+async function syncProdOverrideIntoOrders(venueCode, recipeNo, newQty) {
+  try {
+    const today = getTodayDate(); // already defined in your file
+    const qty   = Number(newQty);
+    if (!Number.isFinite(qty)) return;
+
+    // Map "b001/b002/b003/..." → "Aloha/Ohana/Gateway/..."
+    function codeToVenueName(code) {
+      const map = window.venueCodes || { Aloha: "B001", Ohana: "B002", Gateway: "B003" };
+      const found = Object.entries(map).find(([, v]) => String(v).toLowerCase() === String(code).toLowerCase());
+      return found ? found[0] : code; // fallback to the code if unknown
+    }
+    const venueName = codeToVenueName(venueCode); // e.g., "Gateway"
+
+    // 1) Find today's starting-par orders for this venue+recipe
+    const q1 = query(
+      collection(db, "orders"),
+      where("date", "==", today),
+      where("venue", "==", venueName),
+      where("type", "==", "starting-par"),
+      where("recipeNo", "==", String(recipeNo).toUpperCase())
+    );
+    const snap = await getDocs(q1);
+
+    // (Optional) pull unit cost for totalCost recompute
+    async function getUnitCostByOrderDoc(o) {
+      // Try `recipeId` first (your docs have r0002/r0331 etc)
+      const rid = (o.recipeId || "").toString().trim();
+      if (rid) {
+        const rs = await getDoc(doc(db, "recipes", rid));
+        if (rs.exists()) return Number(rs.data()?.cost || 0);
+      }
+      // Fallback: lookup by recipeNo
+      const qR = query(collection(db, "recipes"), where("recipeNo", "==", String(recipeNo).toUpperCase()));
+      const sR = await getDocs(qR);
+      if (!sR.empty) return Number(sR.docs[0].data()?.cost || 0);
+      return 0;
+    }
+
+    if (!snap.empty) {
+      // If multiple docs exist (e.g., multiple sends), update them all,
+      // so the *sum* reflects your override. If you'd rather only update the latest,
+      // sort by timestamp and only update the last one.
+      const writes = [];
+      for (const docSnap of snap.docs) {
+        const o = docSnap.data();
+
+        // Decide which numeric field to override:
+        // - Your example shows `qty` (weight) and `pans` (containers).
+        // - Here we override `qty` and `sendQty` to the typed amount.
+        //   (If you want to override `pans` instead, switch the fields.)
+        const unitCost = await getUnitCostByOrderDoc(o);
+        const totalCost = unitCost > 0 ? Number((unitCost * qty).toFixed(2)) : undefined;
+
+        writes.push(updateDoc(docSnap.ref, {
+          qty: qty,
+          sendQty: qty,
+          ...(totalCost != null ? { totalCost } : {}),
+          updatedAt: serverTimestamp()
+        }));
+      }
+      await Promise.all(writes);
+    } else {
+      // No existing doc for that recipe today → upsert one so reporting stays consistent.
+      // (If you don't want this behavior, remove this block.)
+      const qR = query(collection(db, "recipes"), where("recipeNo", "==", String(recipeNo).toUpperCase()));
+      const sR = await getDocs(qR);
+      const recipeData = sR.empty ? {} : sR.docs[0].data();
+
+      const unitCost  = Number(recipeData.cost || 0);
+      const totalCost = unitCost > 0 ? Number((unitCost * qty).toFixed(2)) : 0;
+
+      await addDoc(collection(db, "orders"), {
+        date: today,
+        venue: venueName,
+        type: "starting-par",
+        status: "sent",                    // treat as already sent so it rolls into cost
+        timestamp: serverTimestamp(),
+        sentAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        recipeNo: String(recipeNo).toUpperCase(),
+        recipeId: recipeData?.id || (recipeData?.recipeId || null),
+        item: recipeData?.description || recipeNo,
+        // Quantities we’re choosing to override:
+        qty: qty,
+        sendQty: qty,
+        // If you prefer to override pans instead, add:  pans: qty,
+        totalCost
+      });
+    }
+  } catch (err) {
+    console.error("syncProdOverrideIntoOrders failed:", err);
+  }
+}
+
+
 // 📤 Show one venue shipment (aggregated by recipe for the venue code)
-window.loadVenueShipment = function (venueCode) {
+// 🔄 UPDATED: friendlier typing + reliable Firestore saves
+window.loadVenueShipment = async function (venueCode) {
   window.currentVenueCode = venueCode;
 
+  // ---- ensure helpers exist (safe no-ops if you already defined them elsewhere)
+  window.saveProdShipmentOverride = window.saveProdShipmentOverride || (async function(venueCode, recipeNo, qty){
+    try {
+      const today = (typeof getTodayDate === "function") ? getTodayDate() : new Date().toISOString().slice(0,10);
+      const id = `${today}__${String(venueCode).toLowerCase()}__${String(recipeNo).toUpperCase()}`;
+      const ref = doc(db, "productionShipmentOverrides", id);
+      await setDoc(ref, {
+        date: today,
+        venueCode: String(venueCode).toLowerCase(),
+        recipeNo: String(recipeNo).toUpperCase(),
+        qty: Number(qty) || 0,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+      // console.log("💾 saved override", id, qty);
+    } catch (err) {
+      console.error("saveProdShipmentOverride failed:", err);
+    }
+  });
+
+  window.preloadProdShipmentOverridesForVenue = window.preloadProdShipmentOverridesForVenue || (async function(vCode){
+    window.accountingQtyOverrides = window.accountingQtyOverrides || {};
+    window.accountingQtyOverrides.productionShipments = window.accountingQtyOverrides.productionShipments || new Map();
+
+    const today = (typeof getTodayDate === "function") ? getTodayDate() : new Date().toISOString().slice(0,10);
+    const snap = await getDocs(query(
+      collection(db, "productionShipmentOverrides"),
+      where("date", "==", today),
+      where("venueCode", "==", String(vCode).toLowerCase())
+    ));
+
+    snap.forEach(d => {
+      const data = d.data() || {};
+      const recipeNo = String(data.recipeNo || "").toUpperCase();
+      const key = `${String(vCode)}__${recipeNo}`;
+      const v = Number(data.qty);
+      if (Number.isFinite(v)) {
+        window.accountingQtyOverrides.productionShipments.set(key, v);
+      }
+    });
+  });
+
+  // ---- mount point
   const container = document.getElementById("singleVenueShipmentContainer");
   container.innerHTML = "";
+
+  // ⏬ bring in any saved overrides for today for this venue (so inputs show persisted values)
+  try { await window.preloadProdShipmentOverridesForVenue(venueCode); } catch (e) { console.debug(e); }
 
   const venueLabel = (window.venueNames && window.venueNames[venueCode]) || venueCode.toUpperCase();
 
@@ -6728,21 +6873,96 @@ window.loadVenueShipment = function (venueCode) {
     emptyRow.innerHTML = `<td colspan="3" style="text-align:center; font-style:italic; color:gray;">No items</td>`;
     body.appendChild(emptyRow);
   } else {
-    // ensure we don't stack multiple listeners
-    const onInput = (e) => {
-      const el = e.target;
-      if (!el.classList.contains("acct-qty-input")) return;
-      setAcctQty(el.dataset.tab, el.dataset.key, el.value);
-    };
-    body.removeEventListener("input", onInput);
-    body.addEventListener("input", onInput);
+    // 🧯 de-dupe handlers so we don’t stack them
+    if (body._onProdInput)   body.removeEventListener("input", body._onProdInput);
+    if (body._onProdBlur)    body.removeEventListener("blur", body._onProdBlur, true);
+    if (body._onProdKeydown) body.removeEventListener("keydown", body._onProdKeydown, true);
 
+    // Debounce bucket for Firestore writes
+    window._prodSaveTimers = window._prodSaveTimers || {};
+
+    // 1) as you type: keep it light (no normalization), just update in-memory cache so UI elsewhere can read it
+    body._onProdInput = (e) => {
+      const el = e.target;
+      if (!el.classList?.contains("acct-qty-input")) return;
+      // do NOT coerce mid-typing; just stash string → better UX
+      if (!window.accountingQtyOverrides) window.accountingQtyOverrides = {};
+      if (!window.accountingQtyOverrides.productionShipments) window.accountingQtyOverrides.productionShipments = new Map();
+      window.accountingQtyOverrides.productionShipments.set(el.dataset.key, el.value);
+    };
+    body.addEventListener("input", body._onProdInput);
+
+    // 2) on Enter: normalize and persist
+    body._onProdKeydown = (e) => {
+      const el = e.target;
+      if (!(el?.classList?.contains("acct-qty-input"))) return;
+      if (e.key !== "Enter") return;
+
+      e.preventDefault();
+      // normalize (supports "1+1", "2*3", etc. if your helpers exist)
+      const v = (typeof normalizeQtyInputValue === "function")
+        ? normalizeQtyInputValue(el)
+        : Number(el.value);
+
+      if (!Number.isFinite(v)) return;
+
+      const [vCode, recipeNo] = String(el.dataset.key || "").split("__");
+      if (!vCode || !recipeNo) return;
+// inside body._onProdKeydown (on Enter) AND body._onProdBlur (on blur)
+// ...after you computed `v` (the numeric value) and parsed:  const [vCode, recipeNo] = el.dataset.key.split("__");
+
+const tKey = `prod__${el.dataset.key}`;
+clearTimeout(window._prodSaveTimers[tKey]);
+window._prodSaveTimers[tKey] = setTimeout(async () => {
+  try {
+    await window.saveProdShipmentOverride(vCode, recipeNo, v);   // keep your small overrides collection
+    await syncProdOverrideIntoOrders(vCode, recipeNo, v);        // ← NEW: push into orders
+  } catch (e) {
+    console.error("persist override + sync orders failed:", e);
+  }
+}, 200);
+
+
+      // keep focus & selection for quick repeated edits
+      el.select?.();
+    };
+    body.addEventListener("keydown", body._onProdKeydown, true);
+
+    // 3) on blur: also normalize and persist (covers mouse/tap away)
+    body._onProdBlur = (e) => {
+      const el = e.target;
+      if (!el.classList?.contains("acct-qty-input")) return;
+
+      const v = (typeof normalizeQtyInputValue === "function")
+        ? normalizeQtyInputValue(el)
+        : Number(el.value);
+
+      if (!Number.isFinite(v)) return;
+
+      const [vCode, recipeNo] = String(el.dataset.key || "").split("__");
+      if (!vCode || !recipeNo) return;
+
+      const tKey = `prod__${el.dataset.key}`;
+      clearTimeout(window._prodSaveTimers[tKey]);
+      window._prodSaveTimers[tKey] = setTimeout(() => {
+        window.saveProdShipmentOverride(vCode, recipeNo, v);
+      }, 200);
+    };
+    body.addEventListener("blur", body._onProdBlur, true);
+
+    // ---- rows
     keys.forEach(displayKey => {
       const { recipeNo, description, quantity } = rows[displayKey];
 
       // stable override key per venue+recipe
       const overrideKey = `${venueCode}__${recipeNo}`;
-      const value = getAcctQty("productionShipments", overrideKey, Number(quantity) || 0);
+
+      // Show persisted override if available; else live typed value; else fallback quantity
+      const persisted = window.accountingQtyOverrides?.productionShipments?.get(overrideKey);
+      const fallbackVal = Number(quantity) || 0;
+      const initial =
+        persisted != null && persisted !== "" ? persisted :
+        (typeof getAcctQty === "function" ? getAcctQty("productionShipments", overrideKey, fallbackVal) : fallbackVal);
 
       const tr = document.createElement("tr");
       tr.innerHTML = `
@@ -6750,19 +6970,24 @@ window.loadVenueShipment = function (venueCode) {
         <td>${description}</td>
         <td>
           <input
-            type="number"
-            step="0.01"
-            min="0"
+            type="text"
+            inputmode="decimal"
             class="acct-qty-input"
             data-tab="productionShipments"
             data-key="${overrideKey}"
-            value="${value}"
+            value="${initial}"
             style="width: 90px; text-align:right;"
+            autocomplete="off"
+            autocorrect="off"
+            spellcheck="false"
           />
         </td>
       `;
       body.appendChild(tr);
     });
+
+    // Optional: enable math helpers globally for these inputs (no harm if fn missing)
+    try { typeof enableMathOnInputs === "function" && enableMathOnInputs(".acct-qty-input", body); } catch {}
   }
 
   section.appendChild(table);
