@@ -1781,22 +1781,31 @@ window.renderStartingStatus = async function (venue, data) {
     where("date", "==", today)
   ));
 
-  // Totals (all sent) + pending (not received), compatible with old fields
-  const totalSentByRecipe = new Map();
-  const pendingByRecipe   = new Map();
+  // Build separate totals:
+  //   • totalPansByRecipe = sum of "pans"
+  //   • totalQtyByRecipe  = sum of "sendQty" (fallback "qty")
+  //   • pendingPansByRecipe = pans that are not yet received (for Receive button)
+  const totalPansByRecipe   = new Map();
+  const totalQtyByRecipe    = new Map();
+  const pendingPansByRecipe = new Map();
 
-  ordersSnapshot.forEach(docSnap => {
+  ordersSnapshot.forEach((docSnap) => {
     const o = docSnap.data();
     const recipeId = o.recipeId;
     if (!recipeId) return;
 
-    // 👇 compatible with old docs that used sendQty/qty
-    const sentVal = Number(o.pans ?? o.sendQty ?? o.qty ?? 0);
-    if (sentVal > 0) {
-      totalSentByRecipe.set(recipeId, (totalSentByRecipe.get(recipeId) || 0) + sentVal);
-      if (!(o.received || o.status === "received")) {
-        pendingByRecipe.set(recipeId, (pendingByRecipe.get(recipeId) || 0) + sentVal);
+    const pans = Number(o.pans || 0);
+    const qty  = Number((o.sendQty ?? o.qty) || 0);
+    const isReceived = (o.received === true) || (o.status === "received");
+
+    if (pans > 0) {
+      totalPansByRecipe.set(recipeId, (totalPansByRecipe.get(recipeId) || 0) + pans);
+      if (!isReceived) {
+        pendingPansByRecipe.set(recipeId, (pendingPansByRecipe.get(recipeId) || 0) + pans);
       }
+    }
+    if (qty > 0) {
+      totalQtyByRecipe.set(recipeId, (totalQtyByRecipe.get(recipeId) || 0) + qty);
     }
   });
 
@@ -1814,9 +1823,10 @@ window.renderStartingStatus = async function (venue, data) {
     }
     if (targetPans <= 0) return;
 
-    // Sent = ALL sent today (received + pending); Pending = not yet received
-    const sentPans    = Number(totalSentByRecipe.get(recipeId) || data?.sentPars?.[recipeId] || 0);
-    const pendingPans = Number(pendingByRecipe.get(recipeId) || 0);
+    // Sent & Pending (pans + qty shown; pending = pans not yet received)
+    const sentPans    = Number(totalPansByRecipe.get(recipeId) || 0);
+    const sentQty     = Number(totalQtyByRecipe.get(recipeId)  || data?.sentPars?.[recipeId] || 0); // keep legacy fallback
+    const pendingPans = Number(pendingPansByRecipe.get(recipeId) || 0);
 
     // Hide if fully satisfied and nothing pending
     if (sentPans >= targetPans && pendingPans <= 0) return;
@@ -1825,7 +1835,11 @@ window.renderStartingStatus = async function (venue, data) {
     row.innerHTML = `
       <td>${recipe.description || recipe.recipeNo || recipeId}</td>
       <td>${targetPans % 1 ? targetPans.toFixed(2) : targetPans}</td>
-      <td>${sentPans % 1 ? sentPans.toFixed(2) : sentPans}</td>
+      <td>
+        ${(sentPans % 1 ? sentPans.toFixed(2) : sentPans)} pans
+        /
+        ${(sentQty  % 1 ? sentQty.toFixed(2)  : sentQty)} qty
+      </td>
       <td>
         ${pendingPans > 0 ? `<button class="receive-btn" data-recipe-id="${recipeId}">Receive</button>` : ``}
       </td>
@@ -1842,8 +1856,9 @@ window.renderStartingStatus = async function (venue, data) {
     matchedCount++;
   });
 
-  console.log(`✅ Rendered ${matchedCount} ${venue} rows (Par=pans, Sent=sum of pans incl. legacy, Receive shown when pending>0)`);
+  console.log(`✅ Rendered ${matchedCount} ${venue} rows (Par=pans, Sent=“pans / qty”, Receive shown when pending>0)`);
 };
+
 
 
 
