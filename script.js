@@ -2533,6 +2533,7 @@ window.sendStartingPar = async function (recipeId, venue, sendQty) {
           totalCost: parseFloat(((Number(prev.totalCost || 0)) + costAdd).toFixed(2)),
           status: "sent",
           updatedAt: nowTs,
+          date: today
         });
       } else {
         await setDoc(orderRef, {
@@ -2558,17 +2559,24 @@ window.sendStartingPar = async function (recipeId, venue, sendQty) {
       }
 
       // PAR (in pans) for current guest count
-      const currentPar =
-        Number(recipeData?.pars?.[venue]?.[String(guestCount)] || 0);
-
-      // cost for what you are sending now (not the entire PAR)
-      const costAdd = parseFloat((pansTyped * costPerUnit).toFixed(2));
+      const currentPar = Number(recipeData?.pars?.[venue]?.[String(guestCount)] || 0);
 
       if (existing.exists()) {
         const prev = existing.data();
-        const prevPar = Number(prev.pans || 0); // previously satisfied PAR
-        const newPar  = Math.max(prevPar, currentPar); // grow to latest PAR if increased
+        const prevPar = Number(prev.pans || 0);           // previously satisfied PAR snapshot
+        const prevQty = Number(prev.qty || 0);            // cumulative pans sent
+        const newPar  = Math.max(prevPar, currentPar);    // grow to latest PAR if it increased
 
+        // ✅ Guard against double sends: only add what's still remaining
+        const remaining = Math.max(0, newPar - prevQty);
+        const addQty    = Math.min(pansTyped, remaining);
+
+        if (addQty <= 0) {
+          // nothing left to add — likely a duplicate click/second trigger
+          return;
+        }
+
+        const addCost = parseFloat((addQty * costPerUnit).toFixed(2));
         await updateDoc(orderRef, {
           type: "starting-par",
           venue,
@@ -2576,21 +2584,28 @@ window.sendStartingPar = async function (recipeId, venue, sendQty) {
           recipeNo,
           // "pans" tracks satisfied PAR; "qty" accumulates actual pans sent
           pans: newPar,
-          qty: (Number(prev.qty || 0) + pansTyped),
-          totalCost: parseFloat(((Number(prev.totalCost || 0)) + costAdd).toFixed(2)),
+          qty: parseFloat((prevQty + addQty).toFixed(2)),
+          // keep a mirror field used by some UIs (status tables sum sendQty first)
+          sendQty: parseFloat((Number(prev.sendQty || prevQty) + addQty).toFixed(2)),
+          totalCost: parseFloat(((Number(prev.totalCost || 0)) + addCost).toFixed(2)),
           date: today,
           status: "sent",
-          updatedAt: nowTs,
+          updatedAt: nowTs
         });
       } else {
+        // first send of the day — cap to today's PAR
+        const firstQty  = Math.min(pansTyped, currentPar);
+        const firstCost = parseFloat((firstQty * costPerUnit).toFixed(2));
+
         await setDoc(orderRef, {
           type: "starting-par",
           venue,
           recipeId,
           recipeNo,
-          pans: currentPar,   // ✅ satisfied PAR at time of first send
-          qty: pansTyped,     // actual pans sent now
-          totalCost: costAdd,
+          pans: currentPar,                 // snapshot of target PAR
+          qty: firstQty,                    // cumulative pans sent (starts here)
+          sendQty: firstQty,                // mirror for status tables
+          totalCost: firstCost,
           date: today,
           status: "sent",
           sentAt: nowTs,
