@@ -1,13 +1,57 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
 
+/* =========================
+   THEME & GLOBAL TOKENS
+   ========================= */
 :root {
   --bg: #202123;
   --panel-bg: #343541;
-  --highlight: #444654; 
+  --highlight: #444654;
   --text: #e8eaed;
   --border: #4a4a4a;
+
+  /* additions */
+  --radius: 10px;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.25);
+  --shadow-md: 0 4px 16px rgba(0,0,0,0.25);
+  --muted: #9aa0a6;
 }
-/* === Global Uniform Styles === */
+
+/* Fluid root font size for small → large screens */
+html {
+  font-size: clamp(15px, 1.5vw + 12px, 16px);
+  scroll-behavior: smooth;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Base layout */
+html, body {
+  margin: 0;
+  padding: 0;
+  height: auto;
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', sans-serif;
+  display: flex;
+  flex-direction: column;
+  -webkit-text-size-adjust: 100%;
+  touch-action: manipulation;
+  /* 🚫 Never allow horizontal scroll */
+  max-width: 100vw;
+  overflow-x: hidden !important;
+  overflow-y: auto;
+}
+
+/* Accessible focus */
+:where(button, [role="button"], a, input, select, textarea):focus-visible {
+  outline: 2px solid #8ab4f8;
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+/* =========================
+   FORM CONTROLS
+   ========================= */
 button,
 select,
 input[type="text"],
@@ -22,68 +66,53 @@ input[type="email"] {
   color: var(--text);
   outline: none;
   box-sizing: border-box;
+  min-height: 44px; /* thumb-friendly */
+  border-radius: var(--radius);
+  transition: background .15s ease, transform .08s ease, opacity .15s ease;
 }
-
-button:hover {
-  background: #5a5a6a;
-  cursor: pointer;
-}
+button:hover { background: #5a5a6a; cursor: pointer; }
+button:active { transform: translateY(1px); }
+button[disabled], button:disabled { opacity: .6; cursor: not-allowed; }
 
 select {
-  font-size: 1rem;
-  padding: 8px 32px 8px 12px; /* Add space for dropdown arrow */
+  padding: 8px 32px 8px 12px;
   border: 1px solid var(--border);
   border-radius: 4px;
-  background-color: #2c2d34; /* Slightly different from button */
+  background-color: #2c2d34;
   color: var(--text);
   appearance: none;
   background-image: url("data:image/svg+xml;charset=UTF-8,%3Csvg fill='%23e8eaed' height='24' viewBox='0 0 24 24' width='24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M7 10l5 5 5-5z'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
-  background-position: right 10px center;
-  background-size: 16px;
+  background-position: right 12px center;
+  background-size: 18px;
+  padding-right: 38px; /* space for arrow */
 }
 
-
-/* Optional: override inside labels for spacing */
 label > select,
-label > input {
-  margin-left: 8px;
-}
-
-
-html, body {
-  margin: 0;
-  padding: 0;
-  height: auto;
-  overflow-x: hidden;
-  overflow-y:auto;
-  background: var(--bg);
-  color: var(--text);
-  font-family: 'Inter', sans-serif;
-  display: flex;
-  flex-direction: column;
-  font-size: 16px !important;
-  -webkit-text-size-adjust: 100%;
-  touch-action: manipulation;
-}
+label > input { margin-left: 8px; }
 
 input, textarea, button, select {
-  font-size: 16px !important;
+  font-size: 16px !important; /* avoid iOS zoom */
   -webkit-text-size-adjust: 100%;
 }
+input:focus, textarea:focus { caret-color: auto; }
 
-input:focus, textarea:focus {
-  caret-color: auto;
-}
+/* Prevent layout shift on number inputs (steppers) */
+input[type="number"] { -moz-appearance: textfield; }
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 
+/* =========================
+   TOP BAR / HEADER
+   ========================= */
 .topbar {
   position: sticky;
   top: 0;
   background: var(--panel-bg);
-  padding: 8px;
-  z-index: 50;
+  padding: clamp(6px, 1.2vw, 10px);
+  z-index: 100; /* above header-container but below chat */
+  box-shadow: var(--shadow-sm);
 }
-
 #viewSelect {
   width: 100%;
   font-size: 1em;
@@ -92,13 +121,6 @@ input:focus, textarea:focus {
   border-radius: 4px;
   background: var(--highlight);
   color: var(--text);
-}
-
-.screen {
-  flex: 1;
-  overflow-y: auto;
-  padding: 0 10px;
-  display: none;
 }
 
 .header-container {
@@ -110,86 +132,87 @@ input:focus, textarea:focus {
   display: flex;
   flex-direction: column;
   align-items: center;
+  box-shadow: var(--shadow-sm);
 }
-
 .header-container h2 {
   margin: 4px 0;
   text-align: center;
 }
 
+/* =========================
+   SCREENS
+   ========================= */
+.screen {
+  flex: 1;
+  display: none;
+  overflow-y: auto;
+  padding-inline: clamp(8px, 2vw, 16px);
+  padding-bottom: max(12px, env(safe-area-inset-bottom)); /* iOS safe area */
+}
+
+/* =========================
+   TABS
+   ========================= */
 .area-tabs {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   margin: 4px;
+  padding: 4px 6px;
+  overflow-x: auto;                 /* no page sideways scroll */
+  -webkit-overflow-scrolling: touch;
+  scroll-snap-type: x mandatory;
 }
+.area-tabs::-webkit-scrollbar { display: none; }
+.area-tabs { scrollbar-width: none; }
 
 .area-tabs button {
-  padding: 6px 12px;
-  border: none;
+  flex: 0 0 auto;
+  scroll-snap-align: start;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
   background: var(--highlight);
   color: var(--text);
-  border-radius: 4px;
+  border-radius: 999px;
   cursor: pointer;
   font-weight: 500;
+  transition: transform .12s ease, background .15s ease;
+}
+.area-tabs button:active { transform: scale(0.98); }
+.area-tabs button.active { background: #5a5a6a; }
+.tab-button.active {
+  border: 2px solid #8ab4f8;
+  background-color: rgba(138, 180, 248, 0.12);
+  color: #e8f0fe;
+  font-weight: bold;
+  border-radius: 6px;
 }
 
-.area-tabs button.active {
-  background: #5a5a6a;
-}
-
+/* =========================
+   ORDER CONTROLS
+   ========================= */
 .order-controls {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 8px;
-  justify-content: center; /* ✅ centers the controls */
+  gap: 8px 12px;
+  justify-content: center;
   margin: 8px 0;
+  padding: 4px 0;
 }
-
-
 .order-controls label {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   white-space: nowrap;
 }
 
-/* Sizing for specific inputs */
-.order-controls select {
-  width: 150px;
-}
+/* Specific sizing */
+.order-controls select { width: 150px; }
+.order-controls input[type="number"] { width: 60px; }
+.order-controls input[type="text"] { width: 220px; max-width: 100%; }
+.order-controls button { white-space: nowrap; }
 
-.order-controls input[type="number"] {
-  width: 60px;
-}
-
-.order-controls input[type="text"] {
-  width: 220px;
-  max-width: 100%;
-}
-
-.order-controls button {
-  white-space: nowrap;
-}
-
-
-
-/* Responsive fallback for small screens */
-@media (max-width: 600px) {
-  .order-controls {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .order-controls label,
-  .order-controls select,
-  .order-controls input,
-  .order-controls button {
-    width: 100%;
-  }
-}
-
-
+/* Unified control look */
 .order-controls select,
 .order-controls input,
 .order-controls button {
@@ -201,21 +224,38 @@ input:focus, textarea:focus {
   color: var(--text);
 }
 
+/* Mobile: stack & full width; no overflow */
+@media (max-width: 600px) {
+  .order-controls { flex-direction: column; align-items: stretch; }
+  .order-controls label,
+  .order-controls select,
+  .order-controls input,
+  .order-controls button,
+  #viewSelect {
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box;
+  }
+}
+
+/* =========================
+   TABLES
+   ========================= */
 table {
-  width: 100%;
+  width: 100% !important;
   border-collapse: collapse;
   margin-top: 4px;
+  border-radius: 8px;
+  overflow: clip;
+  box-shadow: var(--shadow-sm);
+  table-layout: fixed;        /* prevents pushing wider than viewport */
+  word-wrap: break-word;
 }
-
 th, td {
   border: 1px solid var(--border);
-  padding: 6px;
+  padding: clamp(6px, 1.2vw, 10px);
 }
-
-th {
-  background: #40414f;
-}
-
+th { background: #40414f; }
 table button {
   font-size: 1em;
   padding: 6px 10px;
@@ -225,36 +265,29 @@ table button {
   border-radius: 4px;
 }
 
+/* Small screens = card rows */
 @media (max-width: 600px) {
-  #viewSelect {
-    font-size: 0.9em;
-  }
-
-  .order-controls select,
-  .order-controls input,
-  .order-controls button {
-    width: 100%;
-    box-sizing: border-box;
-  }
-
-  table, thead, tbody, th, td, tr {
-    display: block;
-  }
-
-  thead {
-    display: none;
-  }
-
+  table, thead, tbody, th, td, tr { display: block; }
+  thead { display: none; }
   tr {
     margin-bottom: 10px;
+    background: rgba(255,255,255,0.02);
+    border-radius: 8px;
+    box-shadow: var(--shadow-sm);
+    padding: 6px;
   }
-
   td {
-    padding-left: 50%;
+    border: none;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
     position: relative;
     text-align: right;
+    margin: 0;
+    padding-block: 10px;
+    padding-left: 50%;
+    word-break: break-word;
+    overflow-wrap: break-word;
   }
-
+  td:last-child { border-bottom: none; }
   td::before {
     content: attr(data-label);
     position: absolute;
@@ -263,6 +296,17 @@ table button {
     white-space: nowrap;
     font-weight: bold;
     text-align: left;
+    opacity: .85;
+    color: var(--muted);
+  }
+}
+
+/* Larger screens: sticky headers (except station tables overridden below) */
+@media (min-width: 601px) {
+  table thead th {
+    position: sticky;
+    top: calc(48px + 8px);
+    z-index: 10;
   }
 }
 
@@ -273,31 +317,14 @@ table button {
 #OvenTable th,
 #FryerTable th,
 #PantryTable th,
-#PastryTable th {
-  position: static !important;
-}
+#PastryTable th { position: static !important; }
 
-.overdue td {
-  background-color: #ef9a9a;
-}
+/* Overdue row coloring (dark-friendly) */
+.overdue td { background-color: rgba(244, 67, 54, 0.15); }
 
-.waste-submit-all {
-  font-size: 1em;
-  padding: 6px 10px;
-  background: var(--highlight);
-  color: var(--text);
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  margin-bottom: 8px;
-}
-.tab-button.active {
-  border: 2px solid #007bff;
-  background-color: #e9f3ff;
-  font-weight: bold;
-  border-radius: 6px;
-}
-
+/* =========================
+   CHAT BAR
+   ========================= */
 .chat-section {
   position: fixed;
   bottom: 0;
@@ -306,50 +333,33 @@ table button {
   background: var(--panel-bg);
   border-top: 1px solid var(--border);
   padding: 12px 16px;
-  z-index: 999;
+  z-index: 9999;
   box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.3);
   box-sizing: border-box;
   transition: transform 0.3s ease, box-shadow 0.3s ease;
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  border-top: 1px solid rgba(255,255,255,0.08);
 }
-
-
-.chat-section.highlight {
-  box-shadow: 0 -2px 12px 4px #facc15; /* yellow glow for new message */
-}
-
-.chat-section h3 {
-  margin: 0 0 8px;
-  font-size: 16px;
-  color: var(--text);
-  display: inline-block;
-}
-
+.chat-section.highlight { box-shadow: 0 -2px 12px 4px #facc15; }
 .chat-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  height: 32px; /* ✨ fixed height */
+  height: 40px; /* thumb-friendly */
   overflow: hidden;
 }
-
-.chat-section.minimized {
-  transform: translateY(calc(100% - 44px)); /* Only shows the header */
-}
-
-
-
+.chat-section.minimized { transform: translateY(calc(100% - 56px)); }
 .chat-toggle-btn {
   background: transparent;
   border: none;
-  font-size: 18px;
+  font-size: 20px;
   color: var(--text);
   cursor: pointer;
   padding: 0 8px;
   height: 100%;
 }
-
 .chat-messages {
-  max-height: 180px;
+  max-height: min(40vh, 220px);
   overflow-y: auto;
   background: var(--highlight);
   border: 1px solid var(--border);
@@ -359,8 +369,9 @@ table button {
   color: var(--text);
   box-sizing: border-box;
   width: 100%;
+  line-height: 1.35;
+  border-radius: 8px;
 }
-
 .chat-input-row {
   display: flex;
   flex-wrap: nowrap;
@@ -368,6 +379,7 @@ table button {
   width: 100%;
   box-sizing: border-box;
 }
+@media (max-width: 600px) { .chat-input-row { flex-wrap: wrap !important; } }
 
 #chatInput {
   flex: 1;
@@ -377,12 +389,9 @@ table button {
   border-radius: 4px;
   background: var(--bg);
   color: var(--text);
-  min-width: 0;
+  min-width: 0; /* prevent overflow */
 }
-
-#chatInput::placeholder {
-  color: #aaa;
-}
+#chatInput::placeholder { color: #aaa; }
 
 .chat-section button {
   padding: 8px 12px;
@@ -395,13 +404,27 @@ table button {
   white-space: nowrap;
   flex-shrink: 0;
 }
+.chat-section button:hover { background: #5a5a6a; }
 
-.chat-section button:hover {
-  background: #5a5a6a;
+/* Give the page bottom room for chat bar */
+body { padding-bottom: max(160px, calc(140px + env(safe-area-inset-bottom))); }
+
+/* =========================
+   MISC COMPONENTS
+   ========================= */
+.waste-submit-all {
+  font-size: 1em;
+  padding: 6px 10px;
+  background: var(--highlight);
+  color: var(--text);
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  margin-bottom: 8px;
 }
 
 #addonsFilterSelect {
-  width: 150px; /* or however wide you want it */
+  width: 150px;
   min-width: 150px;
   max-width: 150px;
   text-overflow: ellipsis;
@@ -410,29 +433,24 @@ table button {
   padding: 6px;
   border-radius: 4px;
   border: 1px solid #ccc;
-  appearance: none; /* optional, for consistent styling */
+  appearance: none;
 }
-
 
 .form-grid {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  max-width: 400px;
+  gap: 14px;
+  width: 100%;
+  max-width: min(720px, 100%);
   margin-top: 20px;
 }
-
-.form-group {
-  display: flex;
-  flex-direction: column;
-}
-
+.form-group { display: flex; flex-direction: column; }
 .form-group label {
   font-weight: 600;
   margin-bottom: 6px;
-  color: var(--text); /* Match your text color */
+  color: var(--text);
+  opacity: .95;
 }
-
 .styled-select {
   padding: 8px;
   border-radius: 6px;
@@ -445,105 +463,253 @@ table button {
 .save-btn {
   padding: 10px 20px;
   border: none;
-  background-color: var(--highlight); /* Gray button */
+  background-color: var(--highlight);
   color: var(--text);
-  border-radius: 6px;
+  border-radius: 10px;
   font-size: 1rem;
   cursor: pointer;
   align-self: flex-start;
   transition: background-color 0.2s ease;
+  box-shadow: var(--shadow-sm);
 }
+.save-btn:hover { background-color: var(--border); }
+.save-btn:active { transform: translateY(1px); }
 
-.save-btn:hover {
-  background-color: var(--border); /* Slightly darker gray on hover */
-}
-/* iPads and Tablets (Portrait and Landscape) */
-@media (min-width: 601px) and (max-width: 1024px) {
-  .order-controls {
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 12px 16px;
-  }
-
-  .order-controls select,
-  .order-controls input,
-  .order-controls button {
-    font-size: 1.2em;
-    padding: 10px 14px;
-    min-width: 160px;
-  }
-
-  .order-controls input[type="text"] {
-    width: 250px;
-  }
-
-  #viewSelect {
-    font-size: 1.1em;
-    padding: 10px;
-  }
-
-  .area-tabs {
-    flex-wrap: wrap;
-    justify-content: center;
-  }
-
-  table th, table td {
-    font-size: 1rem;
-    padding: 10px;
-  }
-
-  .chat-section h3 {
-    font-size: 18px;
-  }
-
-  .chat-section button,
-  #chatInput {
-    font-size: 16px;
-  }
-}
-body {
-  padding-bottom: 150px; /* Adjust based on height of chat header */
-}
-.addon-inputs {
-  margin-bottom: 10px;
-}
+.addon-inputs { margin-bottom: 10px; }
 .addon-inputs select,
 .addon-inputs input,
 .addon-inputs button {
   margin-right: 5px;
   padding: 4px;
+  min-height: 40px;
+  border-radius: 8px;
 }
-
 
 .ready-btn {
   padding: 8px 12px;
   font-size: 1rem;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 10px;
   background: var(--highlight);
   color: var(--text);
   transition: background 0.2s ease;
+  box-shadow: var(--shadow-sm);
+}
+.ready-btn:hover { background: #5a5a6a; }
+
+/* Utilities */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 10px; border-radius: 999px;
+  background: var(--highlight); border: 1px solid var(--border);
+  font-size: .95rem; line-height: 1;
+}
+.container-pad {
+  padding-inline: clamp(8px, 2vw, 16px);
+  padding-block: clamp(8px, 1.8vw, 16px);
 }
 
-.ready-btn:hover {
-  background: #5a5a6a;
-}
-
-
-/* Spinner animation */
+/* Spinner */
 .spinner {
   margin: 10px auto;
-  width: 24px;
-  height: 24px;
+  width: clamp(22px, 2.8vw, 26px);
+  height: clamp(22px, 2.8vw, 26px);
   border: 4px solid #ccc;
   border-top: 4px solid #333;
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
+@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 
-@keyframes spin {
-  0% { transform: rotate(0deg); }
-  100% { transform: rotate(360deg); }
+/* =========================
+   RESPONSIVE TUNING
+   ========================= */
+/* iPads and Tablets */
+@media (min-width: 601px) and (max-width: 1024px) {
+  .header-container { padding: 10px 8px; }
+  .area-tabs { gap: 10px; }
+  .order-controls { gap: 12px 18px; }
+  .order-controls select,
+  .order-controls input,
+  .order-controls button {
+    min-height: 46px;
+    border-radius: 12px;
+    font-size: 1.2em;
+    padding: 10px 14px;
+    min-width: 160px;
+  }
+  .order-controls input[type="text"] { width: 250px; }
+  #viewSelect { font-size: 1.1em; padding: 10px; }
+  table th, table td { font-size: 1rem; padding: 10px; }
+  .chat-section h3 { font-size: 18px; }
+  .chat-section button, #chatInput { font-size: 16px; }
 }
 
+/* Ultra-small phones */
+@media (max-width: 360px) {
+  #viewSelect { font-size: .95em; }
+  .order-controls label { white-space: normal; }
+  .area-tabs button { padding: 8px 10px; }
+}
 
+/* Respect reduced motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Subtle custom scrollbars (where supported) */
+* { scrollbar-width: thin; scrollbar-color: #60606b transparent; }
+*::-webkit-scrollbar { height: 10px; width: 10px; }
+*::-webkit-scrollbar-thumb { background: #60606b; border-radius: 999px; }
+*::-webkit-scrollbar-track { background: transparent; }
+
+
+/* =========================
+   FINAL MOBILE OVERFLOW GUARD
+   ========================= */
+
+/* Apply to every screen container */
+.screen {
+  overflow-x: hidden;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+/* Make all children respect viewport width */
+@media (max-width: 600px) {
+  .screen * {
+    max-width: 100% !important;
+  }
+
+  /* Force flex rows to wrap instead of overflowing */
+  .screen :where(.row, .flex, .summary, .totals, .stats, .metrics, .kpi) {
+    display: flex;
+    flex-wrap: wrap !important;
+    justify-content: space-between;
+    gap: 8px 12px;
+    width: 100%;
+  }
+
+  /* If the KPI values are in table form, make them stack */
+  .screen table:where(.summary, .totals, .stats, .metrics, .kpi) {
+    display: block;
+    width: 100% !important;
+  }
+  .screen table:where(.summary, .totals, .stats, .metrics, .kpi) thead { display: none; }
+  .screen table:where(.summary, .totals, .stats, .metrics, .kpi) tr {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px 12px;
+    width: 100%;
+  }
+
+  /* Allow long labels to wrap instead of pushing */
+  .screen :where(th, td, label, span, p) {
+    white-space: normal !important;
+  }
+}
+
+/* =========================
+   KPI / Metrics Styling
+   ========================= */
+
+/* Base KPI look */
+.summary, .totals, .stats, .metrics, .kpi {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+  justify-content: space-between;
+  width: 100%;
+  margin: 8px 0;
+  font-size: 1rem;
+}
+
+.summary div,
+.totals div,
+.stats div,
+.metrics div,
+.kpi div {
+  flex: 1 1 auto;
+  min-width: 120px;
+  text-align: center;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(255,255,255,0.05);
+  box-shadow: var(--shadow-sm);
+}
+
+/* Labels smaller, values bolder */
+.summary div span.label,
+.totals div span.label,
+.stats div span.label,
+.metrics div span.label,
+.kpi div span.label {
+  display: block;
+  font-size: 0.85em;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.summary div span.value,
+.totals div span.value,
+.stats div span.value,
+.metrics div span.value,
+.kpi div span.value {
+  display: block;
+  font-size: 1.1em;
+  font-weight: 600;
+  color: #e8f0fe; /* brighter so it pops */
+  margin-top: 2px;
+  word-break: break-word;
+}
+
+/* Mobile scaling */
+@media (max-width: 600px) {
+  .summary, .totals, .stats, .metrics, .kpi {
+    font-size: 0.85rem;
+    gap: 8px 12px;
+  }
+
+  .summary div,
+  .totals div,
+  .stats div,
+  .metrics div,
+  .kpi div {
+    min-width: 45%; /* force into 2-column grid */
+    font-size: 0.9rem;
+  }
+
+  .summary div span.label,
+  .totals div span.label,
+  .stats div span.label,
+  .metrics div span.label,
+  .kpi div span.label {
+    font-size: 0.75rem;
+  }
+
+  .summary div span.value,
+  .totals div span.value,
+  .stats div span.value,
+  .metrics div span.value,
+  .kpi div span.value {
+    font-size: 1rem;
+  }
+}
+
+/* Ultra-small phones */
+@media (max-width: 400px) {
+  .summary div,
+  .totals div,
+  .stats div,
+  .metrics div,
+  .kpi div {
+    min-width: 100%; /* stack vertically */
+  }
+}
