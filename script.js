@@ -7088,10 +7088,8 @@ window.loadAccountingWaste = async function () {
     const rawDate = hasDateStr ? data.date : todayStr;  // fall back if missing
     const formattedDate = formatDateLocal(rawDate);     // e.g., 8/11/2025
 
-const venue = data.venue || "";
-const locationCode = (window.venueCodes && window.venueCodes[venue]) ? window.venueCodes[venue] : venue;
-
-
+    const venue = data.venue || "";
+    const locationCode = (window.venueCodes && window.venueCodes[venue]) ? window.venueCodes[venue] : venue;
 
     const description = data.item || "";
     const descKey = description.toLowerCase();
@@ -7118,7 +7116,6 @@ const locationCode = (window.venueCodes && window.venueCodes[venue]) ? window.ve
     const row = document.createElement("tr");
     row.innerHTML = `
       <td>${formattedDate}</td>
-      <td>${locationCode}</td>
       <td>${recipeNoOrItemNo}</td>
       <td>${description}</td>
       <td>
@@ -7147,7 +7144,7 @@ const locationCode = (window.venueCodes && window.venueCodes[venue]) ? window.ve
 
   if (rendered === 0) {
     const empty = document.createElement("tr");
-    empty.innerHTML = `<td colspan="5" style="text-align:center; font-style:italic; color:gray;">No waste entries for today</td>`;
+    empty.innerHTML = `<td colspan="4" style="text-align:center; font-style:italic; color:gray;">No waste entries for today</td>`;
     tableBody.appendChild(empty);
   }
 };
@@ -7164,18 +7161,19 @@ window.copyWasteTableToClipboard = function () {
 
   rows.forEach(row => {
     const cells = row.querySelectorAll("td");
-    if (cells.length < 5) return; // skip "No entries" row
+
+    // Skip non-data rows (e.g., "No waste entries" which has a single colspan cell)
+    if (cells.length < 4) return;
 
     const date = cells[0]?.innerText.trim() ?? "";
-    const location = cells[1]?.innerText.trim() ?? "";
-    const code = cells[2]?.innerText.trim() ?? "";
-    const description = cells[3]?.innerText.trim() ?? "";
+    const code = cells[1]?.innerText.trim() ?? "";
+    const description = cells[2]?.innerText.trim() ?? "";
 
-    // ⬇️ Get the value from the input if present
-    const qtyInput = cells[4]?.querySelector("input");
-    const qty = qtyInput ? qtyInput.value : (cells[4]?.innerText.trim() ?? "");
+    // Read the input value if present, otherwise the cell text
+    const qtyInput = cells[3]?.querySelector("input");
+    const qty = qtyInput ? qtyInput.value : (cells[3]?.innerText.trim() ?? "");
 
-    tsv += [date, location, code, description, qty].join("\t") + "\n";
+    tsv += [date, code, description, qty].join("\t") + "\n";
   });
 
   navigator.clipboard.writeText(tsv)
