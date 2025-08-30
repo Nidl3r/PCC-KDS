@@ -612,16 +612,15 @@ function renderPrepParsTable(items, tbody) {
   tbody.innerHTML = "";
   for (const it of items) {
     const tr = document.createElement("tr");
-
     const remaining = Math.max(0, Number(it.prepPar) - Number(it.preppedToday));
 
     tr.innerHTML = `
-      <td>${it.venue}</td>
-      <td>${titleCase(it.category)}</td>
-      <td>${it.recipeNo || ""} — ${escapeHtml(it.description || "")}</td>
-      <td style="text-align:right;">${it.prepPar}</td>
-      <td style="text-align:right;">${it.preppedToday}</td>
-      <td>
+      <td data-label="Venue">${it.venue}</td>
+      <td data-label="Area">${titleCase(it.category)}</td>
+      <td data-label="Item">${it.recipeNo || ""} — ${escapeHtml(it.description || "")}</td>
+      <td data-label="Prep Par" style="text-align:right;">${it.prepPar}</td>
+      <td data-label="Prepped Today" style="text-align:right;">${it.preppedToday}</td>
+      <td data-label="Enter Pans Made">
         <input
           type="text"
           inputmode="decimal"
@@ -635,17 +634,18 @@ function renderPrepParsTable(items, tbody) {
           data-category="${it.category || ""}"
         />
       </td>
-      <td>
-        <button onclick="savePrepPans(this)">Save</button>
+      <td data-label="Save">
+        <button class="save-btn" onclick="savePrepPans(this)">Save</button>
       </td>
     `;
-
     tbody.appendChild(tr);
   }
 
-  // math-eval inputs like 2*3, 10/4, etc. (reuse your existing helper)
+  // math inputs like 2*3, 10/4, etc., same as other screens
   enableMathOnInputs(".prep-input", tbody);
 }
+
+
 
 async function savePrepPans(btn) {
   const row  = btn.closest("tr");
