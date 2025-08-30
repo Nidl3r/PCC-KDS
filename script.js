@@ -446,6 +446,254 @@ function showAccountingTab(tabName) {
 window.showAccountingTab = showAccountingTab;
 
 
+
+//**Prep Pars main kitchen  */
+
+// ===================== MAIN KITCHEN — PREP PARS (from `prepPars` collection) =====================
+
+// Venue codes → names (same mapping style you use elsewhere)
+const VENUE_CODE_TO_NAME = {
+  b001: "Aloha",
+  b002: "Ohana",
+  b003: "Gateway",
+  c002: "Concessions",
+  c003: "Concessions",
+  c004: "Concessions",
+};
+
+// Display order requested
+const PREP_VENUE_ORDER = ["Gateway", "Aloha", "Ohana", "Concessions"];
+
+// Public entry points
+window.loadMainKitchenPrepPars   = loadMainKitchenPrepPars;
+window.reloadMainKitchenPrepPars = loadMainKitchenPrepPars;
+window.savePrepPans              = savePrepPans;
+
+async function loadMainKitchenPrepPars() {
+  const tbody = document.getElementById("prepParsTbody");
+  if (!tbody) return;
+
+  showTableLoading(tbody, "Loading Prep Pars…");
+
+  const today = getTodayDate();
+
+  // 1) Today's guest counts (saved)
+  let guestCounts = {};
+  try {
+    const gSnap = await getDoc(doc(db, "guestCounts", today));
+    guestCounts = gSnap.exists() ? (gSnap.data() || {}) : {};
+  } catch {}
+
+  // 2) Pull prep par definitions
+  //    These docs look like:
+  //    { category, description, recipeNo, station, venueCodes:[], pars:{ Aloha:{300:..}, Gateway:{350:..}, Ohana:{..} } }
+  const snap = await getDocs(query(
+    collection(db, "prepPars"),
+    where("venueCodes", "array-contains-any", ["b001","b002","b003","c002","c003","c004"])
+  ));
+
+  const rows = [];
+  snap.forEach(d => {
+    const data = d.data() || {};
+    const category = String(data.category || "").toUpperCase();
+    const desc     = data.description || "";
+    const recipeNo = data.recipeNo || "";
+    const venueCodes = Array.isArray(data.venueCodes) ? data.venueCodes : [];
+    const parsObj    = data.pars || {};
+
+    // For each venue this prep item belongs to, compute the par using today's guestCounts
+    for (const code of venueCodes) {
+      const venue = VENUE_CODE_TO_NAME[String(code).toLowerCase()];
+      if (!venue) continue;
+
+      const savedGuest = Number(guestCounts?.[venue] || 0);
+      const parForVenue = selectParForGuestCount(parsObj?.[venue], savedGuest);
+
+      rows.push({
+        prepId: d.id,
+        venue,
+        category,           // HOTFOODS | PANTRY | BAKERY | ...
+        description: desc,
+        recipeNo,
+        prepPar: parForVenue,
+      });
+    }
+  });
+
+  // 3) Apply filters (Venue + Area)
+  const venueFilter = (document.getElementById("prepVenueFilter")?.value || "ALL").toUpperCase();
+  const areaFilter  = (document.getElementById("prepAreaFilter")?.value  || "ALL").toUpperCase();
+
+  const filtered = rows.filter(r => {
+    if (venueFilter !== "ALL" && r.venue.toUpperCase() !== venueFilter) return false;
+    if (areaFilter  !== "ALL" && r.category !== areaFilter) return false;
+    return true;
+  });
+
+  // 4) Load today's prepped totals
+  const preppedTodayByItem = await fetchTodayPreppedTotals(today);
+
+  // 5) Merge “prepped today”
+  const items = filtered.map(r => ({
+    ...r,
+    preppedToday: Number(preppedTodayByItem.get(r.prepId)?.[r.venue] || 0),
+  }));
+
+  // 6) Sort: Gateway → Aloha → Ohana → Concessions, then by category, then recipeNo
+  items.sort((a, b) => {
+    const vi = PREP_VENUE_ORDER.indexOf(a.venue);
+    const vj = PREP_VENUE_ORDER.indexOf(b.venue);
+    if (vi !== vj) return vi - vj;
+    const ca = a.category.localeCompare(b.category);
+    if (ca !== 0) return ca;
+    return String(a.recipeNo).localeCompare(String(b.recipeNo));
+  });
+
+  // 7) Render
+  renderPrepParsTable(items, tbody);
+}
+
+// Pick a par from a map like { "250": 110, "300": 130, ... } based on today's guest count.
+// Strategy:
+//  - exact match → use it
+//  - else floor to the largest key <= guestCount
+//  - if none, return 0
+function selectParForGuestCount(venueMap, guestCount) {
+  if (!venueMap || typeof venueMap !== "object") return 0;
+
+  const keys = Object.keys(venueMap)
+    .map(k => Number(k))
+    .filter(n => Number.isFinite(n))
+    .sort((a, b) => a - b);
+
+  if (keys.length === 0) return 0;
+
+  if (Object.prototype.hasOwnProperty.call(venueMap, String(guestCount))) {
+    return Number(venueMap[String(guestCount)]) || 0;
+  }
+
+  // find floor
+  let chosen = 0;
+  for (const k of keys) {
+    if (k <= guestCount) chosen = k; else break;
+  }
+  return Number(venueMap[String(chosen)] || 0);
+}
+
+// Read one upserted doc per day+prepId+venue: `${date}|${prepId}|${venue}`
+async function fetchTodayPreppedTotals(todayStr) {
+  const totals = new Map(); // prepId -> { [venue]: pans }
+
+  const qSnap = await getDocs(query(
+    collection(db, "prepLogs"),
+    where("date", "==", todayStr)
+  ));
+
+  qSnap.forEach(s => {
+    const d = s.data() || {};
+    const pid = d.prepId;
+    const v   = d.venue;
+    const n   = Number(d.pans || 0);
+    if (!pid || !v) return;
+
+    if (!totals.has(pid)) totals.set(pid, {});
+    totals.get(pid)[v] = n;
+  });
+
+  return totals;
+}
+
+function renderPrepParsTable(items, tbody) {
+  if (!Array.isArray(items) || items.length === 0) {
+    showTableEmpty(tbody, "No prep items to show.");
+    return;
+  }
+
+  tbody.innerHTML = "";
+  for (const it of items) {
+    const tr = document.createElement("tr");
+
+    const remaining = Math.max(0, Number(it.prepPar) - Number(it.preppedToday));
+
+    tr.innerHTML = `
+      <td>${it.venue}</td>
+      <td>${titleCase(it.category)}</td>
+      <td>${it.recipeNo || ""} — ${escapeHtml(it.description || "")}</td>
+      <td style="text-align:right;">${it.prepPar}</td>
+      <td style="text-align:right;">${it.preppedToday}</td>
+      <td>
+        <input
+          type="text"
+          inputmode="decimal"
+          class="prep-input"
+          style="width:90px;text-align:right;"
+          placeholder="${remaining}"
+          value=""
+          data-prep-id="${it.prepId}"
+          data-venue="${it.venue}"
+          data-recipe-no="${it.recipeNo || ""}"
+          data-category="${it.category || ""}"
+        />
+      </td>
+      <td>
+        <button onclick="savePrepPans(this)">Save</button>
+      </td>
+    `;
+
+    tbody.appendChild(tr);
+  }
+
+  // math-eval inputs like 2*3, 10/4, etc. (reuse your existing helper)
+  enableMathOnInputs(".prep-input", tbody);
+}
+
+async function savePrepPans(btn) {
+  const row  = btn.closest("tr");
+  const input = row?.querySelector(".prep-input");
+  if (!input) return;
+
+  const v = normalizeQtyInputValue(input);
+  if (!Number.isFinite(v) || v < 0) {
+    alert("Enter a valid pans number (0 or more).");
+    return;
+  }
+
+  const prepId   = input.dataset.prepId;
+  const recipeNo = input.dataset.recipeNo || "";
+  const venue    = input.dataset.venue;
+  const category = (input.dataset.category || "").toUpperCase();
+  const today    = getTodayDate();
+
+  const docId = `${today}|${prepId}|${venue}`;
+  const ref   = doc(db, "prepLogs", docId);
+
+  try {
+    await setDoc(ref, {
+      date: today,
+      prepId,
+      recipeNo,
+      venue,
+      category,
+      pans: Number(v),
+      updatedAt: serverTimestamp(),
+    }, { merge: true });
+
+    row.style.backgroundColor = "rgba(28, 150, 80, 0.12)";
+    setTimeout(() => (row.style.backgroundColor = ""), 450);
+
+    loadMainKitchenPrepPars();
+  } catch (e) {
+    console.error("savePrepPans failed:", e);
+    alert("Failed to save prep value.");
+  }
+}
+
+// tiny helpers
+function titleCase(s="") { return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase(); }
+function escapeHtml(s="") {
+  return s.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
+}
+
 // ✅ Render kitchen add ons
 
 
@@ -879,14 +1127,13 @@ window.showAreaSection = function (area, sectionId) {
 
 window.showKitchenSection = function (sectionId) {
   const mainKitchen = document.getElementById("main-kitchen");
+  if (!mainKitchen) { console.warn("#main-kitchen not found"); return; }
 
-  // Hide all sections (now includes 'lunch-section')
+  // Hide all sections (now includes 'prep-section')
   const allSections = mainKitchen.querySelectorAll(
-    ".order-section, .starting-section, .waste-section, .returns-section, .lunch-section"
+    ".order-section, .starting-section, .waste-section, .returns-section, .lunch-section, .prep-section"
   );
-  allSections.forEach(sec => {
-    sec.style.display = "none";
-  });
+  allSections.forEach(sec => { sec.style.display = "none"; });
 
   // Show selected section
   const sectionToShow = mainKitchen.querySelector(`.${sectionId}-section`);
@@ -904,20 +1151,20 @@ window.showKitchenSection = function (sectionId) {
 
   // Show send controls only for 'starting' if element exists
   const controls = document.getElementById("mainKitchenControls");
-  if (controls) {
-    controls.style.display = sectionId === "starting" ? "flex" : "none";
-  }
+  if (controls) controls.style.display = sectionId === "starting" ? "flex" : "none";
 
-  // Load section-specific data
-  if (sectionId === "starting") {
-    loadMainKitchenStartingPars();
-  } else if (sectionId === "waste") {
-    loadMainKitchenWaste();
-  } else if (sectionId === "returns") {
-    loadMainKitchenReturns();
-  } else if (sectionId === "lunch") {
-    loadMainKitchenLunch();
-  }
+  // Load section-specific data (added 'prep')
+  const loaders = {
+    starting: window.loadMainKitchenStartingPars,
+    waste:    window.loadMainKitchenWaste,
+    returns:  window.loadMainKitchenReturns,
+    lunch:    window.loadMainKitchenLunch,
+    prep:     window.loadMainKitchenPrepPars,   // ✅ NEW
+    order:    window.loadMainKitchenOrders      // if you have one
+  };
+
+  const fn = loaders[sectionId];
+  if (typeof fn === "function") fn();
 };
 
 

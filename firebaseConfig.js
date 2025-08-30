@@ -4,8 +4,11 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.2/firebas
 import { getAnalytics } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-analytics.js";
 import {
   initializeFirestore,
-  // (optional) if you want stronger control over cache across tabs, switch to:
-  // persistentLocalCache, persistentMultipleTabManager,
+  // Optional durable cache (toggle via localStorage key FIRESTORE_CACHE=1)
+  persistentLocalCache,
+  persistentMultipleTabManager,
+
+  // Firestore APIs re-exported for convenience
   collection,
   doc,
   setDoc,
@@ -21,6 +24,9 @@ import {
   orderBy,
   limit,
   deleteDoc,
+  arrayUnion,
+  arrayRemove,
+  increment,
   connectFirestoreEmulator
 } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore.js";
 import {
@@ -57,6 +63,11 @@ const useEmulators = isLocalhost || urlForcesEmu || stickyForcesEmu;
 // - Codespaces: the forwarded hostname (e.g. port-8080-xxxx.github.dev)
 const EMU_HOST = isLocalhost ? "127.0.0.1" : hostname;
 
+// 🧰 Optional: durable multi-tab cache (IndexedDB) toggle
+// Turn on with: localStorage.setItem("FIRESTORE_CACHE","1")  (reload to apply)
+// Turn off with: localStorage.removeItem("FIRESTORE_CACHE")
+const useDurableCache = hasWindow && localStorage.getItem("FIRESTORE_CACHE") === "1";
+
 // ✅ Initialize Firebase
 const app = initializeApp(firebaseConfig);
 
@@ -64,13 +75,15 @@ const app = initializeApp(firebaseConfig);
 const disableAnalytics = isLocalhost || urlForcesEmu || stickyForcesEmu || onCodespaces;
 const analytics = (!hasWindow || disableAnalytics) ? null : getAnalytics(app);
 
-// ✅ Initialize Firestore (with auto long‑polling fallback for odd networks)
+// ✅ Initialize Firestore
+// - Long-polling helps on odd networks / Codespaces.
+// - Durable cache is opt-in via FIRESTORE_CACHE so you can choose per device.
 const db = initializeFirestore(app, {
-  // If you want multi‑tab durable cache, switch to:
-  // localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
-  // (requires importing those two from firestore)
   experimentalAutoDetectLongPolling: true,
-  useFetchStreams: false
+  useFetchStreams: false,
+  ...(useDurableCache
+    ? { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) }
+    : {})
 });
 
 // ✅ Auth (ready for emulator)
@@ -90,7 +103,7 @@ if (useEmulators) {
     console.warn("Auth emulator connect failed:", e);
   }
 
-  // 🎛️ Small visible badge so you always know you're on the emulator
+  // 🎛️ Visible badge so you always know you're on the emulator
   try {
     const div = document.createElement("div");
     div.textContent = `Firestore: Emulator (${EMU_HOST}:8080)`;
@@ -111,8 +124,19 @@ if (useEmulators) {
     window.__USING_FIREBASE_EMULATORS__ = true;
   } catch {}
 } else {
-  // Explicit flag
   if (hasWindow) window.__USING_FIREBASE_EMULATORS__ = false;
+}
+
+// 🧷 Handy runtime toggles (optional)
+if (hasWindow) {
+  window.__toggleEmulators = (on = true) => {
+    if (on) localStorage.setItem("USE_EMULATORS", "1"); else localStorage.removeItem("USE_EMULATORS");
+    location.reload();
+  };
+  window.__toggleCache = (on = true) => {
+    if (on) localStorage.setItem("FIRESTORE_CACHE", "1"); else localStorage.removeItem("FIRESTORE_CACHE");
+    location.reload();
+  };
 }
 
 // ✅ Export everything needed by your app
@@ -133,5 +157,8 @@ export {
   Timestamp,
   orderBy,
   limit,
-  deleteDoc
+  deleteDoc,
+  arrayUnion,
+  arrayRemove,
+  increment
 };

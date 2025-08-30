@@ -668,6 +668,7 @@
     <div class="area-tabs">
       <button class="area-tab" data-area="mainkitchen" data-sec="order" onclick="showKitchenSection('order')">Add-Ons</button>
       <button class="area-tab" data-area="mainkitchen" data-sec="starting" onclick="showKitchenSection('starting')">Starting Pars</button>
+      <button class="area-tab" data-area="mainkitchen" data-sec="prep"     onclick="showKitchenSection('prep')">Prep Pars</button>
       <button class="area-tab" data-area="mainkitchen" data-sec="waste" onclick="showKitchenSection('waste')">Waste</button>
       <button class="area-tab" data-area="mainkitchen" data-sec="returns" onclick="showKitchenSection('returns')">Returns</button>
       <button class="area-tab" data-area="mainkitchen" data-sec="lunch" onclick="showKitchenSection('lunch')">Lunch</button>
@@ -775,6 +776,51 @@
     <tbody></tbody>
   </table>
 </div>
+
+<!-- PREP PARS SECTION (hidden by default) -->
+<div class="prep-section main-kitchen-section" data-sec="prep" style="display:none;">
+  <div class="order-controls">
+    <label>
+      <span>Venue</span>
+      <select id="prepVenueFilter" onchange="reloadMainKitchenPrepPars()">
+        <option value="ALL">All Venues</option>
+        <option value="Gateway">Gateway</option>
+        <option value="Aloha">Aloha</option>
+        <option value="Ohana">Ohana</option>
+        <option value="Concessions">Concessions</option>
+      </select>
+    </label>
+
+    <label>
+      <span>Area</span>
+      <select id="prepAreaFilter" onchange="reloadMainKitchenPrepPars()">
+        <option value="ALL">All Areas</option>
+        <option value="HOTFOODS">Hotfoods</option>
+        <option value="PANTRY">Pantry</option>
+        <option value="BAKERY">Bakery</option>
+      </select>
+    </label>
+  </div>
+
+  <div class="table-wrap">
+    <table id="prepParsTable" class="compact">
+      <thead>
+        <tr>
+          <th>Venue</th>
+          <th>Area</th>
+          <th>Item</th>
+          <th>Prep Par</th>
+          <th>Prepped Today</th>
+          <th>Enter Pans Made</th>
+          <th>Save</th>
+        </tr>
+      </thead>
+      <tbody id="prepParsTbody"></tbody>
+    </table>
+  </div>
+</div>
+
+
 
   <!-- ♻️ Waste Section -->
   <div class="main-kitchen-section waste-section" data-sec="waste" style="display:none">

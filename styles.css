@@ -713,3 +713,10 @@ body { padding-bottom: max(160px, calc(140px + env(safe-area-inset-bottom))); }
     min-width: 100%; /* stack vertically */
   }
 }
+
+.two-col-grid { display: grid; gap: 12px; }
+.two-col-grid .col { overflow-x: auto; }
+
+@media (min-width: 1200px) {
+  .two-col-grid { grid-template-columns: 1fr 1fr; align-items: start; }
+}
