@@ -7092,100 +7092,122 @@ window.loadProductionShipments = async function () {
 
 
 // === Sync Production Shipment override → today's orders doc(s) ===
+// === Sync Production Shipment override → today's orders doc(s) ===
 async function syncProdOverrideIntoOrders(venueCode, recipeNo, newQty) {
   try {
-    const today = getTodayDate(); // already defined in your file
-    const qty   = Number(newQty);
-    if (!Number.isFinite(qty)) return;
+    const today = getTodayDate();
+    const sendQtyGross = Number(newQty);
+    if (!Number.isFinite(sendQtyGross) || sendQtyGross <= 0) return;
 
-    // Map "b001/b002/b003/..." → "Aloha/Ohana/Gateway/..."
+    // 1) Map code → venue name (b001→Aloha, etc.)
     function codeToVenueName(code) {
-      const map = window.venueCodes || { Aloha: "B001", Ohana: "B002", Gateway: "B003" };
+      const map = window.venueCodes || { Aloha: "B001", Ohana: "B002", Gateway: "B003", Concessions: "C002" };
       const found = Object.entries(map).find(([, v]) => String(v).toLowerCase() === String(code).toLowerCase());
-      return found ? found[0] : code; // fallback to the code if unknown
+      return found ? found[0] : code;
     }
-    const venueName = codeToVenueName(venueCode); // e.g., "Gateway"
+    const venueName = codeToVenueName(venueCode);
 
-    // 1) Find today's starting-par orders for this venue+recipe
-    const q1 = query(
-      collection(db, "orders"),
-      where("date", "==", today),
-      where("venue", "==", venueName),
-      where("type", "==", "starting-par"),
+    // 2) Load today’s guest counts (for PAR lookup)
+    const gcSnap = await getDoc(doc(db, "guestCounts", today));
+    const guestCounts = gcSnap.exists() ? (gcSnap.data() || {}) : {};
+    const guestCount  = Number(guestCounts?.[venueName] || 0);
+
+    // 3) Lookup recipe by recipeNo (we need recipeId, pars, costPerLb, panWeight)
+    const qR = query(
+      collection(db, "recipes"),
       where("recipeNo", "==", String(recipeNo).toUpperCase())
     );
-    const snap = await getDocs(q1);
-
-    // (Optional) pull unit cost for totalCost recompute
-    async function getUnitCostByOrderDoc(o) {
-      // Try `recipeId` first (your docs have r0002/r0331 etc)
-      const rid = (o.recipeId || "").toString().trim();
-      if (rid) {
-        const rs = await getDoc(doc(db, "recipes", rid));
-        if (rs.exists()) return Number(rs.data()?.cost || 0);
-      }
-      // Fallback: lookup by recipeNo
-      const qR = query(collection(db, "recipes"), where("recipeNo", "==", String(recipeNo).toUpperCase()));
-      const sR = await getDocs(qR);
-      if (!sR.empty) return Number(sR.docs[0].data()?.cost || 0);
-      return 0;
+    const sR = await getDocs(qR);
+    if (sR.empty) {
+      console.warn("❌ Recipe not found for override:", recipeNo);
+      return;
     }
+    const rDoc       = sR.docs[0];
+    const recipeId   = rDoc.id;
+    const r          = rDoc.data() || {};
+    const rNo        = (r.recipeNo || recipeNo).toString().toUpperCase();
+    const costPerLb  = Number(r.cost ?? r.costPerLb ?? 0);
+    const panWeight  = Number(r.panWeight ?? 0);
+    const currentPar = Number(r?.pars?.[venueName]?.[String(guestCount)] || 0);
+    const pans       = Math.max(0, currentPar);
 
-    if (!snap.empty) {
-      // If multiple docs exist (e.g., multiple sends), update them all,
-      // so the *sum* reflects your override. If you'd rather only update the latest,
-      // sort by timestamp and only update the last one.
-      const writes = [];
-      for (const docSnap of snap.docs) {
-        const o = docSnap.data();
+    // 4) Compute net + total to match sendStartingPar
+    const round2         = (n) => Number((Math.round((Number(n)||0)*100)/100).toFixed(2));
+    const netWeightAdd   = round2(Math.max(0, sendQtyGross - (panWeight * pans)));
+    const totalCostAdd   = round2(netWeightAdd * costPerLb);
 
-        // Decide which numeric field to override:
-        // - Your example shows `qty` (weight) and `pans` (containers).
-        // - Here we override `qty` and `sendQty` to the typed amount.
-        //   (If you want to override `pans` instead, switch the fields.)
-        const unitCost = await getUnitCostByOrderDoc(o);
-        const totalCost = unitCost > 0 ? Number((unitCost * qty).toFixed(2)) : undefined;
+    // 5) Upsert deterministic per-day doc (same ID as sender)
+    const orderId  = `startingPar_${today}_${venueName}_${recipeId}`;
+    const orderRef = doc(db, "orders", orderId);
+    const existing = await getDoc(orderRef);
+    const nowTs    = Timestamp.now();
 
-        writes.push(updateDoc(docSnap.ref, {
-          qty: qty,
-          sendQty: qty,
-          ...(totalCost != null ? { totalCost } : {}),
-          updatedAt: serverTimestamp()
-        }));
-      }
-      await Promise.all(writes);
-    } else {
-      // No existing doc for that recipe today → upsert one so reporting stays consistent.
-      // (If you don't want this behavior, remove this block.)
-      const qR = query(collection(db, "recipes"), where("recipeNo", "==", String(recipeNo).toUpperCase()));
-      const sR = await getDocs(qR);
-      const recipeData = sR.empty ? {} : sR.docs[0].data();
-
-      const unitCost  = Number(recipeData.cost || 0);
-      const totalCost = unitCost > 0 ? Number((unitCost * qty).toFixed(2)) : 0;
-
-      await addDoc(collection(db, "orders"), {
-        date: today,
-        venue: venueName,
+    if (existing.exists()) {
+      const prev = existing.data() || {};
+      await updateDoc(orderRef, {
+        // required shape (keep exactly in sync with sendStartingPar)
         type: "starting-par",
-        status: "sent",                    // treat as already sent so it rolls into cost
-        timestamp: serverTimestamp(),
-        sentAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        recipeNo: String(recipeNo).toUpperCase(),
-        recipeId: recipeData?.id || (recipeData?.recipeId || null),
-        item: recipeData?.description || recipeNo,
-        // Quantities we’re choosing to override:
-        qty: qty,
-        sendQty: qty,
-        // If you prefer to override pans instead, add:  pans: qty,
-        totalCost
+        venue: venueName,
+        recipeId,
+        recipeNo: rNo,
+        date: today,
+        costPerLb: Number(costPerLb),
+        panWeight: Number(panWeight),
+        pans: Number(pans), // snapshot of today’s needed pans
+
+        // cumulative adds
+        sendQty:     round2((Number(prev.sendQty   || 0)) + sendQtyGross),
+        netWeight:   round2((Number(prev.netWeight || 0)) + netWeightAdd),
+        totalCost:   round2((Number(prev.totalCost || 0)) + totalCostAdd),
+
+        // lifecycle (don’t clobber a received doc)
+        status:   prev.status === "received" ? "received" : "sent",
+        received: Boolean(prev.received || false),
+        receivedAt: prev.receivedAt || null,
+
+        // timestamps (preserve first sentAt/timestamp)
+        sentAt:     prev.sentAt     || nowTs,
+        timestamp:  prev.timestamp  || nowTs,
+        updatedAt:  nowTs,
+      });
+    } else {
+      await setDoc(orderRef, {
+        // required shape
+        type: "starting-par",
+        venue: venueName,
+        recipeId,
+        recipeNo: rNo,
+        date: today,
+        costPerLb: Number(costPerLb),
+        panWeight: Number(panWeight),
+        pans: Number(pans),
+
+        // first write = exact values for this override push
+        sendQty:   round2(sendQtyGross),
+        netWeight: netWeightAdd,
+        totalCost: totalCostAdd,
+
+        // lifecycle at SEND time
+        status: "sent",
+        received: false,
+        receivedAt: null,
+
+        // timestamps
+        sentAt: nowTs,
+        timestamp: nowTs,
+        updatedAt: nowTs,
       });
     }
+
+    console.log("✅ Override synced as starting-par:", {
+      orderId, venueName, recipeNo: rNo, recipeId, sendQtyGross, pans, panWeight, netWeightAdd, totalCostAdd
+    });
   } catch (err) {
-    console.error("syncProdOverrideIntoOrders failed:", err);
+    console.error("❌ syncProdOverrideIntoOrders failed:", err);
+    alert("❌ Failed to sync override to orders.");
   }
 }
+
 
 
 // 📤 Show one venue shipment (aggregated by recipe for the venue code)
