@@ -2888,158 +2888,117 @@ window.sendSingleStartingPar = async function (recipeId, venue, button) {
 
 // ✅ Global so Send + Send All can call it
 // Prevent rapid double-clicks while a send is in progress
+// one-time guard set
 window._startingParInFlight = window._startingParInFlight || new Set();
 
-window.sendStartingPar = async function (recipeId, venue, sendQty) {
+function round2(n){ return Number((Math.round((Number(n)||0)*100)/100).toFixed(2)); }
+
+window.sendStartingPar = async function (recipeId, venue, sendQtyInput) {
   const today = getTodayDate();
-  const inFlightKey = `${today}|${venue}|${recipeId}`;
-  if (window._startingParInFlight.has(inFlightKey)) return;
-  window._startingParInFlight.add(inFlightKey);
+  const key = `${today}|${venue}|${recipeId}`;
+  if (window._startingParInFlight.has(key)) return;
+  window._startingParInFlight.add(key);
 
   try {
-    // guest count for today's PAR lookups
-    const guestCountDoc = await getDoc(doc(db, "guestCounts", today));
-    const guestCounts = guestCountDoc.exists() ? guestCountDoc.data() : {};
+    // 1) Load guest count for today's PAR lookup
+    const gcSnap = await getDoc(doc(db, "guestCounts", today));
+    const guestCounts = gcSnap.exists() ? (gcSnap.data() || {}) : {};
     const guestCount = Number(guestCounts?.[venue] || 0);
 
-    // recipe
-    const recipeSnap = await getDoc(doc(db, "recipes", recipeId));
-    if (!recipeSnap.exists()) {
+    // 2) Load recipe
+    const rSnap = await getDoc(doc(db, "recipes", recipeId));
+    if (!rSnap.exists()) {
       console.warn(`❌ Recipe ${recipeId} not found`);
       return;
     }
-    const recipeData  = recipeSnap.data();
-    const recipeNo    = (recipeData.recipeNo || recipeId).toUpperCase();
-    const costPerUnit = Number(recipeData.cost || 0);
-    const panWeight   = Number(recipeData.panWeight || 0);
+    const r = rSnap.data() || {};
+    const recipeNo    = (r.recipeNo || recipeId).toString().toUpperCase();
+    const costPerLb   = Number(r.cost ?? r.costPerLb ?? 0);
+    const panWeight   = Number(r.panWeight ?? 0);
 
-    const isConcessions = /concessions?/i.test(venue);
+    // 3) Determine today's needed pans (PAR snapshot)
+    const currentPar  = Number(r?.pars?.[venue]?.[String(guestCount)] || 0);
+    const pans        = Math.max(0, currentPar);
 
-    // deterministic per-day doc
+    // 4) User input: gross pounds typed on screen
+    const sendQtyGross = Number(sendQtyInput);
+    if (!Number.isFinite(sendQtyGross) || sendQtyGross <= 0) {
+      alert("❌ Please enter a valid gross weight (lbs).");
+      return;
+    }
+
+    // 5) Compute net (subtract pan weight × pans), and total cost
+    const netWeightAdd = round2(Math.max(0, sendQtyGross - (panWeight * pans)));
+    const totalCostAdd = round2(netWeightAdd * costPerLb);
+
+    // 6) Deterministic per-day doc (cumulative across multiple sends that day)
     const orderId  = `startingPar_${today}_${venue}_${recipeId}`;
     const orderRef = doc(db, "orders", orderId);
     const existing = await getDoc(orderRef);
-    const nowTs = Timestamp.now();
+    const nowTs    = Timestamp.now();
 
-    if (isConcessions) {
-      // 📦 Concessions: input is lbs (gross), record cumulative netWeight
-      const grossLbs = Number(sendQty);
-      if (!Number.isFinite(grossLbs) || grossLbs <= 0) {
-        alert("❌ Please enter a valid weight.");
-        return;
-      }
-      const netWeightAdd = parseFloat(Math.max(0, grossLbs - panWeight).toFixed(2));
-      const costAdd      = parseFloat((netWeightAdd * costPerUnit).toFixed(2));
+    if (existing.exists()) {
+      const prev = existing.data() || {};
+      await updateDoc(orderRef, {
+        // required shape
+        type: "starting-par",
+        venue,
+        recipeId,
+        recipeNo,
+        date: today,
+        costPerLb: Number(costPerLb),
+        panWeight: Number(panWeight),
+        pans: Number(pans),                                 // snapshot of today's needed pans
+        sendQty: round2((Number(prev.sendQty||0)) + sendQtyGross),
+        netWeight: round2((Number(prev.netWeight||0)) + netWeightAdd),
+        totalCost: round2((Number(prev.totalCost||0)) + totalCostAdd),
 
-      if (existing.exists()) {
-        const prev = existing.data();
-        await updateDoc(orderRef, {
-          type: "starting-par",
-          venue,
-          recipeId,
-          recipeNo,
-          // cumulative tallies
-          sendQty:  parseFloat(((Number(prev.sendQty || 0)) + grossLbs).toFixed(2)),
-          netWeight: parseFloat(((Number(prev.netWeight || 0)) + netWeightAdd).toFixed(2)),
-          totalCost: parseFloat(((Number(prev.totalCost || 0)) + costAdd).toFixed(2)),
-          status: "sent",
-          updatedAt: nowTs,
-          date: today
-        });
-      } else {
-        await setDoc(orderRef, {
-          type: "starting-par",
-          venue,
-          recipeId,
-          recipeNo,
-          sendQty: parseFloat(grossLbs.toFixed(2)),
-          netWeight: netWeightAdd,
-          totalCost: costAdd,
-          date: today,
-          status: "sent",
-          sentAt: nowTs,
-          timestamp: nowTs
-        });
-      }
+        // delivery/receive lifecycle (sent now; receiving happens later)
+        status: prev.status === "received" ? "received" : "sent",
+        received: Boolean(prev.received || false),
+        receivedAt: prev.receivedAt || null,               // unchanged here
+
+        // timestamps
+        sentAt: prev.sentAt || nowTs,
+        timestamp: prev.timestamp || nowTs,
+        updatedAt: nowTs
+      });
     } else {
-      // 🍽️ Buffet venues: input is # of pans to send now
-      const pansTyped = Number(sendQty);
-      if (!Number.isFinite(pansTyped) || pansTyped <= 0) {
-        alert("❌ Please enter a valid number of pans.");
-        return;
-      }
+      await setDoc(orderRef, {
+        // required shape
+        type: "starting-par",
+        venue,
+        recipeId,
+        recipeNo,
+        date: today,
+        costPerLb: Number(costPerLb),
+        panWeight: Number(panWeight),
+        pans: Number(pans),                   // snapshot of today's needed pans
+        sendQty: round2(sendQtyGross),        // exactly what user typed (gross lbs)
+        netWeight: netWeightAdd,              // gross - panWeight * pans
+        totalCost: totalCostAdd,
 
-      // PAR (in pans) for current guest count
-      const currentPar = Number(recipeData?.pars?.[venue]?.[String(guestCount)] || 0);
+        // delivery/receive lifecycle at SEND time
+        status: "sent",
+        received: false,
+        receivedAt: null,
 
-      if (existing.exists()) {
-        const prev = existing.data();
-        const prevPar = Number(prev.pans || 0);           // previously satisfied PAR snapshot
-        const prevQty = Number(prev.qty || 0);            // cumulative pans sent
-        const newPar  = Math.max(prevPar, currentPar);    // grow to latest PAR if it increased
-
-        // ✅ Guard against double sends: only add what's still remaining
-        const remaining = Math.max(0, newPar - prevQty);
-        const addQty    = Math.min(pansTyped, remaining);
-
-        if (addQty <= 0) {
-          // nothing left to add — likely a duplicate click/second trigger
-          return;
-        }
-
-        const addCost = parseFloat((addQty * costPerUnit).toFixed(2));
-        await updateDoc(orderRef, {
-          type: "starting-par",
-          venue,
-          recipeId,
-          recipeNo,
-          // "pans" tracks satisfied PAR; "qty" accumulates actual pans sent
-          pans: newPar,
-          qty: parseFloat((prevQty + addQty).toFixed(2)),
-          // keep a mirror field used by some UIs (status tables sum sendQty first)
-          sendQty: parseFloat((Number(prev.sendQty || prevQty) + addQty).toFixed(2)),
-          totalCost: parseFloat(((Number(prev.totalCost || 0)) + addCost).toFixed(2)),
-          date: today,
-          status: "sent",
-          updatedAt: nowTs
-        });
-      } else {
-        // first send of the day — cap to today's PAR
-        const firstQty  = Math.min(pansTyped, currentPar);
-        const firstCost = parseFloat((firstQty * costPerUnit).toFixed(2));
-
-        await setDoc(orderRef, {
-          type: "starting-par",
-          venue,
-          recipeId,
-          recipeNo,
-          pans: currentPar,                 // snapshot of target PAR
-          qty: firstQty,                    // cumulative pans sent (starts here)
-          sendQty: firstQty,                // mirror for status tables
-          totalCost: firstCost,
-          date: today,
-          status: "sent",
-          sentAt: nowTs,
-          timestamp: nowTs
-        });
-      }
-
-      // After a successful buffet send, advance the UI baseline so row hides again
-      try {
-        const base = readBuffetBaseline(venue);
-        base[recipeId] = currentPar;
-        writeBuffetBaseline(venue, base);
-      } catch {}
+        // timestamps
+        sentAt: nowTs,
+        timestamp: nowTs,
+        updatedAt: nowTs
+      });
     }
 
-    console.log("✅ Starting-par recorded:", recipeNo, venue, sendQty);
+    console.log("✅ Starting-par recorded", { recipeNo, venue, sendQtyGross, pans, panWeight, netWeightAdd, totalCostAdd });
   } catch (err) {
     console.error("❌ Failed to send starting-par:", err);
     throw err;
   } finally {
-    window._startingParInFlight.delete(inFlightKey);
+    window._startingParInFlight.delete(key);
   }
 };
+
 
 
 
