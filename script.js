@@ -2621,7 +2621,20 @@ window.loadMainKitchenStartingPars = async function () {
     collection(db, "recipes"),
     where("venueCodes", "array-contains-any", ["b001", "b002", "b003", "c002", "c003", "c004"])
   ));
-  const recipes = recipesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  // ⬇️ change const→let so we can sort
+  let recipes = recipesSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+  // 🔤 Sort by description (case-insensitive), then by recipeNo as a tiebreaker
+  const collator = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
+  recipes.sort((a, b) => {
+    const da = (a.description || "").trim();
+    const db = (b.description || "").trim();
+    const byDesc = collator.compare(da, db);
+    if (byDesc !== 0) return byDesc;
+    const ra = (a.recipeNo || "").toString().trim();
+    const rb = (b.recipeNo || "").toString().trim();
+    return collator.compare(ra, rb);
+  });
 
   // Today’s starting-par orders
   const ordersSnap = await getDocs(query(
@@ -2683,6 +2696,7 @@ window.loadMainKitchenStartingPars = async function () {
 
   renderMainKitchenPars();
 };
+
 window.renderMainKitchenPars = function () {
   const data = window.startingCache?.MainKitchenAll;
   if (!data) { console.warn("⚠️ No cached data found for Main Kitchen Starting Pars."); return; }
