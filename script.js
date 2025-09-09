@@ -77,6 +77,20 @@ function showTableEmpty(tbody, message = "No items to show.") {
     </tr>`;
 }
 
+// 🔧 Station overrides by recipe and venue
+// Keyed by UPPERCASE recipeNo. Extend this object as you add more multi-venue items.
+window.STATION_OVERRIDES = {
+  R0016: { Gateway: "Grill", Aloha: "Oven", Ohana: "Oven" }, // Huli Chicken example
+  // R0XXX: { Gateway: "...", Aloha: "...", Ohana: "..." },
+};
+
+// Decide the station for an order, honoring overrides first, then recipe default
+window.stationForOrder = function stationForOrder(recipeLike, venueName) {
+  const recipeNo = String(recipeLike?.recipeNo || recipeLike?.recipeId || "").toUpperCase().trim();
+  const byRecipe = window.STATION_OVERRIDES?.[recipeNo];
+  if (byRecipe && byRecipe[venueName]) return byRecipe[venueName];
+  return recipeLike?.station || "Unknown";
+};
 
 
 
@@ -1601,21 +1615,23 @@ window.sendAlohaOrder = async function(button) {
     const totalCost = parseFloat((unitCost * qty).toFixed(2));
 
 
-    const order = {
-      item: recipeData.description || recipeNo,
-      qty: qty,
-      status: "open",
-      venue: "Aloha",
-      station: recipeData.station || "Unknown",
-      recipeNo: recipeNo,
-      cookTime: recipeData.cookTime || 0,
-      notes: notes,
-      uom: recipeData.uom || "ea",
-      totalCost: totalCost,
-      type: "addon",
-      date: getTodayDate(),
-      timestamp: serverTimestamp()
-    };
+ const station = window.stationForOrder({ ...recipeData, recipeNo }, "Aloha");
+
+const order = {
+  item: recipeData.description || recipeNo,
+  qty,
+  status: "open",
+  venue: "Aloha",
+  station, // ✅ now routed per venue override
+  recipeNo,
+  cookTime: recipeData.cookTime || 0,
+  notes,
+  uom: recipeData.uom || "ea",
+  totalCost,
+  type: "addon",
+  date: getTodayDate(),
+  timestamp: serverTimestamp()
+};
 
     await addDoc(collection(db, "orders"), order);
 
@@ -4179,13 +4195,14 @@ window.sendGatewayOrder = async function (button) {
 
     const unitCost = Number(recipeData.cost || 0);
     const totalCost = parseFloat((unitCost * qty).toFixed(2));
-
+const station = window.stationForOrder({ ...recipeData, recipeNo }, "Gateway");
 
     const order = {
       item: recipeData.description || recipeNo,
       qty: qty,
       status: "open",
       venue: "Gateway",
+      station,
       station: recipeData.station || "Unknown",
       recipeNo: recipeNo,
       cookTime: recipeData.cookTime || 0,
@@ -5189,21 +5206,24 @@ window.sendOhanaOrder = async function (button) {
     const totalCost = parseFloat((unitCost * qty).toFixed(2));
 
 
-    const order = {
-      item: recipeData.description || recipeNo,
-      qty: qty,
-      status: "open",
-      venue: "Ohana",
-      station: recipeData.station || "Unknown",
-      recipeNo: recipeNo,
-      cookTime: recipeData.cookTime || 0,
-      notes: notes,
-      uom: recipeData.uom || "ea",
-      timestamp: serverTimestamp(),
-      date: getTodayDate(),
-      type: "addon",
-      totalCost: totalCost
-    };
+  const station = window.stationForOrder({ ...recipeData, recipeNo }, "Ohana");
+
+const order = {
+  item: recipeData.description || recipeNo,
+  qty,
+  status: "open",
+  venue: "Ohana",
+  station, // ✅ override-aware
+  recipeNo,
+  cookTime: recipeData.cookTime || 0,
+  notes,
+  uom: recipeData.uom || "ea",
+  timestamp: serverTimestamp(),
+  date: getTodayDate(),
+  type: "addon",
+  totalCost
+};
+
 
     await addDoc(collection(db, "orders"), order);
 
