@@ -2666,7 +2666,8 @@ window.loadMainKitchenStartingPars = async function () {
   const sentPars      = {};   // only *needed* for Concessions math (lbs)
   const receivedPars  = {};
   const sentParStatus = {};
-  const wasSentToday  = {};   // ✅ buffet logic: boolean any doc exists today for (venue, recipeId)
+  const wasSentToday  = {};
+const sentQtyTotals = {}; 
 
   ordersSnap.forEach(s => {
     const o = s.data();
@@ -2691,6 +2692,12 @@ window.loadMainKitchenStartingPars = async function () {
     if (status === "sent" || status === "received") {
       wasSentToday[venue][recipeId] = true;
     }
+// 👇 Sum the exact Firestore sendQty (no par/pans fallback)
+if (!sentQtyTotals[venue]) sentQtyTotals[venue] = {};
+const sq = Number(o.sendQty || 0);
+if (sq > 0 && (status === "sent" || status === "received")) {
+  sentQtyTotals[venue][recipeId] = (sentQtyTotals[venue][recipeId] || 0) + sq;
+}
 
     // Maintain other flags/tallies for completeness and Concessions
     if (sentValue > 0 && (status === "sent" || status === "received")) {
@@ -2710,7 +2717,8 @@ window.loadMainKitchenStartingPars = async function () {
     sentPars,         // Concessions in lbs; buffet value unused by renderer
     receivedPars,
     sentParStatus,
-    wasSentToday      // ✅ buffet baseline driver
+    wasSentToday,      // ✅ buffet baseline driver
+      sentQtyTotals 
   };
 
   renderMainKitchenPars();
@@ -2789,34 +2797,58 @@ window.renderMainKitchenPars = function () {
         remaining = Math.max(0, parPans - sentPansToday);
       }
 
-      // Only show if something is still needed
-      if (remaining <= 0) continue;
+      // 👉 NEW: always render the row (even when remaining <= 0)
+      // compute status + "sent so far"
+      const statusMap = data.sentParStatus?.[venue] || {};
+      const status = String(statusMap[recipe.id] || "").toLowerCase(); // "", "sent", "received", "na"
+      const sentSoFar = Number(data.sentQtyTotals?.[venue]?.[recipe.id] || 0);
 
-      // 3) Build row: Area | Item | Par Qty (REMAINING) | UOM | Send Qty | Action
+
+      // 3) Build row: Area | Item (+sent-badge) | Par Qty (REMAINING) | UOM | Send Qty | Action
       const row = document.createElement("tr");
       row.dataset.recipeId = recipe.id;
       row.dataset.venue    = venue;
 
+      const uom = recipe.uom || "ea";
+      const sentBadge = `<div style="font-size:12px;opacity:.85;margin-top:2px;">Sent so far: <strong>${fmt(sentSoFar)}</strong> ${uom}</div>`;
+      const isCompleted = (remaining <= 0) || (status === "na");
+      if (isCompleted) {
+        row.classList.add("row-completed");
+        row.style.background = "rgba(28,150,80,0.10)"; // soft green
+      }
+
+      const controls = (status === "na")
+        ? `<em style="opacity:.7;">Marked NA</em>`
+        : `
+            <input class="send-qty-input" type="text" inputmode="decimal"
+                   value="" style="width:80px; margin-left:6px; text-align:right;" placeholder="0" />
+            <button onclick="sendSingleStartingPar('${recipe.id}', '${venue}', this)">Send</button>
+            <button onclick="markStartingParNA && markStartingParNA('${recipe.id}', '${venue}', this)" style="margin-left:6px;">NA</button>
+          `;
+
       row.innerHTML = `
         <td>${venue}</td>
-        <td>${recipe.description || recipe.recipeNo || recipe.id}</td>
+        <td>${recipe.description || recipe.recipeNo || recipe.id}${sentBadge}</td>
         <td>${fmt(remaining)}</td>
-        <td>${recipe.uom || "ea"}</td>
-        <td>
-          <input class="send-qty-input" type="text" inputmode="decimal"
-                 value="" style="width:80px; margin-left:6px; text-align:right;" placeholder="0" />
-        </td>
-        <td>
-          <button onclick="sendSingleStartingPar('${recipe.id}', '${venue}', this)">Send</button>
-        </td>
+        <td>${uom}</td>
+        <td>${controls}</td>
       `;
       tbody.appendChild(row);
       totalRows++;
     }
   });
 
+  // 👉 NEW: push completed/NA rows to the bottom
+  const allRows = Array.from(tbody.querySelectorAll("tr"));
+  const active = [];
+  const completed = [];
+  allRows.forEach(r => (r.classList.contains("row-completed") ? completed : active).push(r));
+  tbody.innerHTML = "";
+  active.forEach(r => tbody.appendChild(r));
+  completed.forEach(r => tbody.appendChild(r));
+
   enableMathOnInputs(".send-qty-input", table);
-  console.log(`✅ Rendered ${totalRows} rows (Par Qty shows remaining = target − sent; Pineapple Shells target = LIVE Showware for Aloha/Ohana).`);
+  console.log(`✅ Rendered ${totalRows} rows (keeps completed/NA at bottom; shows "Sent so far").`);
 };
 
 
@@ -2830,8 +2862,7 @@ document.getElementById("starting-filter-station").addEventListener("change", ()
 });
 
 
-// 🌋 Send-all for Main Kitchen Starting Par
-// 🌋 Send-all for Main Kitchen Starting Par
+// 🌋 Send-all for Main Kitchen Starting Par (repaint instead of removing rows)
 window.sendAllMainKitchenStartingPar = async function () {
   const tbody = document.querySelector("#startingParsTable tbody");
   if (!tbody) return;
@@ -2843,35 +2874,33 @@ window.sendAllMainKitchenStartingPar = async function () {
   }
 
   let sent = 0;
-
   for (const row of rows) {
     const recipeId = row.dataset.recipeId;
     const venue    = row.dataset.venue;
     const input    = row.querySelector(".send-qty-input");
-
     const v = normalizeQtyInputValue?.(input);
     const qty = Number.isFinite(v) ? v : NaN;
-
     if (!recipeId || !venue || !Number.isFinite(qty) || qty <= 0) continue;
 
-    await window.sendStartingPar(recipeId, venue, qty); // 👈
-
+    await window.sendStartingPar(recipeId, venue, qty);
     const cacheKey = input?.getAttribute("data-cache-key");
     if (cacheKey && window.mainStartingQtyCache) delete window.mainStartingQtyCache[cacheKey];
-
-    row.remove();
     sent++;
   }
 
- 
+  // Repaint so all just-sent rows turn green and drop to the bottom
+  try { typeof loadMainKitchenStartingPars === "function" && loadMainKitchenStartingPars(); } catch {}
 };
 
+
+// 🚫 Do not remove the row; repaint table so the item drops to the bottom and shows totals
 window.sendSingleStartingPar = async function (recipeId, venue, button) {
   const row = button.closest("tr");
   const input = row.querySelector(".send-qty-input");
   const cacheKey = input?.getAttribute("data-cache-key");
 
-  const v = normalizeQtyInputValue(input);
+  // Evaluate/normalize (supports math expressions)
+  const v = normalizeQtyInputValue?.(input);
   const qtyFromInput = Number.isFinite(v) ? v : NaN;
   const qtyFromCache = cacheKey != null ? Number(window.mainStartingQtyCache?.[cacheKey]) : NaN;
   const sendQty = Number.isFinite(qtyFromInput) ? qtyFromInput : qtyFromCache;
@@ -2881,11 +2910,14 @@ window.sendSingleStartingPar = async function (recipeId, venue, button) {
     return;
   }
 
-  await window.sendStartingPar(recipeId, venue, sendQty); // 👈
+  await window.sendStartingPar(recipeId, venue, sendQty); // cumulative writer already in your file
 
+  // Clear any cached value but DO NOT remove the row; re-render so it turns green & moves down
   if (cacheKey && window.mainStartingQtyCache) delete window.mainStartingQtyCache[cacheKey];
   if (window.mainStartingInputCache) delete window.mainStartingInputCache[cacheKey];
-  row.remove();
+
+  // Reload the Main Kitchen Starting Pars to reflect updated totals/status
+  try { typeof loadMainKitchenStartingPars === "function" && loadMainKitchenStartingPars(); } catch {}
 };
 
 
@@ -2916,6 +2948,32 @@ window.sendSingleStartingPar = async function (recipeId, venue, button) {
   if (cacheKey && window.mainStartingQtyCache) delete window.mainStartingQtyCache[cacheKey];
   if (window.mainStartingInputCache) delete window.mainStartingInputCache[cacheKey]; // legacy cleanup
   row.remove();
+};
+
+
+// 📌 Mark Starting Par item as NA for today (drops to bottom, turns green)
+window.markStartingParNA = async function (recipeId, venue, button) {
+  const today = getTodayDate();
+  const orderId  = `startingPar_${today}_${venue}_${recipeId}`;
+  const orderRef = doc(db, "orders", orderId);
+
+  try {
+    // Ensure doc exists with minimum shape so renderer can find it
+    await setDoc(orderRef, {
+      type: "starting-par",
+      date: today,
+      venue,
+      recipeId,
+      status: "na",
+      updatedAt: serverTimestamp(),
+    }, { merge: true });
+
+    // Repaint the table so it moves to bottom and turns green
+    try { typeof loadMainKitchenStartingPars === "function" && loadMainKitchenStartingPars(); } catch {}
+  } catch (e) {
+    console.error("markStartingParNA failed:", e);
+    alert("Failed to mark item as NA.");
+  }
 };
 
 
