@@ -2374,13 +2374,15 @@ window.showStationTab = function(stationName) {
 };
 
 
-
 function listenToStationOrders(stationName) {
   const stationRef = collection(db, "orders");
+  const today = getTodayDate();
+
   const stationQuery = query(
     stationRef,
     where("station", "==", stationName),
-    where("status", "==", "open")
+    where("status", "==", "open"),
+    where("date", "==", today)   // ✅ only today’s orders
   );
 
   onSnapshot(stationQuery, (snapshot) => {
@@ -2388,6 +2390,7 @@ function listenToStationOrders(stationName) {
     renderStationTable(stationName, orders);
   });
 }
+
 function renderStationTable(stationName, orders) {
   const tableBody = document.querySelector(`#${stationName}Table tbody`);
   if (!tableBody) return;
