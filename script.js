@@ -2743,6 +2743,9 @@ window.renderMainKitchenPars = function () {
   const tbody = table.querySelector("tbody");
   tbody.innerHTML = "";
 
+  // 🔸 NEW: cache object to persist unsent input values across filter changes
+  window.mainStartingQtyCache = window.mainStartingQtyCache || {};
+
   // --- Concessions baseline (unchanged)
   const currentConGuests = Number(data.guestCounts?.Concession || data.guestCounts?.Concessions || 0);
   const { guestBase, sentBase } = readConcessionBaseline();
@@ -2797,14 +2800,17 @@ window.renderMainKitchenPars = function () {
         remaining = Math.max(0, parPans - sentPansToday);
       }
 
-      // 👉 NEW: always render the row (even when remaining <= 0)
+      // 👉 always render the row (even when remaining <= 0)
       // compute status + "sent so far"
       const statusMap = data.sentParStatus?.[venue] || {};
       const status = String(statusMap[recipe.id] || "").toLowerCase(); // "", "sent", "received", "na"
       const sentSoFar = Number(data.sentQtyTotals?.[venue]?.[recipe.id] || 0);
 
+      // 🔸 NEW: stable key per row to cache unsent input values
+      const cacheKey  = `${getTodayDate()}|${venue}|${recipe.id}`;
+      const cachedVal = window.mainStartingQtyCache[cacheKey] ?? "";
 
-      // 3) Build row: Area | Item (+sent-badge) | Par Qty (REMAINING) | UOM | Send Qty | Action
+      // 3) Build row: Area | Item (+sent-badge) | Par Qty (REMAINING) | UOM | Send/NA
       const row = document.createElement("tr");
       row.dataset.recipeId = recipe.id;
       row.dataset.venue    = venue;
@@ -2821,7 +2827,8 @@ window.renderMainKitchenPars = function () {
         ? `<em style="opacity:.7;">Marked NA</em>`
         : `
             <input class="send-qty-input" type="text" inputmode="decimal"
-                   value="" style="width:80px; margin-left:6px; text-align:right;" placeholder="0" />
+                   value="${cachedVal}" style="width:80px; margin-left:6px; text-align:right;" placeholder="0"
+                   data-cache-key="${cacheKey}" />
             <button onclick="sendSingleStartingPar('${recipe.id}', '${venue}', this)">Send</button>
             <button onclick="markStartingParNA && markStartingParNA('${recipe.id}', '${venue}', this)" style="margin-left:6px;">NA</button>
           `;
@@ -2835,10 +2842,40 @@ window.renderMainKitchenPars = function () {
       `;
       tbody.appendChild(row);
       totalRows++;
+
+      // 🔸 NEW: keep the input cached as user types / confirms / blurs
+      const input = row.querySelector('.send-qty-input');
+      if (input) {
+        input.addEventListener('input', () => {
+          window.mainStartingQtyCache[cacheKey] = input.value;
+        });
+        input.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            const v = typeof normalizeQtyInputValue === 'function'
+              ? normalizeQtyInputValue(input)
+              : Number(input.value);
+            if (Number.isFinite(v)) {
+              input.value = String(v);
+              window.mainStartingQtyCache[cacheKey] = input.value;
+              input.select?.();
+            }
+          }
+        });
+        input.addEventListener('blur', () => {
+          const v = typeof normalizeQtyInputValue === 'function'
+            ? normalizeQtyInputValue(input)
+            : Number(input.value);
+          if (Number.isFinite(v)) {
+            input.value = String(v);
+            window.mainStartingQtyCache[cacheKey] = input.value;
+          }
+        });
+      }
     }
   });
 
-  // 👉 NEW: push completed/NA rows to the bottom
+  // push completed/NA rows to the bottom
   const allRows = Array.from(tbody.querySelectorAll("tr"));
   const active = [];
   const completed = [];
@@ -2848,8 +2885,9 @@ window.renderMainKitchenPars = function () {
   completed.forEach(r => tbody.appendChild(r));
 
   enableMathOnInputs(".send-qty-input", table);
-  console.log(`✅ Rendered ${totalRows} rows (keeps completed/NA at bottom; shows "Sent so far").`);
+  console.log(`✅ Rendered ${totalRows} rows (keeps completed/NA at bottom; shows "Sent so far"; caches unsent values).`);
 };
+
 
 
 
