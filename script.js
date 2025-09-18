@@ -1,5 +1,8 @@
 import {
   db,
+  auth,
+  functions, 
+  storage,
   collection,
   doc,
   setDoc,
@@ -14,8 +17,12 @@ import {
   Timestamp,
   orderBy,
   limit,
-   deleteDoc
-} from './firebaseConfig.js';
+  deleteDoc,
+  arrayUnion,
+  arrayRemove,
+  increment,
+} from "./firebaseConfig.js";
+
 
 
 window.startingCache = {};
@@ -2743,7 +2750,6 @@ window.renderMainKitchenPars = function () {
   const tbody = table.querySelector("tbody");
   tbody.innerHTML = "";
 
-  // 🔸 NEW: cache object to persist unsent input values across filter changes
   window.mainStartingQtyCache = window.mainStartingQtyCache || {};
 
   // --- Concessions baseline (unchanged)
@@ -2765,19 +2771,18 @@ window.renderMainKitchenPars = function () {
       const venue = venueCodeMap[code] || "Unknown";
       if (venueFilter && venue !== venueFilter) continue;
 
-      // 1) Today's target PAR (pans)
+      // 1) Compute target PAR (pans) — this is what we'll ALWAYS show in "Par Qty"
       let parPans = 0;
 
       if (venue === "Concessions") {
         parPans = Number(recipe.pars?.Concession?.default || 0);
       } else {
-        // --- Aloha/Ohana Pineapple Shells override: use LIVE Showware total if available
         const recipeNo = String(recipe.recipeNo || "").toUpperCase().trim();
         const isPineappleShells = (recipeNo === "R0425") || /pineapple\s*shell/i.test(String(recipe.description || ""));
         const live = (typeof window.swHasTotal === "function") ? window.swHasTotal(venue) : null;
 
         if ((venue === "Aloha" || venue === "Ohana") && isPineappleShells && Number.isFinite(live)) {
-          parPans = Number(live); // target = live Showware guest total
+          parPans = Number(live);
         } else {
           const gc = Number(data.guestCounts?.[venue] || 0);
           parPans = Number(recipe.pars?.[venue]?.[String(gc)] || 0);
@@ -2785,42 +2790,40 @@ window.renderMainKitchenPars = function () {
       }
       if (parPans <= 0) continue;
 
-      // 2) Compute REMAINING to send
+      // 2) Compute REMAINING (for completion styling/ordering only)
       let remaining = 0;
 
       if (venue === "Concessions") {
-        // Wave/baseline in lbs, but display remaining PAN count here
+        // lbs-based baseline logic (unchanged)
         const sentAtBaseline = Number(finalSentBase?.[recipe.id] || 0);
-        const sentNow = Number(data.sentPars?.Concessions?.[recipe.id] || 0); // lbs tallied by loader
+        const sentNow = Number(data.sentPars?.Concessions?.[recipe.id] || 0); // lbs
         const effectiveSentSinceIncrease = Math.max(0, sentNow - sentAtBaseline);
         remaining = Math.max(0, parPans - effectiveSentSinceIncrease);
       } else {
-        // Buffet venues: “target − total sent today (pans)”
-        const sentPansToday = Number(data.sentPars?.[venue]?.[recipe.id] || 0);
+        // ✅ Buffet venues: use exact pans sent today from sentQtyTotals (not sentPars)
+        const sentPansToday = Number(data.sentQtyTotals?.[venue]?.[recipe.id] || 0);
         remaining = Math.max(0, parPans - sentPansToday);
       }
 
-      // 👉 always render the row (even when remaining <= 0)
-      // compute status + "sent so far"
+      // 👉 Always render, even if remaining <= 0
       const statusMap = data.sentParStatus?.[venue] || {};
       const status = String(statusMap[recipe.id] || "").toLowerCase(); // "", "sent", "received", "na"
       const sentSoFar = Number(data.sentQtyTotals?.[venue]?.[recipe.id] || 0);
 
-      // 🔸 NEW: stable key per row to cache unsent input values
       const cacheKey  = `${getTodayDate()}|${venue}|${recipe.id}`;
       const cachedVal = window.mainStartingQtyCache[cacheKey] ?? "";
 
-      // 3) Build row: Area | Item (+sent-badge) | Par Qty (REMAINING) | UOM | Send/NA
       const row = document.createElement("tr");
       row.dataset.recipeId = recipe.id;
       row.dataset.venue    = venue;
 
       const uom = recipe.uom || "ea";
       const sentBadge = `<div style="font-size:12px;opacity:.85;margin-top:2px;">Sent so far: <strong>${fmt(sentSoFar)}</strong> ${uom}</div>`;
+
       const isCompleted = (remaining <= 0) || (status === "na");
       if (isCompleted) {
         row.classList.add("row-completed");
-        row.style.background = "rgba(28,150,80,0.10)"; // soft green
+        row.style.background = "rgba(28,150,80,0.10)";
       }
 
       const controls = (status === "na")
@@ -2833,17 +2836,17 @@ window.renderMainKitchenPars = function () {
             <button onclick="markStartingParNA && markStartingParNA('${recipe.id}', '${venue}', this)" style="margin-left:6px;">NA</button>
           `;
 
+      // ✅ SHOW TARGET in Par Qty cell (parPans), not remaining
       row.innerHTML = `
         <td>${venue}</td>
         <td>${recipe.description || recipe.recipeNo || recipe.id}${sentBadge}</td>
-        <td>${fmt(remaining)}</td>
+        <td>${fmt(parPans)}</td>
         <td>${uom}</td>
         <td>${controls}</td>
       `;
       tbody.appendChild(row);
       totalRows++;
 
-      // 🔸 NEW: keep the input cached as user types / confirms / blurs
       const input = row.querySelector('.send-qty-input');
       if (input) {
         input.addEventListener('input', () => {
@@ -2875,7 +2878,7 @@ window.renderMainKitchenPars = function () {
     }
   });
 
-  // push completed/NA rows to the bottom
+  // Keep completed/NA rows at the bottom
   const allRows = Array.from(tbody.querySelectorAll("tr"));
   const active = [];
   const completed = [];
@@ -2885,7 +2888,7 @@ window.renderMainKitchenPars = function () {
   completed.forEach(r => tbody.appendChild(r));
 
   enableMathOnInputs(".send-qty-input", table);
-  console.log(`✅ Rendered ${totalRows} rows (keeps completed/NA at bottom; shows "Sent so far"; caches unsent values).`);
+  console.log(`✅ Rendered ${totalRows} rows (Par Qty = target; completion uses remaining; sent-so-far badge intact).`);
 };
 
 
