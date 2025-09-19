@@ -8287,87 +8287,125 @@ window.sendAllMainLunch = async function () {
 
 
 //**ANALYTICS */
-// ===== Analytics Dashboard (PowerBI-style) =====
+// ===== Analytics Dashboard (Tabs: COGS / Timing / Qty per Guest) =====
 (() => {
   'use strict';
 
-  // global state (persist across tab switches)
-  window.analyticsState = window.analyticsState || {
+  // -------------------- State --------------------
+  const S = (window.analyticsState = window.analyticsState || {
     start: null, end: null, venue: "All", section: "All",
-    sectionsLoaded: false,
     charts: { categoryLine: null },
-    // filters
+    // COGS-only filters:
     allCategories: new Set(),
     allItems: new Set(),
     selectedCategories: new Set(),
     selectedItems: new Set(),
-  };
-  // local alias to avoid scope issues
-  const analyticsState = window.analyticsState;
+    // collections
+    SHOWWARE_COLL: window.SHOWWARE_COLL || "showwareEvents",
+  });
 
-  // ---------- INIT ----------
+  // -------------------- Public entry --------------------
   window.initAnalyticsDashboard = async function initAnalyticsDashboard() {
-    const startEl = document.getElementById("fStart");
-    const endEl   = document.getElementById("fEnd");
-    const venueEl = document.getElementById("fVenue");
-    const sectEl  = document.getElementById("fSection");
-    if (!startEl || !endEl || !venueEl || !sectEl) return;
-
     // default last 7 days
     const today = new Date();
     const endStr = toYMD(today);
     const start = new Date(today); start.setDate(start.getDate() - 6);
     const startStr = toYMD(start);
-    startEl.value = startStr; endEl.value = endStr;
 
-    if (!analyticsState.sectionsLoaded) {
-      await populateSectionsDropdown(sectEl);
-      analyticsState.sectionsLoaded = true;
-    }
+    const startEl = document.getElementById("fStart");
+    const endEl   = document.getElementById("fEnd");
+    if (startEl && !startEl.value) startEl.value = startStr;
+    if (endEl && !endEl.value)     endEl.value   = endStr;
 
-    // Build static filter shells (emptied/refreshed each run with live data)
+    // populate Sections (from recipes)
+    await ensureSectionsPopulated();
+
+    // filters area (checkbox handlers)
     hydrateFilterUI();
 
-    // events
+    // Apply button: run active tab
     const applyBtn = document.getElementById("applyAnalyticsFilters");
-    if (applyBtn) applyBtn.onclick = runAnalytics;
+    applyBtn?.addEventListener("click", runActiveTab);
 
-    const itemSearch = document.getElementById("filterItemSearch");
-    if (itemSearch) itemSearch.oninput = filterItemCheckboxList;
+    // Item search typing
+    document.getElementById("filterItemSearch")?.addEventListener("input", filterItemCheckboxList);
 
-    await runAnalytics();
+    // First paint (COGS default)
+    await runActiveTab();
   };
 
-  // ---------- UTIL ----------
-  function toYMD(d){ const y=d.getFullYear(); const m=String(d.getMonth()+1).padStart(2,'0'); const day=String(d.getDate()).padStart(2,'0'); return `${y}-${m}-${day}`;}
-  function enumerateDates(startStr, endStr){ const out=[]; const d=new Date(startStr+"T00:00:00"); const e=new Date(endStr+"T00:00:00"); while(d<=e){ out.push(toYMD(d)); d.setDate(d.getDate()+1);} return out;}
-  function fmtMoney(n){ return `$${Number(n||0).toFixed(2)}`; }
-  function monthName(i){ return ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][i] || ""; }
-  function escapeHtml(s){ return String(s).replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+  // Keep your “showAccountingDashboard” hook working
+  window.showAccountingDashboard = function showAccountingDashboard(){
+    document.getElementById("analyticsDashboard")?.style && (document.getElementById("analyticsDashboard").style.display="block");
+    window.initAnalyticsDashboard();
+  };
 
-  async function populateSectionsDropdown(selectEl){
+  // -------------------- DOM helpers --------------------
+  function $$(sel, root=document){ return Array.from(root.querySelectorAll(sel)); }
+  function toYMD(d){ const y=d.getFullYear(); const m=String(d.getMonth()+1).padStart(2,'0'); const day=String(d.getDate()).padStart(2,'0'); return `${y}-${m}-${day}`;}
+  function fmtMoney(n){ return `$${Number(n||0).toFixed(2)}`; }
+  function escapeHtml(s){ return String(s ?? "").replace(/[&<>"']/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[m])); }
+
+  // Hawaii-local date helpers
+  function isoDateHST(d){
+    const utc = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+    const hst = new Date(utc.getTime() - 10*60*60*1000);
+    const y = hst.getUTCFullYear();
+    const m = String(hst.getUTCMonth()+1).padStart(2,'0');
+    const dd= String(hst.getUTCDate()).padStart(2,'0');
+    return `${y}-${m}-${dd}`;
+  }
+  function getHawaiiRangeFromInputs(startId="fStart", endId="fEnd"){
+    const s = document.getElementById(startId)?.value;
+    const e = document.getElementById(endId)?.value;
+    if (!s || !e) return {};
+    const startTs = Timestamp.fromDate(new Date(`${s}T10:00:00.000Z`));
+    const endNext = new Date(`${e}T10:00:00.000Z`); endNext.setUTCDate(endNext.getUTCDate()+1);
+    const endTs   = Timestamp.fromDate(endNext);
+    return { startTs, endTs, startStr: s, endStr: e };
+  }
+  function toFixedOrEmpty(n, d=2){ const x=Number(n); return Number.isFinite(x)?x.toFixed(d):""; }
+  function fillTable(tid, rows){
+    const tb = document.querySelector(`#${tid} tbody`);
+    if (!tb) return;
+    if (!rows?.length){
+      tb.innerHTML = `<tr><td colspan="999" style="text-align:center;opacity:.7;">No data</td></tr>`;
+      return;
+    }
+    tb.innerHTML = rows.map(r => `<tr>${r.map(c => `<td>${escapeHtml(String(c ?? ""))}</td>`).join("")}</tr>`).join("");
+  }
+  function enumerateDates(startStr, endStr){ const out=[]; const d=new Date(startStr+"T00:00:00"); const e=new Date(endStr+"T00:00:00"); while(d<=e){ out.push(toYMD(d)); d.setDate(d.getDate()+1);} return out;}
+  const monthName = (i)=> (["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][i]||"");
+
+  // -------------------- Sections dropdown --------------------
+  async function ensureSectionsPopulated() {
+    const sel = document.getElementById("fSection");
+    if (!sel || sel.dataset.ready) return;
     const recipesSnap = await getDocs(collection(db,"recipes"));
     const sections = new Set();
     recipesSnap.forEach(s=>{
-      const d = s.data();
+      const d = s.data() || {};
       const sec = d.section || d.station || d.category;
       if (sec) sections.add(String(sec));
     });
     [...sections].sort().forEach(s=>{
-      const opt=document.createElement("option"); opt.value=s; opt.textContent=s; selectEl.appendChild(opt);
+      const opt=document.createElement("option"); opt.value=s; opt.textContent=s; sel.appendChild(opt);
     });
+    sel.dataset.ready = "1";
   }
 
+  // -------------------- COGS Filters UI (checkboxes) --------------------
   function hydrateFilterUI(){
     const catWrap = document.getElementById("filterCatWrap");
     if (catWrap && !catWrap.dataset.ready){
       catWrap.dataset.ready="1";
       catWrap.addEventListener("change", (e)=>{
         const t=e.target;
-        if (t && t.name==="catChk"){
-          if(t.checked) analyticsState.selectedCategories.add(t.value);
-          else analyticsState.selectedCategories.delete(t.value);
-          runAnalytics();
+        if (t?.name==="catChk"){
+          if(t.checked) S.selectedCategories.add(t.value);
+          else S.selectedCategories.delete(t.value);
+          // live re-run only for COGS tab
+          if (getActiveTab()==="cogs") runActiveTab();
         }
       });
     }
@@ -8376,15 +8414,14 @@ window.sendAllMainLunch = async function () {
       itemWrap.dataset.ready="1";
       itemWrap.addEventListener("change",(e)=>{
         const t=e.target;
-        if (t && t.name==="itemChk"){
-          if(t.checked) analyticsState.selectedItems.add(t.value);
-          else analyticsState.selectedItems.delete(t.value);
-          runAnalytics();
+        if (t?.name==="itemChk"){
+          if(t.checked) S.selectedItems.add(t.value);
+          else S.selectedItems.delete(t.value);
+          if (getActiveTab()==="cogs") runActiveTab();
         }
       });
     }
   }
-
   function filterItemCheckboxList(){
     const q = (document.getElementById("filterItemSearch")?.value || "").toLowerCase();
     const wrap = document.getElementById("filterItemWrap");
@@ -8394,13 +8431,11 @@ window.sendAllMainLunch = async function () {
       l.style.display = txt.includes(q) ? "" : "none";
     });
   }
-
-  // ---------- FILTER LISTS (now in-scope) ----------
   function rebuildFilterLists(categories, items){
     // categories
     const catWrap = document.getElementById("filterCatWrap");
     if (catWrap){
-      const prevSel = new Set(analyticsState.selectedCategories);
+      const prevSel = new Set(S.selectedCategories);
       catWrap.innerHTML = categories.map(c=>{
         const checked = prevSel.has(c) ? "checked" : "";
         return `<label style="display:flex;gap:8px;align-items:center;margin-right:14px;">
@@ -8408,17 +8443,14 @@ window.sendAllMainLunch = async function () {
                   <span>${escapeHtml(c)}</span>
                 </label>`;
       }).join("");
-      analyticsState.allCategories = new Set(categories);
-      // prune selections no longer present
-      analyticsState.selectedCategories.forEach(c=>{
-        if(!analyticsState.allCategories.has(c)) analyticsState.selectedCategories.delete(c);
-      });
+      S.allCategories = new Set(categories);
+      // prune old selections
+      S.selectedCategories.forEach(c=>{ if(!S.allCategories.has(c)) S.selectedCategories.delete(c); });
     }
-
-    // items (searchable)
+    // items
     const itemWrap = document.getElementById("filterItemWrap");
     if (itemWrap){
-      const prevSel = new Set(analyticsState.selectedItems);
+      const prevSel = new Set(S.selectedItems);
       itemWrap.innerHTML = items.map(key=>{
         const [no, desc] = key.split("__");
         const txt = `${no} ${desc}`.toLowerCase();
@@ -8428,80 +8460,73 @@ window.sendAllMainLunch = async function () {
                   <span>${escapeHtml(no)} — ${escapeHtml(desc)}</span>
                 </label>`;
       }).join("");
-      analyticsState.allItems = new Set(items);
-      analyticsState.selectedItems.forEach(k=>{
-        if(!analyticsState.allItems.has(k)) analyticsState.selectedItems.delete(k);
-      });
+      S.allItems = new Set(items);
+      S.selectedItems.forEach(k=>{ if(!S.allItems.has(k)) S.selectedItems.delete(k); });
       filterItemCheckboxList();
     }
   }
 
-  // ---------- CORE RUN ----------
-  async function runAnalytics(){
+  // -------------------- Active tab runner --------------------
+  function getActiveTab(){
+    const btn = $$('#analytics-nav .an-tab').find(b => b.classList.contains('active'));
+    return btn?.dataset.analytics || "cogs";
+  }
+  async function runActiveTab(){
     const loading = document.getElementById("analyticsLoading");
-    if (loading) loading.style.display="inline";
+    loading && (loading.style.display="inline");
 
-    const startStr = document.getElementById("fStart")?.value || "";
-    const endStr   = document.getElementById("fEnd")?.value || "";
-    const venue    = document.getElementById("fVenue")?.value || "All";
-    const section  = document.getElementById("fSection")?.value || "All";
-    Object.assign(analyticsState,{ start:startStr,end:endStr,venue,section });
+    const { startTs, endTs, startStr, endStr } = getHawaiiRangeFromInputs("fStart","fEnd");
+    if (!startTs || !endTs) { alert("Select a valid start/end date."); loading&&(loading.style.display="none"); return; }
 
-    // Pull orders & recipes to enrich (category, uom, description)
-    const { ordersEnriched, categories, items } =
-      await fetchAndEnrichOrders({startStr,endStr,venue,section});
+    // mirror date range in the COGS side card
+    document.getElementById("drFrom") && (document.getElementById("drFrom").textContent = startStr);
+    document.getElementById("drTo")   && (document.getElementById("drTo").textContent   = endStr);
 
-    // Rebuild filter lists based on available data
-    rebuildFilterLists(categories, items);
+    const venue   = document.getElementById("fVenue")?.value || "All";
+    const section = document.getElementById("fSection")?.value || "All";
+    Object.assign(S, { start:startStr, end:endStr, venue, section });
 
-    // Apply filter selections
-    const filtered = ordersEnriched.filter(o=>{
-      const passCat  = analyticsState.selectedCategories.size ? analyticsState.selectedCategories.has(o.category) : true;
-      const passItem = analyticsState.selectedItems.size ? analyticsState.selectedItems.has(o.itemKey) : true;
-      return passCat && passItem;
-    });
-
-    // Render table
-    renderOrderTable(filtered);
-
-    // Category breakdown (totals)
-    renderCategoryBreakdown(filtered);
-
-    // Line chart: cost per category per day
-    renderCategoryLineChart(buildCategorySeries(filtered));
-
-    if (loading) loading.style.display="none";
+    try {
+      const tab = getActiveTab();
+      if (tab === "cogs") {
+        await runCOGS(startStr, endStr, startTs, endTs, venue, section);
+      } else if (tab === "timing") {
+        await runTiming(startStr, endStr, startTs, endTs, venue, section);
+      } else if (tab === "qty-per-guest") {
+        await runQtyPerGuest(startStr, endStr, startTs, endTs, venue, section);
+      }
+    } finally {
+      loading && (loading.style.display="none");
+    }
   }
 
-  // ---------- DATA FETCH/ENRICH ----------
-  async function fetchAndEnrichOrders({ startStr, endStr, venue, section }) {
-    // helpers (scoped here)
-    function normalizeCategory(cat, station) {
-      if (cat) return String(cat).toUpperCase();
-      const map = { "FRYER":"HOTFOODS","OVENS":"HOTFOODS","WOK":"HOTFOODS","GRILL":"HOTFOODS","PANTRY":"PANTRY","BAKERY":"BAKERY" };
-      const s = (station || "").toUpperCase();
-      return map[s] || "UNCATEGORIZED";
-    }
-    function chooseRecipeForOrder(order, maps) {
-      if (order.recipeId && maps.byId.has(order.recipeId)) return maps.byId.get(order.recipeId);
-      const no = (order.recipeNo || "").toUpperCase();
-      if (no && maps.byNo.has(no)) return maps.byNo.get(no);
-      const desc = (order.description || order.item || "").trim().toLowerCase();
-      if (desc && maps.byDesc.has(desc)) return maps.byDesc.get(desc);
-      return null;
-    }
+function itemKeyFrom(recipeNo, description){
+  return `${(recipeNo || "").toUpperCase()}__${(description || "").trim()}`;
+}
+function passesSidebarFilters(row){
+  const passCat  = (window.analyticsState?.selectedCategories?.size ?? 0) ? window.analyticsState.selectedCategories.has(row.category) : true;
+  const passItem = (window.analyticsState?.selectedItems?.size ?? 0)       ? window.analyticsState.selectedItems.has(row.itemKey)       : true;
+  return passCat && passItem;
+}
 
-    const ordersRef = collection(db, "orders");
-    const qBase = query(ordersRef, where("date", ">=", startStr), where("date", "<=", endStr));
+
+  // -------------------- Data fetch + enrich (shared for COGS) --------------------
+  async function fetchOrdersAndRecipesByDateRange({ startStr, endStr, venue, section }){
+    // Pull by "date" field (string). (If you need a timestamp fallback later, we can add it.)
+    const qBase = query(
+      collection(db,"orders"),
+      where("date", ">=", startStr),
+      where("date", "<=", endStr)
+    );
     const [snap, recipesSnap] = await Promise.all([
       getDocs(qBase),
-      getDocs(collection(db, "recipes")),
+      getDocs(collection(db,"recipes")),
     ]);
 
     // recipe indexes
-    const maps = { byId: new Map(), byNo: new Map(), byDesc: new Map() };
-    recipesSnap.forEach((r) => {
-      const d = r.data();
+    const byId=new Map(), byNo=new Map(), byDesc=new Map();
+    recipesSnap.forEach(r=>{
+      const d=r.data()||{};
       const rec = {
         id: r.id,
         recipeNo: d.recipeNo || "",
@@ -8509,88 +8534,125 @@ window.sendAllMainLunch = async function () {
         category: (d.category || d.station || d.section || ""),
         uom: d.uom || d.baseUOM || d.purchaseUOM || "",
       };
-      maps.byId.set(r.id, rec);
-      if (rec.recipeNo) maps.byNo.set(String(rec.recipeNo).toUpperCase(), rec);
-      if (rec.description) maps.byDesc.set(String(rec.description).trim().toLowerCase(), rec);
+      byId.set(r.id, rec);
+      if (rec.recipeNo) byNo.set(String(rec.recipeNo).toUpperCase(), rec);
+      if (rec.description) byDesc.set(String(rec.description).trim().toLowerCase(), rec);
     });
 
-    const out = [], cats = new Set(), items = new Set();
+    const normalizeCategory = (cat, station) => {
+      if (cat) return String(cat).toUpperCase();
+      const map = { "FRYER":"HOTFOODS","OVENS":"HOTFOODS","WOK":"HOTFOODS","GRILL":"HOTFOODS","PANTRY":"PANTRY","BAKERY":"BAKERY" };
+      const s = (station || "").toUpperCase();
+      return map[s] || "UNCATEGORIZED";
+    };
+    const chooseRecipeForOrder = (order) => {
+      if (order.recipeId && byId.has(order.recipeId)) return byId.get(order.recipeId);
+      const no = (order.recipeNo || "").toUpperCase();
+      if (no && byNo.has(no)) return byNo.get(no);
+      const desc = (order.description || order.item || "").trim().toLowerCase();
+      if (desc && byDesc.has(desc)) return byDesc.get(desc);
+      return null;
+    };
 
-    snap.forEach((s) => {
-      const d = s.data();
-
-      // client-side venue/section filter
-      const recSection = d.section || d.station || d.category || "";
+    const out = [], cats=new Set(), items=new Set();
+    snap.forEach(s=>{
+      const d = s.data() || {};
+      // client-side venue/section filters
       if (venue !== "All" && (d.venue || "") !== venue) return;
+      const recSection = d.section || d.station || d.category || "";
       if (section !== "All" && String(recSection) !== section) return;
 
-      // find recipe (works even for add-ons without recipeId)
-      const r = chooseRecipeForOrder(
-        { recipeId: d.recipeId || "", recipeNo: d.recipeNo || "", description: d.description || d.item || "" },
-        maps
-      ) || {};
-
+      const r = chooseRecipeForOrder(d) || {};
       const recipeNo    = r.recipeNo || d.recipeNo || "";
       const description = r.description || d.description || d.item || "";
       const category    = normalizeCategory(r.category || d.category, d.station);
-      const uom         = d.uom || r.uom || "";
-      const qty         = Number(d.sendQty ?? d.qty ?? d.netWeight ?? 0);
-      const cost        = Number(d.totalCost ?? 0);
+      const uom         = d.uom || r.uom || "ea";
+      const qty         = Number(d.netWeight ?? d.qty ?? d.sentQty ?? d.requestQty ?? 0);
+      // prefer order.totalCost; else unit * qty (unit can be on order or recipe)
+      const storedTotal = Number(d.totalCost || 0);
+      let cost = 0;
+      if (storedTotal > 0) cost = storedTotal;
+      else {
+        const unit = Number(d.cost ?? d.unitCost ?? r.cost ?? 0);
+        cost = unit > 0 ? unit * qty : 0;
+      }
+      const date = d.date || (d.timestamp?.toDate?.() ? isoDateHST(d.timestamp.toDate()) : "");
 
-      const date = d.date; // "YYYY-MM-DD"
-      const record = {
-        id: s.id,
-        date,
-        year: Number((date || "").slice(0, 4)),
-        month: Number((date || "").slice(5, 7)) - 1,
-        day: Number((date || "").slice(8, 10)),
-        recipeNo,
-        description,
-        category,
-        qty,
-        uom,
-        cost,
-        itemKey: `${(recipeNo || "").toUpperCase()}__${description.trim()}`,
+      const row = {
+        id: s.id, date,
+        year: Number((date||"").slice(0,4)),
+        month: Number((date||"").slice(5,7))-1,
+        day: Number((date||"").slice(8,10)),
+        venue: d.venue || "",
+        recipeNo, description, category, qty, uom, cost,
+        type: d.type || "",
+        status: d.status || "",
+        itemKey: `${(recipeNo || "").toUpperCase()}__${(description||"").trim()}`
       };
-
-      out.push(record);
-      cats.add(record.category);
-      items.add(record.itemKey);
+      out.push(row);
+      cats.add(row.category);
+      items.add(row.itemKey);
     });
 
     return {
-      ordersEnriched: out,
+      rows: out,
       categories: [...cats].sort(),
-      items: [...items].sort((a, b) => a.localeCompare(b)),
+      items: [...items].sort((a,b)=>a.localeCompare(b)),
     };
   }
 
-  // ---------- TABLE ----------
-  function renderOrderTable(rows){
-    const tbody = document.querySelector("#analyticsTable tbody");
-    const totalEl = document.getElementById("analyticsTableTotal");
-    if (!tbody) return;
+  // -------------------- Tab 1: Food Item COGS --------------------
+  async function runCOGS(startStr, endStr, startTs, endTs, venue, section){
+    // fetch + enrich
+    const { rows, categories, items } = await fetchOrdersAndRecipesByDateRange({ startStr, endStr, venue, section });
 
-    tbody.innerHTML = rows
-      .sort((a,b)=> a.date.localeCompare(b.date) || a.recipeNo.localeCompare(b.recipeNo))
-      .map(r=>{
-        const yr=r.year, mn=monthName(r.month), dy=r.day;
-        return `<tr>
-          <td>${yr}</td><td>${mn}</td><td>${dy}</td>
-          <td>${escapeHtml(r.recipeNo)}</td>
-          <td>${escapeHtml(r.description)}</td>
-          <td>${escapeHtml(r.category)}</td>
-          <td style="text-align:right;">${Number(r.qty||0).toLocaleString(undefined,{maximumFractionDigits:2})}</td>
-          <td>${escapeHtml(r.uom||"")}</td>
-          <td style="text-align:right;">${fmtMoney(r.cost)}</td>
-        </tr>`;
-      }).join("");
+    // filter to sent + (addons/starting-par)
+   // was: r.status === "sent"
+let data = rows.filter(r =>
+  (r.status === "sent" || r.status === "received") &&
+  (r.type==="addon" || r.type==="starting-par")
+);
 
-    const total = rows.reduce((a,r)=>a + Number(r.cost||0), 0);
-    if (totalEl) totalEl.textContent = fmtMoney(total);
+
+    // apply COGS sidebar filters
+    data = data.filter(r=>{
+      const passCat  = S.selectedCategories.size ? S.selectedCategories.has(r.category) : true;
+      const passItem = S.selectedItems.size ? S.selectedItems.has(r.itemKey) : true;
+      return passCat && passItem;
+    });
+
+    // rebuild filter lists from available data (so user can refine)
+    rebuildFilterLists(categories, items);
+
+    // render table
+    // render table
+const tableRows = data
+  .sort((a,b)=> a.date.localeCompare(b.date) || a.venue.localeCompare(b.venue) || a.description.localeCompare(b.description))
+  .map(r => [
+    r.date,
+    r.venue,
+    r.description,
+    r.recipeNo,
+    toFixedOrEmpty(r.qty,2),
+    r.uom,
+    `$${toFixedOrEmpty(r.cost,2)}`
+  ]);
+
+fillTable("foodCogsTable", tableRows);
+
+// footer total (with $)
+const total = data.reduce((sum,r)=> sum + Number(r.cost||0), 0);
+const tEl = document.getElementById("analyticsTableTotal");
+if (tEl) tEl.textContent = `$${total.toFixed(2)}`;
+
+
+    // right-side "Item Category Breakdown"
+    renderCategoryBreakdown(data);
+
+    // chart: cost per category per day
+    renderCategoryLineChart(buildCategorySeries(data));
   }
 
-  // ---------- CATEGORY BREAKDOWN (TOTALS) ----------
   function renderCategoryBreakdown(rows){
     const box = document.querySelector("#categoryBreakdown tbody");
     if (!box) return;
@@ -8603,65 +8665,251 @@ window.sendAllMainLunch = async function () {
       .join("") + `<tr><td><strong>Total</strong></td><td style="text-align:right;"><strong>${fmtMoney(total)}</strong></td></tr>`;
     box.innerHTML = html || `<tr><td colspan="2"><em>No data</em></td></tr>`;
   }
-
-  // ---------- CATEGORY LINE CHART ----------
   function buildCategorySeries(rows){
-    const labels = enumerateDates(analyticsState.start, analyticsState.end);
+    const labels = enumerateDates(S.start, S.end);
     const idx = new Map(labels.map((d,i)=>[d,i]));
     const cats = [...new Set(rows.map(r=>r.category))].sort();
-    const series = new Map(); // cat -> array
-    cats.forEach(c=> series.set(c, labels.map(()=>0)));
+    const series = new Map(); cats.forEach(c=> series.set(c, labels.map(()=>0)));
     rows.forEach(r=>{
-      const i = idx.get(r.date);
-      if (i==null) return;
-      const arr = series.get(r.category);
-      if (arr) arr[i] += Number(r.cost||0);
+      const i = idx.get(r.date); if (i==null) return;
+      series.get(r.category)[i] += Number(r.cost||0);
     });
     return { labels, series };
   }
-
   function renderCategoryLineChart({labels, series}){
     const canvas = document.getElementById("categoryLineChart");
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
-    if (analyticsState.charts.categoryLine){
-      analyticsState.charts.categoryLine.destroy();
-    }
+    if (S.charts.categoryLine){ S.charts.categoryLine.destroy(); }
     if (typeof Chart === "undefined"){ console.warn("Chart.js not found"); return; }
-
     const datasets = [...series.entries()].map(([cat,arr])=>({
-      type: "line",
-      label: cat,
-      data: arr,
-      tension: 0.25,
-      pointRadius: 2
+      type:"line", label:cat, data:arr, tension:.25, pointRadius:2
     }));
-
-    analyticsState.charts.categoryLine = new Chart(ctx, {
+    S.charts.categoryLine = new Chart(ctx, {
       type: "line",
       data: { labels, datasets },
       options: {
         responsive: true, maintainAspectRatio: false,
-        interaction: { mode: "index", intersect: false },
+        interaction: { mode:"index", intersect:false },
         plugins: {
-          legend: { position: "top" },
+          legend: { position:"top" },
           tooltip: { callbacks: { label: (it)=> `${it.dataset.label}: ${fmtMoney(it.parsed.y)}` } }
         },
-        scales: {
-          y: { beginAtZero: true, ticks: { callback: (v)=> `$${Number(v).toLocaleString()}` } }
-        }
+        scales: { y: { beginAtZero:true, ticks:{ callback: v=> `$${Number(v).toLocaleString()}` } } }
       }
     });
   }
 
-  // ---------- PUBLIC HOOK ----------
-  window.showAccountingDashboard = function showAccountingDashboard(){
-    const sec = document.getElementById("analyticsDashboard");
-    if (sec && sec.style) sec.style.display="block";
-    window.initAnalyticsDashboard();
+  // -------------------- Tab 2: Food Timing (Add-ons) --------------------
+async function runTiming(startStr, endStr, startTs, endTs, venue, section){
+  // Pull add-ons in time window
+  const q = query(
+    collection(db,"orders"),
+    where("type","==","addon"),
+    where("timestamp",">=", startTs),
+    where("timestamp","<",  endTs),
+    where("status","in",["open","Ready to Send","sent","received"])
+  );
+  const [snap, recipesSnap] = await Promise.all([
+    getDocs(q),
+    getDocs(collection(db,"recipes")),
+  ]);
+
+  // recipe indexes for category/description/uom
+  const byNo=new Map(), byId=new Map(), byDesc=new Map();
+  recipesSnap.forEach(r=>{
+    const d=r.data()||{};
+    const rec = {
+      id:r.id,
+      recipeNo: d.recipeNo||"",
+      description: d.description||d.itemName||"",
+      category: (d.category||d.station||d.section||""),
+      uom: d.uom||d.baseUOM||d.purchaseUOM||""
+    };
+    if (rec.recipeNo) byNo.set(String(rec.recipeNo).toUpperCase(), rec);
+    byId.set(r.id, rec);
+    if (rec.description) byDesc.set(String(rec.description).trim().toLowerCase(), rec);
+  });
+  const normalizeCategory = (cat, station) => {
+    if (cat) return String(cat).toUpperCase();
+    const map = { FRYER:"HOTFOODS", OVENS:"HOTFOODS", WOK:"HOTFOODS", GRILL:"HOTFOODS", PANTRY:"PANTRY", BAKERY:"BAKERY" };
+    const s = (station||"").toUpperCase();
+    return map[s] || "UNCATEGORIZED";
+  };
+  const chooseRec = (d)=>{
+    if (d.recipeId && byId.has(d.recipeId)) return byId.get(d.recipeId);
+    const no = (d.recipeNo||"").toUpperCase(); if (no && byNo.has(no)) return byNo.get(no);
+    const desc = (d.item||d.description||"").trim().toLowerCase(); if (desc && byDesc.has(desc)) return byDesc.get(desc);
+    return null;
   };
 
+  // First pass: build enriched rows and collect categories/items for the sidebar
+  const cats = new Set(), items = new Set();
+  const enriched = [];
+  snap.forEach(s=>{
+    const d = s.data()||{};
+    if (venue!=="All" && (d.venue||"")!==venue) return;
+    const recSection = d.section || d.station || d.category || "";
+    if (section!=="All" && String(recSection)!==section) return;
+
+    const r = chooseRec(d) || {};
+    const category = normalizeCategory(r.category || d.category, d.station);
+    const description = r.description || d.item || d.description || "";
+    const recipeNo = r.recipeNo || d.recipeNo || "";
+    const itemKey  = itemKeyFrom(recipeNo, description);
+
+    const row = { category, itemKey, item: description, recipe: recipeNo, venue: d.venue || "", raw: d };
+    if (!passesSidebarFilters(row)) return;
+
+    cats.add(category);
+    items.add(itemKey);
+    enriched.push(row);
+  });
+
+  // Rebuild the side lists (so the checkboxes reflect this tab’s data too)
+  rebuildFilterLists([...cats].sort(), [...items].sort((a,b)=>a.localeCompare(b)));
+
+  // Bucket timing segments
+  const buckets = new Map();
+  const mins = (a,b)=> (a && b) ? (b - a)/60000 : NaN;
+  const addSeg = (obj, seg, v)=>{ if(Number.isFinite(v)&&v>=0){ obj[seg].sum+=v; obj[seg].count++; } };
+
+  enriched.forEach(({item, recipe, venue, raw})=>{
+    const key = `${item}||${recipe}||${venue}`;
+    if (!buckets.has(key)) buckets.set(key, {
+      item, recipe, venue,
+      o2r:{sum:0,count:0}, r2s:{sum:0,count:0}, s2v:{sum:0,count:0}, tot:{sum:0,count:0}
+    });
+
+    const tOrder = raw.timestamp?.toDate?.();
+    const tReady = raw.readyAt?.toDate?.();
+    const tSent  = raw.sentAt?.toDate?.();
+    const tRecv  = raw.receivedAt?.toDate?.();
+
+    const bag = buckets.get(key);
+    if (tOrder && tReady) addSeg(bag,"o2r", mins(tOrder,tReady));
+    if (tReady && tSent)  addSeg(bag,"r2s", mins(tReady,tSent));
+    if (tSent  && tRecv)  addSeg(bag,"s2v", mins(tSent,tRecv));
+    if (tOrder && tRecv)  addSeg(bag,"tot", mins(tOrder,tRecv));
+  });
+
+  const rows = [];
+  for (const v of buckets.values()){
+    const avg = seg => v[seg].count ? v[seg].sum / v[seg].count : 0;
+    rows.push([
+      v.item, v.recipe, v.venue,
+      toFixedOrEmpty(avg("o2r"),1),
+      toFixedOrEmpty(avg("r2s"),1),
+      toFixedOrEmpty(avg("s2v"),1),
+      toFixedOrEmpty(avg("tot"),1),
+      Math.max(v.o2r.count, v.r2s.count, v.s2v.count, v.tot.count)
+    ]);
+  }
+  rows.sort((a,b)=> Number(b[6]) - Number(a[6]));
+  fillTable("foodTimingTable", rows);
+}
+
+
+  // -------------------- Tab 3: Qty per Guest --------------------
+ async function runQtyPerGuest(startStr, endStr, startTs, endTs, venue, section){
+  // 1) Showware: latest per day
+  const swByDay = await fetchDailyShowwareTotals(startStr, endStr);
+
+  // 2) Orders + recipes (so we can get categories/descriptions)
+  const { rows } = await fetchOrdersAndRecipesByDateRange({ startStr, endStr, venue, section });
+
+  // 3) Keep both SENT and RECEIVED (see #3 fix), add itemKey for filtering
+  const sentRows = rows
+    .filter(r => (r.status==="sent" || r.status==="received") && (r.type==="addon" || r.type==="starting-par"))
+    .map(r => ({ ...r, itemKey: itemKeyFrom(r.recipeNo, r.description) }))
+    .filter(passesSidebarFilters);
+
+  // Rebuild side lists from this tab’s data
+  const cats = [...new Set(sentRows.map(r=>r.category))].sort();
+  const items = [...new Set(sentRows.map(r=>r.itemKey))].sort((a,b)=>a.localeCompare(b));
+  rebuildFilterLists(cats, items);
+
+  const guestsFor = (day, venue)=> Number(swByDay.get(day)?.[venue] || 0);
+
+  const out = [], seen = new Set(), agg = new Map(); // item||recipe -> {sum,count}
+  for (const d of sentRows){
+    const g = guestsFor(d.date, d.venue);
+    const qpg = g > 0 ? (Number(d.qty||0) / g) : 0;
+    const key = [d.date, d.venue, d.recipeNo, d.description, d.qty, g].join("|");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push([d.date, d.venue, d.description, d.recipeNo, toFixedOrEmpty(d.qty,2), String(g), toFixedOrEmpty(qpg,4)]);
+
+    const k2 = `${d.description}||${d.recipeNo}`;
+    const cur = agg.get(k2) || { item:d.description, recipe:d.recipeNo, sum:0, count:0 };
+    if (g>0){ cur.sum += qpg; cur.count += 1; }
+    agg.set(k2, cur);
+  }
+
+  out.sort((a,b)=> a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]) || a[2].localeCompare(b[2]));
+  fillTable("qtyPerGuestTable", out);
+
+  const avgRows=[];
+  for (const a of agg.values()){
+    const avg = a.count ? a.sum/a.count : 0;
+    avgRows.push([a.item, a.recipe, toFixedOrEmpty(avg,4), String(a.count)]);
+  }
+  avgRows.sort((a,b)=> Number(b[2]) - Number(a[2]));
+  fillTable("qtyPerGuestAverages", avgRows);
+}
+
+
+  // === Showware helpers: pull latest per day (receivedAt desc) ===
+  async function fetchDailyShowwareTotals(startStr, endStr){
+    const out = new Map(); // day -> { Aloha, Gateway, Ohana }
+    const startTs = Timestamp.fromDate(new Date(`${startStr}T10:00:00.000Z`));
+    const endNext = new Date(`${endStr}T10:00:00.000Z`); endNext.setUTCDate(endNext.getUTCDate()+1);
+    const endTs   = Timestamp.fromDate(endNext);
+
+    const snap = await getDocs(query(
+      collection(db, S.SHOWWARE_COLL),
+      where("receivedAt", ">=", startTs),
+      where("receivedAt", "<",  endTs),
+      orderBy("receivedAt","desc")
+    ));
+
+    const readNum = (obj, keys) => {
+      const pools = [obj, obj?.raw, obj?.raw?.data, obj?.raw?.payload, obj?.payload, obj?.data, obj?.raw?.showware];
+      for (const p of pools){
+        if (!p) continue;
+        for (const k of keys){
+          const v = p[k];
+          if (v != null && Number.isFinite(Number(v))) return Number(v);
+        }
+      }
+      return 0;
+    };
+    const KEYS = {
+      Aloha:   ["alohaTotal","alohaCount","aloha","AlohaTotal","AlohaCount","aloha_total","aloha_count"],
+      Gateway: ["gatewayTotal","gatewayCount","gateway","GatewayTotal","GatewayCount","gateway_total","gateway_count"],
+      Ohana:   ["ohanaTotal","ohanaCount","ohana","OhanaTotal","OhanaCount","ohana_total","ohana_count"],
+    };
+
+    snap.forEach(d=>{
+      const data = d.data() || {};
+      const rAt  = data.receivedAt?.toDate?.();
+      if (!rAt) return;
+      const day = isoDateHST(rAt);
+      if (out.has(day)) return; // first encountered = latest
+      out.set(day, {
+        Aloha:   readNum(data, KEYS.Aloha),
+        Gateway: readNum(data, KEYS.Gateway),
+        Ohana:   readNum(data, KEYS.Ohana),
+      });
+    });
+
+    return out;
+  }
+
+
+
 })();
+
 
 
 //**Recipes */

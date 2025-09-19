@@ -1171,7 +1171,6 @@ Step 3: …"></textarea>
     </div>
 
     <!-- Analytics Section -->
-<!-- Analytics Section -->
 <div id="analyticsTab" class="accounting-section" data-sec="analytics" style="display:none;">
   <section class="analytics" id="analyticsDashboard" style="margin-top:1rem;">
 
@@ -1202,80 +1201,141 @@ Step 3: …"></textarea>
           <option value="All">All</option>
         </select>
       </div>
+
       <button id="applyAnalyticsFilters">Apply Filters</button>
       <span id="analyticsLoading" style="display:none;">⏳ loading…</span>
+
+      <!-- Tabs -->
+      <div id="analytics-nav" style="margin-left:auto; display:flex; gap:6px;">
+        <button class="an-tab active" data-analytics="cogs">Food Item COGS</button>
+        <button class="an-tab" data-analytics="timing">Food Timing</button>
+        <button class="an-tab" data-analytics="qty-per-guest">Qty per Guest</button>
+      </div>
     </div>
 
     <!-- Main layout: table left, side panel right -->
     <div style="display:grid; grid-template-columns: 2fr 1fr; gap:16px; margin-top:12px;">
 
-      <!-- LEFT: Order detail table -->
+      <!-- LEFT: Tables -->
       <div class="card" style="padding:12px; border:1px solid #333; border-radius:12px; overflow:auto;">
-        <h3 style="margin:0 0 8px;">Order Detail</h3>
-        <table id="analyticsTable" style="width:100%; border-collapse:collapse;">
-          <thead>
-            <tr style="text-align:left; border-bottom:1px solid #444;">
-              <th>Year</th>
-              <th>Month</th>
-              <th>Day</th>
-              <th>Item No</th>
-              <th>Item Description</th>
-              <th>Item Category</th>
-              <th>Quantity</th>
-              <th>UOM</th>
-              <th style="text-align:right;">Cost</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-          <tfoot>
-            <tr style="border-top:1px solid #444;">
-              <td colspan="8" style="text-align:right;"><strong>Total</strong></td>
-              <td id="analyticsTableTotal" style="text-align:right;">$0.00</td>
-            </tr>
-          </tfoot>
-        </table>
+
+        <!-- COGS TAB -->
+        <div class="analytics-section" data-analytics="cogs" style="display:block;">
+          <h3 style="margin:0 0 8px;">Food Item COGS</h3>
+          <table id="foodCogsTable" style="width:100%; border-collapse:collapse;">
+            <thead>
+              <tr style="text-align:left; border-bottom:1px solid #444;">
+                <th>Date</th>
+                <th>Venue</th>
+                <th>Item</th>
+                <th>Recipe #</th>
+                <th>Qty</th>
+                <th>UOM</th>
+                <th style="text-align:right;">Cost</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+            <tfoot>
+              <tr style="border-top:1px solid #444;">
+                <td colspan="6" style="text-align:right;"><strong>Total</strong></td>
+                <td id="analyticsTableTotal" style="text-align:right;">$0.00</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+
+        <!-- TIMING TAB -->
+        <div class="analytics-section" data-analytics="timing" style="display:none;">
+          <h3 style="margin:0 0 8px;">Food Timing (Add-ons)</h3>
+          <table id="foodTimingTable" style="width:100%; border-collapse:collapse;">
+            <thead>
+              <tr style="text-align:left; border-bottom:1px solid #444;">
+                <th>Item</th>
+                <th>Recipe #</th>
+                <th>Venue</th>
+                <th>Avg Order→Ready (min)</th>
+                <th>Avg Ready→Sent (min)</th>
+                <th>Avg Sent→Received (min)</th>
+                <th>Avg Total (min)</th>
+                <th>Samples</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+        <!-- QTY / GUEST TAB -->
+        <div class="analytics-section" data-analytics="qty-per-guest" style="display:none;">
+          <h3 style="margin:0 0 8px;">Qty per Guest</h3>
+          <table id="qtyPerGuestTable" style="width:100%; border-collapse:collapse;">
+            <thead>
+              <tr style="text-align:left; border-bottom:1px solid #444;">
+                <th>Date</th>
+                <th>Venue</th>
+                <th>Item</th>
+                <th>Recipe #</th>
+                <th>Qty</th>
+                <th>Guests</th>
+                <th>Qty / Guest</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+
+          <h4 style="margin:16px 0 8px;">Averages Across Range (by Item)</h4>
+          <table id="qtyPerGuestAverages" style="width:100%; border-collapse:collapse;">
+            <thead>
+              <tr style="text-align:left; border-bottom:1px solid #444;">
+                <th>Item</th>
+                <th>Recipe #</th>
+                <th>Avg Qty / Guest</th>
+                <th>Samples</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
       </div>
 
-      <!-- RIGHT: Date range + breakdown + filters -->
+      <!-- RIGHT: side cards (COGS tab only) -->
       <div style="display:flex; flex-direction:column; gap:16px;">
-
-        <!-- Date Range (read-only display, selection handled above) -->
-        <div class="card" style="padding:12px; border:1px solid #333; border-radius:12px;">
+        <!-- Date Range -->
+        <div class="card side-cogs-only" style="padding:12px; border:1px solid #333; border-radius:12px;">
           <h3 style="margin:0 0 8px;">Date Range</h3>
-          <div>From: <span id="drFrom"><script>/* filled by JS if you want */</script></span></div>
+          <div>From: <span id="drFrom"></span></div>
           <div>To:&nbsp;&nbsp;&nbsp; <span id="drTo"></span></div>
         </div>
 
-        <!-- Category breakdown (totals) -->
-        <div class="card" style="padding:12px; border:1px solid #333; border-radius:12px;">
+        <!-- Category breakdown -->
+        <div class="card side-cogs-only" style="padding:12px; border:1px solid #333; border-radius:12px;">
           <h3 style="margin:0 0 8px;">Item Category Breakdown</h3>
           <table id="categoryBreakdown" style="width:100%; border-collapse:collapse;">
             <tbody><!-- JS fills rows: Category | Cost + Total row --></tbody>
           </table>
         </div>
 
-        <!-- Filters: category multi-select -->
-        <div class="card" style="padding:12px; border:1px solid #333; border-radius:12px;">
+        <!-- Category multi-select -->
+        <div class="card side-cogs-only" style="padding:12px; border:1px solid #333; border-radius:12px;">
           <h3 style="margin:0 0 8px;">Item Category</h3>
           <div id="filterCatWrap" style="display:flex; flex-wrap:wrap; gap:10px;">
             <!-- JS injects checkboxes -->
           </div>
         </div>
 
-        <!-- Filters: item description search + multi-select -->
-        <div class="card" style="padding:12px; border:1px solid #333; border-radius:12px;">
+        <!-- Item search/multi-select -->
+        <div class="card side-cogs-only" style="padding:12px; border:1px solid #333; border-radius:12px;">
           <h3 style="margin:0 8px 8px 0;">Item Description</h3>
           <input id="filterItemSearch" placeholder="Search items…" style="width:100%; margin-bottom:8px;">
           <div id="filterItemWrap" style="max-height:180px; overflow:auto;">
             <!-- JS injects checkboxes (recipeNo — description) -->
           </div>
         </div>
-
       </div>
     </div>
 
-    <!-- Line chart: cost per category per day -->
-    <div class="card" style="padding:12px; border:1px solid #333; border-radius:12px; margin-top:16px;">
+    <!-- Chart (COGS tab only) -->
+    <div class="card side-cogs-only" style="padding:12px; border:1px solid #333; border-radius:12px; margin-top:16px;">
       <h3 style="margin:0 0 8px;">Cost per Category per Day</h3>
       <canvas id="categoryLineChart" height="220"></canvas>
     </div>
@@ -1283,6 +1343,58 @@ Step 3: …"></textarea>
   </section>
 </div>
 
+
+<script>
+(function(){
+  const nav = document.getElementById('analytics-nav');
+  const tabs = nav?.querySelectorAll('.an-tab') || [];
+  const sections = document.querySelectorAll('.analytics-section');
+  const cogsOnly = document.querySelectorAll('.side-cogs-only');
+
+  function show(tab){
+    sections.forEach(s => s.style.display = (s.dataset.analytics === tab) ? 'block' : 'none');
+    tabs.forEach(b => b.classList.toggle('active', b.dataset.analytics === tab));
+    const isCogs = tab === 'cogs';
+    cogsOnly.forEach(el => el.style.display = isCogs ? '' : 'none');
+  }
+
+  tabs.forEach(b => b.addEventListener('click', () => show(b.dataset.analytics)));
+
+  // Hook "Apply Filters" to run the correct loader (expects your JS functions to exist)
+  document.getElementById('applyAnalyticsFilters')?.addEventListener('click', async () => {
+    const start = document.getElementById('fStart')?.value;
+    const end   = document.getElementById('fEnd')?.value;
+    if (start) document.getElementById('drFrom').textContent = start;
+    if (end)   document.getElementById('drTo').textContent = end;
+
+    // Use your shared helper if present, else fall back
+    let startTs, endTs, startStr, endStr;
+    if (typeof getHawaiiRangeFromInputs === 'function') {
+      const r = getHawaiiRangeFromInputs('fStart','fEnd');
+      startTs = r.startTs; endTs = r.endTs; startStr = r.startStr; endStr = r.endStr;
+    } else {
+      startStr = start; endStr = end;
+    }
+
+    const active = [...tabs].find(t => t.classList.contains('active'))?.dataset.analytics || 'cogs';
+    try {
+      document.getElementById('analyticsLoading').style.display = '';
+      if (active === 'cogs' && typeof loadFoodItemCOGS === 'function') {
+        await loadFoodItemCOGS(startStr, endStr, startTs, endTs);
+      } else if (active === 'timing' && typeof loadFoodTiming === 'function') {
+        await loadFoodTiming(startStr, endStr, startTs, endTs);
+      } else if (active === 'qty-per-guest' && typeof loadQtyPerGuest === 'function') {
+        await loadQtyPerGuest(startStr, endStr, startTs, endTs);
+      }
+    } finally {
+      document.getElementById('analyticsLoading').style.display = 'none';
+    }
+  });
+
+  // default
+  show('cogs');
+})();
+</script>
 
   </div>
 </div>
@@ -1354,3 +1466,18 @@ Step 3: …"></textarea>
 </body>
 </html>
 
+
+
+<style>
+  /* Keep table headers visible and not overlapping rows */
+  #analyticsDashboard table thead th {
+    position: sticky;           /* stay put when the table scrolls */
+    top: 0;
+    z-index: 2;                 /* sit above row cells */
+    background: #111;           /* opaque header bg so content doesn't "shine through" */
+  }
+  /* Optional: give the first data row a hair of top padding */
+  #analyticsDashboard table tbody tr:first-child td {
+    padding-top: 6px;
+  }
+</style>
