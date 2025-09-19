@@ -8949,15 +8949,15 @@ window.saveBasePortions = async function(id) {
 /** -------------- Add Recipe Dialog logic -------------- */
 function openAddRecipeDialog() {
   _ensureIngredientsLoaded().then(_installIngredientLookupsIfAny);
-  _paintRecipeSelect();
+  _paintRecipeSelect();                 // keeps hidden select up to date (harmless)
+  _upgradeRecipeSelectToCombobox();     // <-- NEW
 
   const sel = document.getElementById("recipeSelect");
   if (sel && !sel.__hasLoadHandler) {
     sel.addEventListener("change", (e) => _loadRecipeIntoDialog(e.target.value));
-    sel.__hasLoadHandler = true; // prevent double-binding
+    sel.__hasLoadHandler = true;
   }
 
-  // if a recipe is already selected, hydrate form now
   if (sel?.value) _loadRecipeIntoDialog(sel.value);
 
   const dlg = document.getElementById("addRecipeDialog");
@@ -9015,7 +9015,9 @@ function _installIngredientLookup(row) {
 
   if (!input || !menu || !hid) return;
 
-  const all = Array.isArray(window._ingredientsCache) ? window._ingredientsCache : [];
+  const allIng = Array.isArray(window._ingredientsCache) ? window._ingredientsCache : [];
+  const allRec = Array.isArray(window._recipesCache) ? window._recipesCache : [];
+
   let idx = -1; // keyboard highlight index
 
   const closeMenu = () => { menu.style.display = "none"; idx = -1; };
@@ -9023,31 +9025,57 @@ function _installIngredientLookup(row) {
 
   const renderList = (q = "") => {
     const s = q.trim().toLowerCase();
-    const max = 8;
-    const filtered = !s ? all.slice(0, max)
-      : all.filter(i => {
+    const maxIng = 8;
+    const maxRec = 4;
+
+    const ingFiltered = !s
+      ? allIng.slice(0, maxIng)
+      : allIng.filter(i => {
           const name = (i.itemName || "").toLowerCase();
           const num  = (i.itemNo || "").toString().toLowerCase();
           return name.includes(s) || num.includes(s);
-        }).slice(0, max);
+        }).slice(0, maxIng);
 
-    if (!filtered.length) {
-      menu.innerHTML = `<div class="ing-item ing-empty" aria-disabled="true">No matches</div>`;
-      return;
-    }
+    const recFiltered = s
+      ? (allRec.filter(r => ((r.description || r.name || "").toLowerCase()).includes(s)).slice(0, maxRec))
+      : [];
 
-    menu.innerHTML = filtered.map((i, n) => `
-      <div class="ing-item" data-id="${i.id}" data-uom="${i.baseUOM || ""}" data-index="${n}">
+    const hasCustom = s.length > 0;
+
+    const ingHtml = ingFiltered.map((i, n) => `
+      <div class="ing-item" data-type="ingredient" data-id="${i.id}" data-uom="${i.baseUOM || ""}" data-index="${n}">
         <div class="ing-item-name">${escapeHtml(i.itemName || "")}</div>
         <div class="ing-item-meta">${escapeHtml(i.itemNo || "")}${i.baseUOM ? ` • ${escapeHtml(i.baseUOM)}` : ""}</div>
       </div>
     `).join("");
 
+    const recHtml = recFiltered.map((r, k) => `
+      <div class="ing-item" data-type="recipe" data-id="${r.id}" data-uom="" data-index="${ingFiltered.length + k}">
+        <div class="ing-item-name">${escapeHtml(r.description || r.name || "(recipe)")}</div>
+        <div class="ing-item-meta">Recipe</div>
+      </div>
+    `).join("");
+
+    const otherIdx = ingFiltered.length + recFiltered.length;
+    const otherHtml = hasCustom
+      ? `<div class="ing-item ing-other" data-type="other" data-index="${otherIdx}">
+           + Use “${escapeHtml(input.value)}”
+         </div>`
+      : `<div class="ing-item ing-other" data-type="other" data-index="${otherIdx}">
+           + Other (type a name)
+         </div>`;
+
+    const any = ingHtml || recHtml;
+    menu.innerHTML = any
+      ? `${ingHtml}${recHtml}${otherHtml}`
+      : `<div class="ing-item ing-empty" aria-disabled="true">No matches</div>${otherHtml}`;
+
     // mouse interactions
     menu.querySelectorAll(".ing-item").forEach(el => {
-      el.addEventListener("mouseenter", () => _highlightItem(menu, Number(el.dataset.index)));
+      const i = Number(el.dataset.index || -1);
+      el.addEventListener("mouseenter", () => _highlightItem(menu, i));
       el.addEventListener("mouseleave", () => _highlightItem(menu, -1));
-      el.addEventListener("mousedown", (e) => { // use mousedown to avoid blur-before-click
+      el.addEventListener("mousedown", (e) => { // mousedown to beat input blur
         e.preventDefault();
         _choose(el);
       });
@@ -9063,14 +9091,23 @@ function _installIngredientLookup(row) {
 
   const _choose = (el) => {
     if (!el || el.classList.contains("ing-empty")) return;
-    const id  = el.getAttribute("data-id") || "";
-    const name= el.querySelector(".ing-item-name")?.textContent || "";
-    const uom = el.getAttribute("data-uom") || "";
+    const type = el.getAttribute("data-type") || "ingredient";
 
-    hid.value = id;
-    input.value = name;
-    if (uom && !uomEl.value) uomEl.value = uom; // only auto-fill if empty
-    closeMenu();
+    if (type === "ingredient" || type === "recipe") {
+      const id   = el.getAttribute("data-id") || "";
+      const name = el.querySelector(".ing-item-name")?.textContent || "";
+      const uom  = el.getAttribute("data-uom") || "";
+
+      hid.value = (type === "recipe") ? `recipe:${id}` : id;  // mark recipe refs
+      input.value = name;
+      if (uom && !uomEl.value) uomEl.value = uom;             // auto-fill if empty
+      closeMenu();
+    } else if (type === "other") {
+      // custom / non-inventory: keep typed name, clear id
+      hid.value = "";
+      input.value = (input.value || "").trim();
+      closeMenu();
+    }
   };
 
   input.addEventListener("focus", () => {
@@ -9095,7 +9132,14 @@ function _installIngredientLookup(row) {
       _highlightItem(menu, Math.max(idx - 1, 0));
     } else if (e.key === "Enter") {
       e.preventDefault();
-      if (idx >= 0 && items[idx]) _choose(items[idx]);
+      if (idx >= 0 && items[idx]) {
+        _choose(items[idx]);
+      } else {
+        // No item highlighted → treat as custom
+        hid.value = "";
+        input.value = (input.value || "").trim();
+        closeMenu();
+      }
     } else if (e.key === "Escape") {
       closeMenu();
     }
@@ -9106,6 +9150,7 @@ function _installIngredientLookup(row) {
     if (!row.contains(e.target)) closeMenu();
   }, { capture: true });
 }
+
 
 
 // --- Hook Recipes init into your tab switcher (safe + scoped) ---
@@ -9155,6 +9200,172 @@ function _installIngredientLookup(row) {
   window.__recipesHooked = true;
 })();
 
+// Turn #recipeSelect into a searchable combobox with "Create new…" support (no cap)
+async function _upgradeRecipeSelectToCombobox() {
+  const sel = document.getElementById("recipeSelect");
+  if (!sel || sel.dataset.cbUpgraded) return;
+
+  try { window.startRecipesListener?.(); } catch {}
+  sel.style.display = "none";
+  sel.dataset.cbUpgraded = "1";
+
+  // UI scaffold (reuse .ing-* dark styles)
+  const box  = document.createElement("div");
+  box.className = "ing-lookup";
+  const input = document.createElement("input");
+  input.className = "ing-search";
+  input.type = "text";
+  input.placeholder = "Select or create recipe…";
+  input.autocomplete = "off";
+  const menu = document.createElement("div");
+  menu.className = "ing-menu";
+  menu.style.display = "none";
+  box.appendChild(input);
+  box.appendChild(menu);
+  sel.parentNode.insertBefore(box, sel);
+
+  const openMenu  = () => (menu.style.display = "block");
+  const closeMenu = () => (menu.style.display = "none");
+  let idx = -1;
+
+  const _highlight = (newIdx) => {
+    idx = newIdx;
+    menu.querySelectorAll(".ing-item").forEach((el, i) => {
+      el.classList.toggle("active", i === idx);
+    });
+  };
+
+  const _setRecipeSelectValue = (id, name) => {
+    sel.value = id || "";
+    input.value = name || "";
+    sel.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+
+  async function _createRecipeByName(name) {
+    const n = name.trim();
+    if (!n) return null;
+
+    const existing = (window._recipesCache || []).find(
+      r => (r.description || r.name || "").trim().toLowerCase() === n.toLowerCase()
+    );
+    if (existing) return existing.id;
+
+    const payload = {
+      description: n,
+      portions: 0,
+      methodology: "",
+      ingredients: [],
+      createdAt: serverTimestamp?.(),
+      updatedAt: serverTimestamp?.(),
+    };
+    const ref = await addDoc(collection(db, "recipes"), payload);
+
+    const row = { id: ref.id, recipeNo: "", description: n, portions: 0, methodology: "", ingredients: [], category: "UNCATEGORIZED" };
+    window._recipesCache = Array.isArray(window._recipesCache) ? [...window._recipesCache, row] : [row];
+    window._paintRecipeSelect?.();
+
+    return ref.id;
+  }
+
+  // ✅ No max cap; show all recipes (scrollable via CSS max-height on .ing-menu)
+  const renderList = (q = "") => {
+    const s = q.trim().toLowerCase();
+    const all = Array.isArray(window._recipesCache) ? window._recipesCache : [];
+
+    // Stable alphabetical sort
+    const sorted = [...all].sort((a, b) => {
+      const an = (a.description || a.name || "").toLowerCase();
+      const bn = (b.description || b.name || "").toLowerCase();
+      return an.localeCompare(bn);
+    });
+
+    const filtered = s
+      ? sorted.filter(r => ((r.description || r.name || "").toLowerCase().includes(s)))
+      : sorted;
+
+    const rows = filtered.map((r, n) => `
+      <div class="ing-item" data-type="recipe" data-id="${r.id}" data-index="${n}">
+        <div class="ing-item-name">${escapeHtml(r.description || r.name || "(no name)")}</div>
+        <div class="ing-item-meta">${escapeHtml(r.recipeNo || "")}</div>
+      </div>
+    `).join("");
+
+    const createIdx = filtered.length;
+    const createHtml = s
+      ? `<div class="ing-item ing-other" data-type="new" data-index="${createIdx}">
+           + Create new recipe “${escapeHtml(q)}”
+         </div>`
+      : `<div class="ing-item ing-other" data-type="new" data-index="${createIdx}">
+           + Create new recipe (type a name)
+         </div>`;
+
+    menu.innerHTML = (rows || `<div class="ing-item ing-empty" aria-disabled="true">No recipes yet</div>`) + createHtml;
+
+    // mouse binding
+    menu.querySelectorAll(".ing-item").forEach(el => {
+      const i = Number(el.dataset.index || -1);
+      el.addEventListener("mouseenter", () => _highlight(i));
+      el.addEventListener("mouseleave", () => _highlight(-1));
+      el.addEventListener("mousedown", async (e) => {
+        e.preventDefault();
+        const type = el.getAttribute("data-type");
+        if (type === "recipe") {
+          const id   = el.getAttribute("data-id") || "";
+          const name = el.querySelector(".ing-item-name")?.textContent || "";
+          _setRecipeSelectValue(id, name);
+          closeMenu();
+        } else if (type === "new") {
+          const name = input.value.trim();
+          if (!name) return; // ignore empty
+          const id = await _createRecipeByName(name);
+          if (id) _setRecipeSelectValue(id, name);
+          closeMenu();
+        }
+      });
+    });
+  };
+
+  // seed with current selection if any
+  const currentId = sel.value;
+  if (currentId) {
+    const r = (window._recipesCache || []).find(x => x.id === currentId);
+    if (r) input.value = r.description || r.name || "";
+  }
+
+  input.addEventListener("focus", () => { renderList(input.value); openMenu(); });
+  input.addEventListener("input", () => { renderList(input.value); openMenu(); });
+  input.addEventListener("keydown", async (e) => {
+    const items = Array.from(menu.querySelectorAll(".ing-item"));
+    if (e.key === "ArrowDown") {
+      e.preventDefault(); if (!items.length) return;
+      _highlight(Math.min(idx + 1, items.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault(); if (!items.length) return;
+      _highlight(Math.max(idx - 1, 0));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (idx >= 0 && items[idx]) {
+        items[idx].dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+      } else {
+        const name = input.value.trim();
+        if (name) {
+          const id = await _createRecipeByName(name);
+          if (id) _setRecipeSelectValue(id, name);
+        }
+        closeMenu();
+      }
+    } else if (e.key === "Escape") {
+      closeMenu();
+    }
+  });
+
+  document.addEventListener("click", (ev) => {
+    if (!box.contains(ev.target)) closeMenu();
+  }, { capture: true });
+}
+
+
+
 
 // paint recipe select dropdown from cache
 function _paintRecipeSelect() {
@@ -9193,16 +9404,25 @@ async function saveRecipeConfig() {
   const rows = Array.from(linesBox.children || []);
   if (!rows.length) return alert("Add at least one ingredient line.");
 
-  const cooked = rows.map(row => {
-    const ingId = row.querySelector(".ing-id")?.value || "";
-    const ingName = row.querySelector(".ing-search")?.value?.trim() || "";
-    const qty = Number(row.querySelector(".ing-qty")?.value || 0);
-    const uom = (row.querySelector(".ing-uom")?.value || "").trim();
-    if (!ingId || !ingName || !Number.isFinite(qty) || qty <= 0 || !uom) {
-      throw new Error("Each ingredient row needs an ingredient (pick from list), a positive qty, and a UOM.");
-    }
-    return { ingredientId: ingId, name: ingName, qty, uom };
-  });
+ const cooked = rows.map(row => {
+  const ingId   = row.querySelector(".ing-id")?.value || "";
+  const ingName = row.querySelector(".ing-search")?.value?.trim() || "";
+  const qty     = Number(row.querySelector(".ing-qty")?.value || 0);
+  const uom     = (row.querySelector(".ing-uom")?.value || "").trim();
+
+  // ✅ allow either inventory-picked (ingId) OR custom typed (ingName)
+  if ((!ingId && !ingName) || !Number.isFinite(qty) || qty <= 0 || !uom) {
+    throw new Error("Each ingredient row needs a name (pick from list or type), a positive qty, and a UOM.");
+  }
+
+  return {
+    ingredientId: ingId,   // "" for custom; "recipe:<id>" for sub-recipe; normal id for inventory
+    name: ingName,
+    qty,
+    uom
+  };
+});
+
 
   try {
     await updateDoc(doc(db, "recipes", recipeId), {
