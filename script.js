@@ -42,73 +42,72 @@ function updateCurrentVenueFromSelect() {
   document.querySelectorAll(".aloha-section, .ohana-section, .gateway-section, .concession-section, .main-kitchen-section")
     .forEach(s => s.style.display = "none");
 
+  // If a recipes dialog is open, close it when changing screens
+  try { document.getElementById("addRecipeDialog")?.close?.(); } catch {}
+
   // Show the selected screen
   const selectedScreen = document.getElementById(val);
   if (selectedScreen) selectedScreen.style.display = "block";
 
   // Set current venue display name
-const map = {
-  "guest-count": "Guest Count",
-  aloha: "Aloha",
-  ohana: "Ohana",
-  gateway: "Gateway",
-  concession: "Concessions",
-  "main-kitchen": "Main Kitchen",
-  stations: "Stations",
-  accounting: "Accounting"
-};
+  const map = {
+    "guest-count": "Guest Count",
+    aloha: "Aloha",
+    ohana: "Ohana",
+    gateway: "Gateway",
+    concession: "Concessions",
+    "main-kitchen": "Main Kitchen",
+    stations: "Stations",
+    accounting: "Accounting"
+  };
 
-// ---- global waste caches (safe defaults) ----
-window.alohaWasteTotals   = window.alohaWasteTotals   || {};
-window.ohanaWasteTotals   = window.ohanaWasteTotals   || {};
-window.gatewayWasteTotals = window.gatewayWasteTotals || {};
-window.mainWasteTotals    = window.mainWasteTotals    || {};
+  // ---- global waste caches (safe defaults) ----
+  window.alohaWasteTotals   = window.alohaWasteTotals   || {};
+  window.ohanaWasteTotals   = window.ohanaWasteTotals   || {};
+  window.gatewayWasteTotals = window.gatewayWasteTotals || {};
+  window.mainWasteTotals    = window.mainWasteTotals    || {};
 
+  // 🔄 Table loading helpers
+  function showTableLoading(tbody, message = "Loading…") {
+    if (!tbody) return;
+    tbody.innerHTML = `
+      <tr class="loading-row">
+        <td colspan="4" style="padding:12px;text-align:center;opacity:.8;">
+          <div class="mini-spinner" style="display:inline-block;vertical-align:middle;margin-right:8px;"></div>
+          <span>${message}</span>
+        </td>
+      </tr>`;
+  }
+  function showTableEmpty(tbody, message = "No items to show.") {
+    if (!tbody) return;
+    tbody.innerHTML = `
+      <tr>
+        <td colspan="4" style="padding:12px;text-align:center;opacity:.7;">${message}</td>
+      </tr>`;
+  }
 
-// 🔄 Table loading helpers
-function showTableLoading(tbody, message = "Loading…") {
-  if (!tbody) return;
-  tbody.innerHTML = `
-    <tr class="loading-row">
-      <td colspan="4" style="padding:12px;text-align:center;opacity:.8;">
-        <div class="mini-spinner" style="display:inline-block;vertical-align:middle;margin-right:8px;"></div>
-        <span>${message}</span>
-      </td>
-    </tr>`;
-}
-function showTableEmpty(tbody, message = "No items to show.") {
-  if (!tbody) return;
-  tbody.innerHTML = `
-    <tr>
-      <td colspan="4" style="padding:12px;text-align:center;opacity:.7;">${message}</td>
-    </tr>`;
-}
+  // 🔧 Station overrides by recipe and venue
+  window.STATION_OVERRIDES = {
+    R0016: { Gateway: "Grill", Aloha: "Oven", Ohana: "Oven" }, // Huli Chicken example
+    // R0XXX: { Gateway: "...", Aloha: "...", Ohana: "..." },
+  };
 
-// 🔧 Station overrides by recipe and venue
-// Keyed by UPPERCASE recipeNo. Extend this object as you add more multi-venue items.
-window.STATION_OVERRIDES = {
-  R0016: { Gateway: "Grill", Aloha: "Oven", Ohana: "Oven" }, // Huli Chicken example
-  // R0XXX: { Gateway: "...", Aloha: "...", Ohana: "..." },
-};
+  // Decide the station for an order, honoring overrides first, then recipe default
+  window.stationForOrder = function stationForOrder(recipeLike, venueName) {
+    const recipeNo = String(recipeLike?.recipeNo || recipeLike?.recipeId || "").toUpperCase().trim();
+    const byRecipe = window.STATION_OVERRIDES?.[recipeNo];
+    if (byRecipe && byRecipe[venueName]) return byRecipe[venueName];
+    return recipeLike?.station || "Unknown";
+  };
 
-// Decide the station for an order, honoring overrides first, then recipe default
-window.stationForOrder = function stationForOrder(recipeLike, venueName) {
-  const recipeNo = String(recipeLike?.recipeNo || recipeLike?.recipeId || "").toUpperCase().trim();
-  const byRecipe = window.STATION_OVERRIDES?.[recipeNo];
-  if (byRecipe && byRecipe[venueName]) return byRecipe[venueName];
-  return recipeLike?.station || "Unknown";
-};
-
-
-
-// put this near your startup code, before loadAccountingWaste runs
-window.venueCodes = {
-  Aloha: "B001",
-  Ohana: "B002",
-  Gateway: "B003",
-  Concessions: "C002",
-  "Main Kitchen": "W002"
-};
+  // put this near your startup code, before loadAccountingWaste runs
+  window.venueCodes = {
+    Aloha: "B001",
+    Ohana: "B002",
+    Gateway: "B003",
+    Concessions: "C002",
+    "Main Kitchen": "W002"
+  };
 
   window.currentVenue = map[val] || "Main Kitchen";
   document.getElementById("currentVenueLabel").innerText = window.currentVenue;
@@ -124,8 +123,22 @@ window.venueCodes = {
     showAreaSection("concession", "order");
   } else if (val === "main-kitchen") {
     showKitchenSection("order");
+
+    // ✅ Recipes init hooks (all safe no-ops if the helpers aren't defined yet)
+    try {
+      // Preload ingredients & recipes so the Recipes tab is instant and the dropdown is filled
+      window._ensureIngredientsLoaded?.();
+      window.startRecipesListener?.();
+      window._ensureRecipesPrimed?.();     // one-time prime fetch if listener hasn't populated yet
+      window._paintRecipeSelect?.();       // refresh the dropdown if dialog is opened
+      // If user had the Recipes tab open previously, ensure list is rendered
+      window.renderRecipesList?.();
+    } catch (e) {
+      console.debug("Recipes init skipped:", e);
+    }
   }
 }
+
 
 
 // 🔄 Table loading helpers
@@ -711,9 +724,16 @@ async function savePrepPans(btn) {
 
 // tiny helpers
 function titleCase(s="") { return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase(); }
-function escapeHtml(s="") {
-  return s.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
+function escapeHtml(s) {
+  if (s === null || s === undefined) return "";
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
+
 
 // ✅ Render kitchen add ons
 
@@ -8642,3 +8662,610 @@ window.sendAllMainLunch = async function () {
   };
 
 })();
+
+
+//**Recipes */
+
+// ===================== RECIPES SCREEN =====================
+// Global caches
+window._recipesCache = [];
+window._ingredientsCache = [];
+window._recipesUnsub = null;
+
+// Public entries so HTML can call these
+window.openAddRecipeDialog = openAddRecipeDialog;
+window.closeAddRecipeDialog = closeAddRecipeDialog;
+window.addRecipeLine = addRecipeLine;
+window.saveRecipeConfig = saveRecipeConfig;
+window.renderRecipesList = renderRecipesList;
+
+// 1) Load ingredients (one-time)
+async function _ensureIngredientsLoaded() {
+  if (window._ingredientsCache?.length) return;
+  const snap = await getDocs(query(collection(db, "ingredients"), orderBy("itemName")));
+  const rows = [];
+  snap.forEach(d => {
+    const v = d.data() || {};
+    rows.push({ id: d.id, itemNo: v.itemNo, itemName: v.itemName ?? v.name ?? "(ingredient)", baseUOM: v.baseUOM || "" });
+  });
+  window._ingredientsCache = rows;
+}
+
+// 2) Start recipes live listener
+function startRecipesListener() {
+  if (typeof onSnapshot !== "function") return;
+  if (window._recipesUnsub) return;
+
+  const q = query(collection(db, "recipes"), orderBy("description"));
+  window._recipesUnsub = onSnapshot(q, (snap) => {
+    const rows = [];
+    snap.forEach(d => {
+      const v = d.data() || {};
+      rows.push({
+        id: d.id,
+        recipeNo: v.recipeNo,
+        description: v.description ?? v.name ?? "(no name)",
+        portions: v.portions || 0,
+        methodology: v.methodology || "",
+        ingredients: Array.isArray(v.ingredients) ? v.ingredients : [],
+        category: (v.category || v.Category || "UNCATEGORIZED")  // ← add this
+      });
+    });
+    window._recipesCache = rows;
+    renderRecipesList();
+    _paintRecipeSelect();
+  });
+}
+
+
+// 3) Render list with filter + expandable details + scaled portions
+// Make it async so it can self-prime when cache is empty
+async function renderRecipesList() {
+  const wrap = document.getElementById("recipesList");
+  if (!wrap) return;
+
+  // --- One-time prime if cache is empty (tries 'recipes' then 'Recipes') ---
+  try {
+    window.startRecipesListener?.(); // live listener if available
+  } catch {}
+
+  if (!Array.isArray(window._recipesCache) || window._recipesCache.length === 0) {
+    // Fallback prime without orderBy (avoids index issues)
+    const tryNames = ["recipes", "Recipes"];
+    for (const collName of tryNames) {
+      try {
+        const snap = await getDocs(collection(db, collName));
+        if (!snap.empty) {
+          const rows = [];
+          snap.forEach((d) => {
+            const v = d.data() || {};
+            rows.push({
+              id: d.id,
+              recipeNo: v.recipeNo,
+              description: v.description ?? v.name ?? v.recipeName ?? "(no name)",
+              portions: v.portions || 0,
+              methodology: v.methodology || "",
+              ingredients: Array.isArray(v.ingredients) ? v.ingredients : [],
+              // NEW: normalize category (support both "category" and "Category")
+              category: (v.category || v.Category || "UNCATEGORIZED"),
+            });
+          });
+          window._recipesCache = rows;
+          break; // stop after first collection that returns docs
+        }
+      } catch (e) {
+        console.debug(`prime fetch failed for ${collName}:`, e);
+      }
+    }
+  }
+
+  // Normalize category even if listener didn't include it yet
+  const allRaw = Array.isArray(window._recipesCache) ? window._recipesCache : [];
+  const all = allRaw.map(r => ({
+    ...r,
+    category: (r.category || r.Category || "UNCATEGORIZED")
+  }));
+
+  const search = (document.getElementById("recipeSearch")?.value || "")
+    .trim()
+    .toLowerCase();
+
+  // NEW: read selected category from the filter ('' means All)
+  const selectedCat = (document.getElementById("recipeCategoryFilter")?.value || "").toUpperCase();
+
+  const filtered = (search || selectedCat)
+    ? all.filter((r) => {
+        const name = (r.description || "").toLowerCase();
+        const num  = (r.recipeNo || "").toLowerCase();
+        const cat  = (r.category || "").toString().toUpperCase();
+
+        const matchesSearch = !search || name.includes(search) || num.includes(search);
+        const matchesCat    = !selectedCat || cat === selectedCat;
+        return matchesSearch && matchesCat;
+      })
+    : all;
+
+  // Build markup
+  if (!filtered.length) {
+    wrap.innerHTML = `<p style="opacity:.7;">${
+      all.length > 0 ? "No recipes match your search." : "No recipes found in Firestore (checked 'recipes' and 'Recipes')."
+    }</p>`;
+    return;
+  }
+
+const html = filtered
+  .map((r) => {
+    const base = Number(r.portions || 0);
+    const ingredients = Array.isArray(r.ingredients) ? r.ingredients : [];
+    const catChip = r.category && r.category !== "UNCATEGORIZED"
+      ? `<span class="badge" style="font-size:12px; background:#3a3d4a; color:#e8eaed; border-radius:8px; padding:2px 8px;">${escapeHtml(r.category)}</span>`
+      : "";
+
+    return `
+      <div id="card-${r.id}" class="recipe-card" data-recipe-id="${r.id}" style="border:1px solid #3333; border-radius:12px; padding:12px; margin-bottom:10px;">
+        <!-- Header -->
+        <div class="recipe-head" style="display:flex;justify-content:space-between;align-items:center;gap:12px;cursor:pointer"
+             onclick="toggleRecipeDetails('${r.id}')">
+          <div style="display:flex;align-items:center;gap:8px;">
+            ${r.recipeNo ? `<span class="badge" style="font-size:12px; background:#eee; color:#333; border-radius:8px; padding:2px 8px;">${escapeHtml(r.recipeNo)}</span>` : ""}
+            <strong>${escapeHtml(r.description || "(no name)")}</strong>
+            ${catChip}
+          </div>
+          <div style="font-size:12px;opacity:.7;">${base ? `${base} base portions` : `no base portions set`}</div>
+        </div>
+
+        <!-- Body -->
+        <div class="recipe-details" id="recipe-details-${r.id}" style="display:none; margin-top:10px;">
+          <!-- Desired portions -->
+          <div style="display:grid; gap:10px; align-items:end; grid-template-columns: 220px 1fr;">
+            <label>Desired portions
+              <input type="number" min="0" step="1" value="${base || 0}" data-desired-input="${r.id}" />
+            </label>
+            <div id="recipe-scale-${r.id}" style="font-size:13px; opacity:.7;">
+              ${base ? `Base yield: ${base}. Scale factor: 1` : `Set base portions to enable scaling.`}
+            </div>
+          </div>
+
+          <!-- Ingredients + Methodology table -->
+          <div class="recipe-table-wrap">
+            <table class="recipe-table">
+              <thead>
+                <tr>
+                  <th>Ingredient</th>
+                  <th>UOM</th>
+                  <th class="num">Amount</th>
+                </tr>
+              </thead>
+              <tbody id="ingredient-list-${r.id}">
+                ${
+                  !ingredients.length
+                    ? `<tr><td colspan="3" style="opacity:.7;">No ingredients yet.</td></tr>`
+                    : ingredients.map((l, i) => `
+                      <tr data-i="${i}">
+                        <td><strong>${escapeHtml(l?.name || "")}</strong></td>
+                        <td>${escapeHtml(l?.uom || "ea")}</td>
+                        <td class="num amount" data-base-qty="${Number(l?.qty) || 0}">${Number(l?.qty) || 0}</td>
+                      </tr>
+                    `).join("")
+                }
+                <tr class="method-row">
+                  <td colspan="3">
+                    <div class="methodology-block">
+                      <h4 style="margin:0 0 6px 0;">Methodology</h4>
+                      ${
+                        r.methodology
+                          ? `<ol style="padding-left:18px; margin: 0; display:flex; flex-direction:column; gap:4px;">${
+                              escapeHtml(r.methodology).split("\\n").map(s => `<li>${s}</li>`).join("")
+                            }</ol>`
+                          : `<p style="opacity:.7;">No steps added yet.</p>`
+                      }
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <div id="qty-note-${r.id}" class="qty-note">
+              ${base ? `Qty shown for ${base} portions` : `(enter portions to scale)`}
+            </div>
+          </div>
+
+          ${ base
+            ? `<div style="margin-top:10px;">
+                 <button onclick="saveBasePortions('${r.id}')">Save base portions</button>
+               </div>`
+            : "" }
+        </div>
+      </div>
+    `;
+  })
+  .join("");
+
+
+  wrap.innerHTML = html;
+
+  // Hook up scaling inputs
+// Hook up scaling inputs
+filtered.forEach((r) => {
+  const input = document.querySelector(`[data-desired-input="${r.id}"]`);
+  if (!input) return;
+
+  const base = Number(r.portions || 0);
+  const container = document.getElementById(`card-${r.id}`);
+  const list = document.getElementById(`ingredient-list-${r.id}`);
+  const note = document.getElementById(`qty-note-${r.id}`);
+  const scale = document.getElementById(`recipe-scale-${r.id}`);
+
+  const recalc = () => {
+    const desired = Math.max(0, Number(input.value || 0));
+    if (!base || !desired) {
+      note && (note.textContent = base ? `Qty shown for ${base} portions` : `(enter portions to scale)`);
+      scale && (scale.textContent = base ? `Base yield: ${base}` : `Set base portions to enable scaling.`);
+      container?.querySelectorAll(".amount[data-base-qty]").forEach((td) => {
+        const b = Number(td.getAttribute("data-base-qty") || 0);
+        td.textContent = String(round2(b));
+      });
+      return;
+    }
+    const factor = desired / base;
+    note && (note.textContent = `Qty shown for ${desired} portions`);
+    scale && (scale.textContent = `Base yield: ${base}. Scale factor: ${round2(factor)}`);
+    container?.querySelectorAll(".amount[data-base-qty]").forEach((td) => {
+      const b = Number(td.getAttribute("data-base-qty") || 0);
+      td.textContent = String(round2(b * factor));
+    });
+  };
+
+  input.addEventListener("input", recalc);
+  input.addEventListener("blur", recalc);
+  recalc(); // run once initially
+});
+
+}
+
+
+
+// Toggle expand
+window.toggleRecipeDetails = function(id) {
+  const el = document.getElementById(`recipe-details-${id}`);
+  if (!el) return;
+  const now = el.style.display !== "none";
+  el.style.display = now ? "none" : "block";
+};
+
+// Save base portions quickly from the card
+window.saveBasePortions = async function(id) {
+  try {
+    const input = document.querySelector(`[data-desired-input="${id}"]`);
+    const val = Number(input?.value || 0);
+    if (!Number.isFinite(val) || val < 1) return alert("Enter a valid base portion count (>=1).");
+    await updateDoc(doc(db, "recipes", id), { portions: val, updatedAt: serverTimestamp() });
+    alert("Base portions saved.");
+  } catch (e) {
+    console.error(e);
+    alert("Failed to save base portions.");
+  }
+};
+
+/** -------------- Add Recipe Dialog logic -------------- */
+function openAddRecipeDialog() {
+  _ensureIngredientsLoaded().then(_installIngredientLookupsIfAny);
+  _paintRecipeSelect();
+
+  const sel = document.getElementById("recipeSelect");
+  if (sel && !sel.__hasLoadHandler) {
+    sel.addEventListener("change", (e) => _loadRecipeIntoDialog(e.target.value));
+    sel.__hasLoadHandler = true; // prevent double-binding
+  }
+
+  // if a recipe is already selected, hydrate form now
+  if (sel?.value) _loadRecipeIntoDialog(sel.value);
+
+  const dlg = document.getElementById("addRecipeDialog");
+  if (dlg) dlg.showModal();
+}
+
+function closeAddRecipeDialog() {
+  const dlg = document.getElementById("addRecipeDialog");
+  if (dlg) dlg.close();
+  // reset fields
+  document.getElementById("recipeSelect").value = "";
+  document.getElementById("recipeLines").innerHTML = "";
+  document.getElementById("recipePortions").value = "";
+  document.getElementById("recipeMethodology").value = "";
+}
+
+// add a blank line row
+function addRecipeLine() {
+  const box = document.getElementById("recipeLines");
+  if (!box) return;
+
+  const row = document.createElement("div");
+  row.className = "ing-row";
+  row.style.display = "grid";
+  row.style.gridTemplateColumns = "1fr 120px 100px 32px";
+  row.style.gap = "6px";
+
+  row.innerHTML = `
+    <div class="ing-lookup">
+      <input class="ing-search" type="text" placeholder="Type to search ingredients…" autocomplete="off" />
+      <div class="ing-menu" style="display:none;"></div>
+      <input type="hidden" class="ing-id" />
+    </div>
+    <input class="ing-qty" type="number" min="0" step="0.01" placeholder="Qty" />
+    <input class="ing-uom" type="text" placeholder="UOM" />
+    <button type="button" class="ing-remove" aria-label="Remove ingredient line">✕</button>
+  `;
+
+  box.appendChild(row);
+  _installIngredientLookup(row); // <— IMPORTANT
+  row.querySelector(".ing-remove").addEventListener("click", () => row.remove());
+}
+
+
+
+function _installIngredientLookupsIfAny() {
+  document.querySelectorAll("#addRecipeDialog .ing-row").forEach(_installIngredientLookup);
+}
+
+function _installIngredientLookup(row) {
+  const input = row.querySelector(".ing-search");
+  const menu  = row.querySelector(".ing-menu");
+  const hid   = row.querySelector(".ing-id");
+  const uomEl = row.querySelector(".ing-uom");
+
+  if (!input || !menu || !hid) return;
+
+  const all = Array.isArray(window._ingredientsCache) ? window._ingredientsCache : [];
+  let idx = -1; // keyboard highlight index
+
+  const closeMenu = () => { menu.style.display = "none"; idx = -1; };
+  const openMenu  = () => { menu.style.display = "block"; };
+
+  const renderList = (q = "") => {
+    const s = q.trim().toLowerCase();
+    const max = 8;
+    const filtered = !s ? all.slice(0, max)
+      : all.filter(i => {
+          const name = (i.itemName || "").toLowerCase();
+          const num  = (i.itemNo || "").toString().toLowerCase();
+          return name.includes(s) || num.includes(s);
+        }).slice(0, max);
+
+    if (!filtered.length) {
+      menu.innerHTML = `<div class="ing-item ing-empty" aria-disabled="true">No matches</div>`;
+      return;
+    }
+
+    menu.innerHTML = filtered.map((i, n) => `
+      <div class="ing-item" data-id="${i.id}" data-uom="${i.baseUOM || ""}" data-index="${n}">
+        <div class="ing-item-name">${escapeHtml(i.itemName || "")}</div>
+        <div class="ing-item-meta">${escapeHtml(i.itemNo || "")}${i.baseUOM ? ` • ${escapeHtml(i.baseUOM)}` : ""}</div>
+      </div>
+    `).join("");
+
+    // mouse interactions
+    menu.querySelectorAll(".ing-item").forEach(el => {
+      el.addEventListener("mouseenter", () => _highlightItem(menu, Number(el.dataset.index)));
+      el.addEventListener("mouseleave", () => _highlightItem(menu, -1));
+      el.addEventListener("mousedown", (e) => { // use mousedown to avoid blur-before-click
+        e.preventDefault();
+        _choose(el);
+      });
+    });
+  };
+
+  const _highlightItem = (menuEl, newIdx) => {
+    idx = newIdx;
+    menuEl.querySelectorAll(".ing-item").forEach((el, i) => {
+      el.classList.toggle("active", i === idx);
+    });
+  };
+
+  const _choose = (el) => {
+    if (!el || el.classList.contains("ing-empty")) return;
+    const id  = el.getAttribute("data-id") || "";
+    const name= el.querySelector(".ing-item-name")?.textContent || "";
+    const uom = el.getAttribute("data-uom") || "";
+
+    hid.value = id;
+    input.value = name;
+    if (uom && !uomEl.value) uomEl.value = uom; // only auto-fill if empty
+    closeMenu();
+  };
+
+  input.addEventListener("focus", () => {
+    renderList(input.value);
+    openMenu();
+  });
+
+  input.addEventListener("input", () => {
+    renderList(input.value);
+    openMenu();
+  });
+
+  input.addEventListener("keydown", (e) => {
+    const items = Array.from(menu.querySelectorAll(".ing-item"));
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (!items.length) return;
+      _highlightItem(menu, Math.min(idx + 1, items.length - 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!items.length) return;
+      _highlightItem(menu, Math.max(idx - 1, 0));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (idx >= 0 && items[idx]) _choose(items[idx]);
+    } else if (e.key === "Escape") {
+      closeMenu();
+    }
+  });
+
+  // click outside to close
+  document.addEventListener("click", (e) => {
+    if (!row.contains(e.target)) closeMenu();
+  }, { capture: true });
+}
+
+
+// --- Hook Recipes init into your tab switcher (safe + scoped) ---
+(function hookRecipesIntoShowKitchenSection() {
+  if (window.__recipesHooked) return;
+  const original = window.showKitchenSection;
+
+  window.showKitchenSection = function (sec, ...rest) {
+    // Hide all sections inside #main-kitchen
+    document.querySelectorAll('#main-kitchen .main-kitchen-section').forEach(el => {
+      if (el.dataset.sec === sec) {
+        el.removeAttribute('hidden');
+        el.style.display = ''; // let CSS handle
+      } else {
+        el.setAttribute('hidden', '');
+        el.style.display = 'none';
+      }
+    });
+
+    // Highlight the active tab (optional polish)
+    document.querySelectorAll('#main-kitchen .area-tab').forEach(btn => {
+      btn.classList.toggle('active', btn.getAttribute('data-sec') === sec);
+    });
+
+    // Call the original showKitchenSection if it exists
+    const result = typeof original === "function" ? original(sec, ...rest) : undefined;
+
+    // Recipes-specific init
+    if (sec === "recipes") {
+      try {
+        window.startRecipesListener?.();       // start live listener
+        window._ensureIngredientsLoaded?.();   // prime ingredients cache
+        Promise.resolve(window._ensureRecipesPrimed?.())
+          .catch(() => {}) // ignore errors
+          .finally(() => {
+            window._paintRecipeSelect?.();     // fill recipe select
+            window.renderRecipesList?.();      // render list
+          });
+      } catch (e) {
+        console.debug("Recipes init error:", e);
+      }
+    }
+
+    return result;
+  };
+
+  window.__recipesHooked = true;
+})();
+
+
+// paint recipe select dropdown from cache
+function _paintRecipeSelect() {
+  const sel = document.getElementById("recipeSelect");
+  if (!sel) return;
+  const cache = window._recipesCache || [];
+  const current = sel.value;
+  sel.innerHTML = `<option value="">-- Select recipe from Firestore --</option>` +
+    cache.map(r => `<option value="${r.id}">${escapeHtml(r.description || "")}</option>`).join("");
+  if (current) sel.value = current;
+}
+
+// paint all existing ingredient selects in the dialog
+function _paintIngredientSelectsIfAny() {
+  document.querySelectorAll("#addRecipeDialog .ing-id").forEach(el => _paintIngredientSelect(el));
+}
+function _paintIngredientSelect(selectEl) {
+  if (!selectEl) return;
+  const cache = window._ingredientsCache || [];
+  const curr = selectEl.value;
+  selectEl.innerHTML = `<option value="">-- ingredient --</option>` +
+    cache.map(i => `<option value="${i.id}">${escapeHtml(i.itemName || "")}</option>`).join("");
+  if (curr) selectEl.value = curr;
+}
+
+// Save configuration into the chosen recipe document
+async function saveRecipeConfig() {
+  const recipeId = document.getElementById("recipeSelect").value;
+  const portions = Number(document.getElementById("recipePortions").value || 0);
+  const methodology = document.getElementById("recipeMethodology").value || "";
+
+  if (!recipeId) return alert("Choose a base recipe first.");
+  if (!Number.isFinite(portions) || portions < 1) return alert("Enter a valid base portions (>=1).");
+
+  const linesBox = document.getElementById("recipeLines");
+  const rows = Array.from(linesBox.children || []);
+  if (!rows.length) return alert("Add at least one ingredient line.");
+
+  const cooked = rows.map(row => {
+    const ingId = row.querySelector(".ing-id")?.value || "";
+    const ingName = row.querySelector(".ing-search")?.value?.trim() || "";
+    const qty = Number(row.querySelector(".ing-qty")?.value || 0);
+    const uom = (row.querySelector(".ing-uom")?.value || "").trim();
+    if (!ingId || !ingName || !Number.isFinite(qty) || qty <= 0 || !uom) {
+      throw new Error("Each ingredient row needs an ingredient (pick from list), a positive qty, and a UOM.");
+    }
+    return { ingredientId: ingId, name: ingName, qty, uom };
+  });
+
+  try {
+    await updateDoc(doc(db, "recipes", recipeId), {
+      ingredients: cooked,
+      portions,
+      methodology,
+      updatedAt: serverTimestamp(),
+    });
+    closeAddRecipeDialog();
+    alert("Recipe saved.");
+  } catch (e) {
+    console.error(e);
+    alert("Failed to save recipe.");
+  }
+}
+
+// Fill the Add/Configure dialog with an existing recipe
+async function _loadRecipeIntoDialog(recipeId) {
+  const sel  = document.getElementById("recipeSelect");
+  const box  = document.getElementById("recipeLines");
+  const qty  = document.getElementById("recipePortions");
+  const meth = document.getElementById("recipeMethodology");
+
+  if (!sel || !box || !qty || !meth) return;
+  if (!recipeId) {
+    box.innerHTML = "";
+    qty.value = "";
+    meth.value = "";
+    return;
+  }
+
+  // make sure ingredient data exists for name/UOM lookups
+  await _ensureIngredientsLoaded();
+
+  // find from cache (listener keeps this fresh)
+  const rec = (window._recipesCache || []).find(r => r.id === recipeId);
+  if (!rec) return;
+
+  // set top fields
+  qty.value  = Number(rec.portions || 0) || "";
+  meth.value = rec.methodology || "";
+
+  // rebuild ingredient lines
+  box.innerHTML = "";
+  const lines = Array.isArray(rec.ingredients) ? rec.ingredients : [];
+  for (const line of lines) {
+    // create an empty row (installs the combobox)
+    addRecipeLine();
+    const row = box.lastElementChild;
+    if (!row) continue;
+
+    const ingIdInput = row.querySelector(".ing-id");
+    const ingNameInp = row.querySelector(".ing-search");
+    const uomInp     = row.querySelector(".ing-uom");
+    const qtyInp     = row.querySelector(".ing-qty");
+
+    // find matching ingredient in cache for canonical name/UOM
+    const ing = (window._ingredientsCache || []).find(i => i.id === (line.ingredientId || line.id));
+
+    // set fields
+    ingIdInput.value = line.ingredientId || line.id || ing?.id || "";
+    ingNameInp.value = ing?.itemName || line.name || "";
+    uomInp.value     = line.uom || ing?.baseUOM || "";
+    qtyInp.value     = Number(line.qty || 0) || "";
+  }
+}

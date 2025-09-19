@@ -669,6 +669,7 @@
       <button class="area-tab" data-area="mainkitchen" data-sec="order" onclick="showKitchenSection('order')">Add-Ons</button>
       <button class="area-tab" data-area="mainkitchen" data-sec="starting" onclick="showKitchenSection('starting')">Starting Pars</button>
       <button class="area-tab" data-area="mainkitchen" data-sec="prep"     onclick="showKitchenSection('prep')">Prep Pars</button>
+        <button class="area-tab" data-area="mainkitchen" data-sec="recipes" onclick="showKitchenSection('recipes')">Recipes</button>
       <button class="area-tab" data-area="mainkitchen" data-sec="waste" onclick="showKitchenSection('waste')">Waste</button>
       <button class="area-tab" data-area="mainkitchen" data-sec="returns" onclick="showKitchenSection('returns')">Returns</button>
       <button class="area-tab" data-area="mainkitchen" data-sec="lunch" onclick="showKitchenSection('lunch')">Lunch</button>
@@ -824,6 +825,70 @@
     </table>
   </div>
 </div>
+
+<!-- ===================== Main Kitchen ▸ Recipes ===================== -->
+<div class="main-kitchen-section recipes-section" data-sec="recipes" style="display:none;">
+  <div class="header-container">
+    <h3>Recipes</h3>
+  </div>
+
+ <div class="order-controls">
+  <input id="recipeSearch" type="text" placeholder="Search recipes by name or number…" oninput="renderRecipesList()" />
+  <select id="recipeCategoryFilter" onchange="renderRecipesList()">
+    <option value="">All Categories</option>
+    <option value="HOTFOODS">HOTFOODS</option>
+    <option value="PANTRY">PANTRY</option>
+    <option value="BAKERY">BAKERY</option>
+  </select>
+  <button type="button" onclick="openAddRecipeDialog()">Add Recipe</button>
+</div>
+
+
+  <!-- List of recipes -->
+  <div id="recipesList"></div>
+
+  <!-- Add / Configure Recipe dialog -->
+  <!-- Add / Configure Recipe dialog -->
+<dialog id="addRecipeDialog">
+  <form method="dialog" autocomplete="off">
+    <h3 style="margin:0 0 .5rem 0;">Add / Configure Recipe</h3>
+
+    <label style="display:block; margin: .5rem 0;">
+      Choose base recipe
+      <select id="recipeSelect">
+        <option value="">-- Select recipe from Firestore --</option>
+      </select>
+    </label>
+
+    <div style="margin: .5rem 0;">
+      <div class="order-controls" style="margin:0">
+        <span>Ingredients</span>
+        <button type="button" onclick="addRecipeLine()">+ Add line</button>
+      </div>
+      <div id="recipeLines"></div>
+    </div>
+
+    <label style="display:block; margin: .5rem 0;">
+      Base Portions (yield)
+      <input id="recipePortions" type="number" min="1" step="1" placeholder="e.g., 24" />
+    </label>
+
+    <label style="display:block; margin: .5rem 0;">
+      Methodology / Steps
+      <textarea id="recipeMethodology" rows="6" placeholder="Step 1:
+Step 2:
+Step 3: …"></textarea>
+    </label>
+
+    <div class="dialog-actions">
+      <button type="button" class="cancel-btn" onclick="closeAddRecipeDialog()">Cancel</button>
+      <button type="button" class="save-btn" onclick="saveRecipeConfig()">Save Recipe</button>
+    </div>
+  </form>
+</dialog>
+
+</div>
+
 
 
   <!-- ♻️ Waste Section -->

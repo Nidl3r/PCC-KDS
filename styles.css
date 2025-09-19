@@ -720,3 +720,127 @@ body { padding-bottom: max(160px, calc(140px + env(safe-area-inset-bottom))); }
 @media (min-width: 1200px) {
   .two-col-grid { grid-template-columns: 1fr 1fr; align-items: start; }
 }
+
+
+/* ---- Recipes dialog ingredient combobox (dark theme) ---- */
+.ing-lookup {
+  position: relative;
+}
+.ing-search {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: #2a2f3a;
+  color: #e8eef9;
+  outline: none;
+}
+.ing-search::placeholder { color: rgba(232,238,249,0.45); }
+
+.ing-menu {
+  position: absolute;
+  z-index: 30;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin-top: 4px;
+  max-height: 240px;
+  overflow: auto;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: #1f2430;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.45);
+}
+
+.ing-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  color: #e8eef9;
+}
+.ing-item .ing-item-meta {
+  font-size: 12px;
+  opacity: 0.6;
+}
+.ing-item.active,
+.ing-item:hover {
+  background: #2b3342;
+}
+.ing-item.ing-empty {
+  cursor: default;
+  opacity: 0.55;
+}
+
+/* Add/Configure Recipe dialog dark theme */
+#addRecipeDialog {
+  border: 1px solid rgba(255,255,255,0.08);
+  background: var(--panel-bg);
+  color: var(--text);
+  border-radius: 14px;
+  padding: 18px 20px;
+  box-shadow: var(--shadow-md);
+  width: min(560px, 92vw);
+}
+#addRecipeDialog::backdrop {
+  background: rgba(0,0,0,0.55);
+}
+
+#addRecipeDialog h3,
+#addRecipeDialog h4,
+#addRecipeDialog label {
+  color: var(--text);
+}
+
+#addRecipeDialog input,
+#addRecipeDialog select,
+#addRecipeDialog textarea,
+#addRecipeDialog button {
+  background: var(--highlight);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+#addRecipeDialog textarea {
+  width: 100%;
+  min-height: 120px;
+  padding: 8px 10px;
+  resize: vertical;
+  background: #2a2f3a; /* match .ing-search */
+}
+
+#addRecipeDialog .save-btn,
+#addRecipeDialog .cancel-btn {
+  min-width: 120px;
+  border-radius: 12px;
+}
+
+#addRecipeDialog .dialog-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+
+.recipe-table-wrap { margin-top: 10px; border:1px solid var(--border); border-radius: 10px; background: rgba(255,255,255,0.02); }
+.recipe-table { width: 100%; border-collapse: collapse; }
+.recipe-table thead th {
+  background: #40414f;
+  color: var(--text);
+  text-align: left;
+  padding: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.recipe-table tbody td {
+  padding: 10px;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  vertical-align: top;
+}
+.recipe-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.recipe-table .method-row td { background: rgba(255,255,255,0.03); }
+.qty-note { font-size: 12px; opacity: .7; padding: 8px 10px; }
+.methodology-block ol { margin: 0; }
