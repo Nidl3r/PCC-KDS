@@ -255,6 +255,57 @@ function enableMathOnInputs(selector, scope = document) {
 }
 
 
+// ===== Make helpers globally available =====
+window.evaluateMathExpression  = window.evaluateMathExpression  || evaluateMathExpression;
+window.normalizeQtyInputValue  = window.normalizeQtyInputValue  || normalizeQtyInputValue;
+
+// ===== Track the currently focused qty input (works for new rows too) =====
+(function initActiveQtyFocusTracking(){
+  // All selectors we want the scale to target
+  const QTY_SELECTORS = [
+    '.send-qty-input',
+    '.prep-input',
+    '#alohaQty', '#gatewayQty', '#ohanaQty', '#concessionQty'
+  ];
+
+  // When ANYTHING gets focus, if it matches our selectors, remember it
+  document.addEventListener('focusin', (e) => {
+    const el = e.target;
+    if (!(el instanceof HTMLInputElement)) return;
+    if (QTY_SELECTORS.some(sel => el.matches(sel))) {
+      window._activeQtyInput = el;
+      // console.log('🎯 active qty input =', el);
+    }
+  }, { capture: true });
+
+  // If you dynamically add new inputs and don’t change focus, clicking them will still set active
+  document.addEventListener('click', (e) => {
+    const el = e.target;
+    if (!(el instanceof HTMLElement)) return;
+    const input = el.closest(QTY_SELECTORS.join(', '));
+    if (input) window._activeQtyInput = input;
+  }, { capture: true });
+
+  // (Optional) if you want to also tag inputs when you call your math initializer:
+  const _origEnable = window.enableMathOnInputs; // might be undefined right now
+  window.enableMathOnInputs = function(selector, scope = document){
+    try { _origEnable?.(selector, scope); } catch {}
+    scope.querySelectorAll(selector).forEach(inp => {
+      inp.addEventListener('focus', () => { window._activeQtyInput = inp; }, { passive: true });
+      inp.addEventListener('click',  () => { window._activeQtyInput = inp; }, { passive: true });
+    });
+  };
+
+  // First pass in case inputs already exist
+  document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll(QTY_SELECTORS.join(', ')).forEach(inp => {
+      inp.addEventListener('focus', () => { window._activeQtyInput = inp; }, { passive: true });
+      inp.addEventListener('click',  () => { window._activeQtyInput = inp; }, { passive: true });
+    });
+  });
+})();
+
+
 // Update on change
 viewSelect.addEventListener("change", updateCurrentVenueFromSelect);
 document.addEventListener("DOMContentLoaded", () => {
@@ -756,6 +807,399 @@ function getTodayDate() {
   return `${year}-${month}-${day}`;
 }
 
+
+// ========================= SCALE INTEGRATION (Web Serial + Keyboard Wedge) =========================
+// Usage:
+//  - Add a button with id="connectScaleBtn" (optional). Clicking it will open the browser's port picker.
+//  - Focus any qty input (e.g., .send-qty-input, .prep-input, #alohaQty, etc.). The scale will write there.
+//  - Switch write mode with window.setScaleWriteMode('replace' | 'add').
+//
+// Notes:
+//  - Many "PS-USB" scales enumerate as USB-Serial (CDC ACM). Web Serial works in Chromium-based browsers (https).
+//  - If your scale is a "keyboard wedge", you may not need Web Serial at all: it will type directly into the focused input.
+//    This module still helps by normalizing after Enter and capturing active input for consistency.
+
+// ===== DEBUG: connect + log raw serial data and parsed lines =====
+window.connectScaleSerialDebug = async function(baud = 9600) {
+  if (!('serial' in navigator)) return alert('Web Serial not supported here.');
+  try {
+    // Close existing if open
+    if (window._scale?.port) { try { await window.disconnectScaleSerial?.(); } catch {} }
+
+    const port = await navigator.serial.requestPort({});
+    await port.open({ baudRate: baud });
+    console.log('🐛 DEBUG: opened serial at', baud);
+
+    // Some scales need control lines asserted
+    try { await port.setSignals?.({ dataTerminalReady: true, requestToSend: true }); } catch {}
+
+    const decoder = new TextDecoderStream();
+    const closed = port.readable.pipeTo(decoder.writable).catch(()=>{});
+    const reader = decoder.readable.getReader();
+
+    window._scale = window._scale || {};
+    window._scale.port = port;
+    window._scale.reader = reader;
+    window._scale.connected = true;
+
+    let buf = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+
+      console.log('🐛 RAW:', JSON.stringify(value));
+      buf += value;
+
+      let idx;
+      while ((idx = buf.search(/[\r\n]+/)) >= 0) {
+        const line = buf.slice(0, idx);
+        buf = buf.slice(idx + 1);
+        handleLine(line);
+      }
+
+      if (buf.length > 32) {
+        handleLine(buf);
+        buf = '';
+      }
+    }
+
+    async function handleLine(line) {
+      const txt = String(line).trim();
+      if (!txt) return;
+      console.log('🐛 LINE:', txt);
+
+      const m = txt.match(/([-+]?\d+(?:\.\d+)?)(?:\s*([a-zA-Z]+))?/);
+      if (!m) return;
+      const val = Number(m[1]);
+      if (!Number.isFinite(val)) return;
+
+      const input = window._activeQtyInput;
+      if (!input) { console.warn('No focused input for weight'); return; }
+
+      const mode = (window._scale?.writeMode || 'replace');
+      if (mode === 'add' && input.value?.trim()) {
+        const endsWithOp = /[+\-*/]\s*$/.test(input.value);
+        input.value = endsWithOp ? `${input.value} ${val}` : `${input.value} + ${val}`;
+      } else {
+        input.value = String(val);
+      }
+      if (typeof window.normalizeQtyInputValue === 'function') window.normalizeQtyInputValue(input);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      console.log('✅ wrote weight to focused input:', input.value);
+    }
+  } catch (e) {
+    console.error('DEBUG connect failed:', e);
+    alert('Debug connect failed: ' + e);
+  }
+};
+
+
+// ========================= SCALE (WebHID fallback) =========================
+(function scaleHID(){
+  async function requestHID() {
+    if (!('hid' in navigator)) {
+      alert('This browser does not support WebHID. Use Chrome/Edge.');
+      return null;
+    }
+    const devices = await navigator.hid.requestDevice({ filters: [] });
+    return devices && devices[0] ? devices[0] : null;
+  }
+
+  function bytesToText(dataView) {
+    const bytes = new Uint8Array(dataView.buffer);
+    const printable = bytes.filter(b => b >= 32 && b <= 126);
+    try { return new TextDecoder().decode(Uint8Array.from(printable)); } catch { return ''; }
+  }
+
+  function parseLineAndWrite(txt) {
+    const m = String(txt).trim().match(/([-+]?\d+(?:\.\d+)?)(?:\s*([a-zA-Z]+))?/);
+    if (!m) return;
+    const val = Number(m[1]);
+    if (!Number.isFinite(val)) return;
+
+    const input = window._activeQtyInput;
+    if (!input) return;
+
+    const mode = (window._scale?.writeMode || 'replace');
+    if (mode === 'add' && input.value?.trim()) {
+      const endsWithOp = /[+\-*/]\s*$/.test(input.value);
+      input.value = endsWithOp ? `${input.value} ${val}` : `${input.value} + ${val}`;
+    } else {
+      input.value = String(val);
+    }
+    if (typeof window.normalizeQtyInputValue === 'function') window.normalizeQtyInputValue(input);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    console.log('✅ HID wrote weight to focused input:', input.value);
+  }
+
+  async function connectHID() {
+    const device = await requestHID();
+    if (!device) return;
+
+    await device.open();
+    console.log('⚖️ HID device opened:', device.productName || '(unknown)');
+
+    device.addEventListener('inputreport', e => {
+      const txt = bytesToText(e.data);
+      if (txt) {
+        console.log('🐛 HID RAW:', txt);
+        parseLineAndWrite(txt);
+      }
+    });
+  }
+
+  // expose globally
+  window.connectScaleHID = connectHID;
+})();
+
+
+(function scaleIntegration(){
+  // --- Global state ---
+  window._scale = {
+    port: null,
+    reader: null,
+    connected: false,
+    writeMode: 'replace', // 'replace' | 'add'
+    unitConversion: null, // e.g., { from:'kg', to:'lb', factor: 2.20462 } if you ever want auto-convert
+    lineBuf: ''
+  };
+
+  // Track the active qty input so the scale knows where to write.
+  // Extend your existing enableMathOnInputs to mark focus.
+  function markActiveOnFocus(input) {
+    input.addEventListener('focus', () => { window._activeQtyInput = input; }, { passive: true });
+    input.addEventListener('click',  () => { window._activeQtyInput = input; }, { passive: true });
+  }
+
+  // Call on any container after you render inputs
+  function registerQtyFocusTargets(scope = document) {
+    const selectors = [
+      '.send-qty-input',
+      '.prep-input',
+      '#alohaQty', '#gatewayQty', '#ohanaQty', '#concessionQty'
+    ];
+    selectors.forEach(sel => {
+      scope.querySelectorAll(sel).forEach(markActiveOnFocus);
+    });
+  }
+
+  // Patch into your existing math initializer so it also tracks focus:
+  const _origEnableMathOnInputs = window.enableMathOnInputs;
+  window.enableMathOnInputs = function(selector, scope = document){
+    _origEnableMathOnInputs?.(selector, scope);
+    scope.querySelectorAll(selector).forEach(markActiveOnFocus);
+  };
+
+  // Initial pass on load
+  document.addEventListener('DOMContentLoaded', () => {
+    registerQtyFocusTargets(document);
+  });
+
+  // Public: change write mode at runtime
+  window.setScaleWriteMode = function(mode) {
+    window._scale.writeMode = (mode === 'add') ? 'add' : 'replace';
+    console.log(`⚖️ Scale write mode: ${window._scale.writeMode}`);
+  };
+
+  // Parse one line from the scale, return {value, unit} or null
+  function parseScaleLine(line) {
+    // Common formats seen: "  1.250 kg", "W: 0.55 lb", "ST,GS,  0.120 kg", "1.234"
+    // Grab first decimal number and optional unit
+    const m = String(line).trim().match(/([-+]?\d+(?:\.\d+)?)(?:\s*([a-zA-Z]+))?/);
+    if (!m) return null;
+    const val = Number(m[1]);
+    if (!Number.isFinite(val)) return null;
+    const unit = m[2]?.toLowerCase?.() || null;
+    return { value: val, unit };
+  }
+
+  // Apply optional unit conversion (if configured)
+  function maybeConvert({ value, unit }) {
+    const conv = window._scale.unitConversion;
+    if (conv && unit && conv.from && conv.to && conv.factor && unit.toLowerCase() === conv.from.toLowerCase()) {
+      return { value: value * conv.factor, unit: conv.to };
+    }
+    return { value, unit };
+  }
+
+  // Write a received weight into the currently active input
+  function writeWeightToActiveInput(weight) {
+    const input = window._activeQtyInput;
+    if (!input) { console.warn('⚖️ No active input focused; ignoring weight'); return; }
+
+    const { writeMode } = window._scale;
+    const safeVal = Number(weight);
+    if (!Number.isFinite(safeVal)) return;
+
+    if (writeMode === 'add' && input.value?.trim()) {
+      // Append as math: "existing + weight"
+      // If existing already ends with an operator, just append the number.
+      const endsWithOp = /[+\-*/]\s*$/.test(input.value);
+      input.value = endsWithOp ? `${input.value} ${safeVal}` : `${input.value} + ${safeVal}`;
+    } else {
+      // Replace current value
+      input.value = String(safeVal);
+    }
+
+    // Normalize (your helper rounds to step/2dp etc.)
+    if (typeof window.normalizeQtyInputValue === 'function') {
+      window.normalizeQtyInputValue(input);
+    }
+
+    // Fire an input event so any listeners (like enabling buttons) react
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  // Continuously read lines from the serial scale
+  async function startReading(port) {
+    window._scale.lineBuf = '';
+    const decoder = new TextDecoderStream();
+    const readableStreamClosed = port.readable.pipeTo(decoder.writable).catch(() => {});
+    window._scale.reader = decoder.readable.getReader();
+
+    try {
+      while (true) {
+        const { value, done } = await window._scale.reader.read();
+        if (done) break;
+        if (value) {
+          // Accumulate into lines
+          window._scale.lineBuf += value;
+          let idx;
+          while ((idx = window._scale.lineBuf.search(/[\r\n]+/)) >= 0) {
+            const line = window._scale.lineBuf.slice(0, idx);
+            window._scale.lineBuf = window._scale.lineBuf.slice(idx + 1);
+            const parsed = parseScaleLine(line);
+            if (parsed) {
+              const conv = maybeConvert(parsed);
+              writeWeightToActiveInput(conv.value);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('⚖️ Scale read stopped:', e);
+    } finally {
+      try { await window._scale.reader.releaseLock(); } catch {}
+      try { await readableStreamClosed; } catch {}
+    }
+  }
+
+  // Public: connect via Web Serial
+  window.connectScaleSerial = async function() {
+    if (!('serial' in navigator)) {
+      alert('This browser does not support Web Serial. Use Chrome/Edge on HTTPS.');
+      return;
+    }
+    try {
+      const port = await navigator.serial.requestPort({
+        // Filters are optional. If you know VID/PID you can add them here to narrow devices.
+        // filters: [{ usbVendorId: 0x????, usbProductId: 0x???? }]
+      });
+      await port.open({ baudRate: 9600 }); // Many scales default to 9600; adjust if needed.
+      window._scale.port = port;
+      window._scale.connected = true;
+      console.log('⚖️ Scale connected (Serial).');
+      startReading(port);
+    } catch (e) {
+      console.error('⚠️ Failed to connect to scale:', e);
+      alert('Failed to connect to scale.');
+    }
+  };
+
+  // Optional: wire a connect button if present
+  document.addEventListener('DOMContentLoaded', () => {
+    const btn = document.getElementById('connectScaleBtn');
+    if (btn) btn.addEventListener('click', () => window.connectScaleSerial());
+  });
+
+  // Quality-of-life: if the scale is a "keyboard wedge", it just types into the focused input.
+  // We don't need to intercept those keystrokes. Your existing Enter/blur normalization already
+  // cleans the value. As a convenience, normalize if the scale sends Enter rapidly:
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && window._activeQtyInput && typeof window.normalizeQtyInputValue === 'function') {
+      // Normalize but do NOT prevent default: preserves your existing behavior
+      window.normalizeQtyInputValue(window._activeQtyInput);
+    }
+  }, { capture: true });
+
+})();
+
+// ===== SERIAL PROBE: cycle common settings, read raw bytes, log hex+ascii, try to write values =====
+window.serialProbe = async function(options = {}) {
+  if (!('serial' in navigator)) return alert('Web Serial not supported here.');
+  const bauds    = options.bauds    || [9600, 2400, 4800, 19200, 38400, 115200];
+  const parities = options.parities || ['none', 'even'];
+  const stops    = options.stopBits || [1, 2];
+  const datas    = options.dataBits || [8, 7];
+
+  async function readFor(port, ms = 4000) {
+    const reader = port.readable.getReader(); // raw bytes
+    const startedAt = Date.now();
+    let chunkCount = 0;
+    try {
+      while (Date.now() - startedAt < ms) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (!value) continue;
+        chunkCount++;
+        const hex   = Array.from(value).map(b => b.toString(16).padStart(2,'0')).join(' ');
+        const ascii = Array.from(value).map(b => (b>=32 && b<=126) ? String.fromCharCode(b) : '.').join('');
+        console.log(`🔹 BYTES[${value.length}] HEX: ${hex}`);
+        console.log(`🔹 ASCII: ${ascii}`);
+
+        const m = ascii.match(/([-+]?\d+(?:\.\d+)?)/);
+        if (m && window._activeQtyInput) {
+          const val = Number(m[1]);
+          if (Number.isFinite(val)) {
+            const input = window._activeQtyInput;
+            const add = (window._scale?.writeMode || 'replace') === 'add';
+            input.value = add && input.value?.trim()
+              ? (/[+\-*/]\s*$/.test(input.value) ? `${input.value} ${val}` : `${input.value} + ${val}`)
+              : String(val);
+            if (typeof window.normalizeQtyInputValue === 'function') window.normalizeQtyInputValue(input);
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            console.log('✅ wrote weight to focused input:', input.value);
+          }
+        }
+      }
+    } finally { try { reader.releaseLock(); } catch {} }
+    return chunkCount;
+  }
+
+  try { await window.disconnectScaleSerial?.(); } catch {}
+
+  const port = await navigator.serial.requestPort({});
+  for (const baudRate of bauds) {
+    for (const parity of parities) {
+      for (const stopBits of stops) {
+        for (const dataBits of datas) {
+          try {
+            console.log(`\n⚙️ Trying ${baudRate} baud, ${dataBits} data bits, parity=${parity}, stopBits=${stopBits}`);
+            await port.open({ baudRate, dataBits, parity, stopBits });
+            try { await port.setSignals?.({ dataTerminalReady: true, requestToSend: true }); } catch {}
+
+            console.log('📥 Reading… click a qty box, then press PRINT on the scale.');
+            const got = await readFor(port, 4000);
+            await port.close();
+
+            if (got > 0) {
+              console.log('🎯 Data seen with this config. Use these permanently.');
+              return { baudRate, dataBits, parity, stopBits };
+            } else {
+              console.log('🙅 No bytes seen. Trying next combo…');
+            }
+          } catch (e) {
+            console.log('⚠️ Open/read failed for this combo:', e?.message || e);
+            try { await port.close(); } catch {}
+          }
+        }
+      }
+    }
+  }
+  console.log('❌ No data on common serial settings. Either the scale needs a command, or this isn’t the serial device.');
+  return null;
+};
 
 
 
@@ -9737,3 +10181,5 @@ async function _loadRecipeIntoDialog(recipeId) {
     qtyInp.value     = Number(line.qty || 0) || "";
   }
 }
+
+
