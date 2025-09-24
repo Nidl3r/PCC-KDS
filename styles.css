@@ -844,3 +844,28 @@ body { padding-bottom: max(160px, calc(140px + env(safe-area-inset-bottom))); }
 .recipe-table .method-row td { background: rgba(255,255,255,0.03); }
 .qty-note { font-size: 12px; opacity: .7; padding: 8px 10px; }
 .methodology-block ol { margin: 0; }
+
+
+#connectScaleBtn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+
+  padding: 6px 12px;
+  background-color: #2563eb; /* nice blue */
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+#connectScaleBtn:hover {
+  background-color: #1d4ed8; /* darker on hover */
+}
+
+/* make sure the container is positioned */
+#main-kitchen .header-container {
+  position: relative;
+}
