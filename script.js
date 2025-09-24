@@ -21,6 +21,7 @@ import {
   arrayUnion,
   arrayRemove,
   increment,
+  runTransaction,   // ⬅️ add this line
 } from "./firebaseConfig.js";
 
 
@@ -3540,7 +3541,20 @@ window._startingParInFlight = window._startingParInFlight || new Set();
 function round2(n){ return Number((Math.round((Number(n)||0)*100)/100).toFixed(2)); }
 
 window.sendStartingPar = async function (recipeId, venue, sendQtyInput) {
-  const today = getTodayDate();
+  // local, in-window lock (helps UX; the transaction is the real guard)
+  window._startingParInFlight ||= new Set();
+
+  function getTodayISO() {
+    try { return (typeof getTodayDate === "function") ? getTodayDate() : new Date().toISOString().slice(0,10); }
+    catch { return new Date().toISOString().slice(0,10); }
+  }
+  function newActionId() {
+    try { return (crypto && crypto.randomUUID) ? crypto.randomUUID() : `${Date.now()}_${Math.random().toString(36).slice(2)}`; }
+    catch { return `${Date.now()}_${Math.random().toString(36).slice(2)}`; }
+  }
+  function r2(n){ return Math.round((Number(n)||0)*100)/100; } // safe round2 if you don't already have one
+
+  const today = getTodayISO();
   const key = `${today}|${venue}|${recipeId}`;
   if (window._startingParInFlight.has(key)) return;
   window._startingParInFlight.add(key);
@@ -3553,18 +3567,15 @@ window.sendStartingPar = async function (recipeId, venue, sendQtyInput) {
 
     // 2) Load recipe
     const rSnap = await getDoc(doc(db, "recipes", recipeId));
-    if (!rSnap.exists()) {
-      console.warn(`❌ Recipe ${recipeId} not found`);
-      return;
-    }
+    if (!rSnap.exists()) { console.warn(`❌ Recipe ${recipeId} not found`); return; }
     const r = rSnap.data() || {};
-    const recipeNo    = (r.recipeNo || recipeId).toString().toUpperCase();
-    const costPerLb   = Number(r.cost ?? r.costPerLb ?? 0);
-    const panWeight   = Number(r.panWeight ?? 0);
+    const recipeNo  = (r.recipeNo || recipeId).toString().toUpperCase();
+    const costPerLb = Number(r.cost ?? r.costPerLb ?? 0);
+    const panWeight = Number(r.panWeight ?? 0);
 
     // 3) Determine today's needed pans (PAR snapshot)
-    const currentPar  = Number(r?.pars?.[venue]?.[String(guestCount)] || 0);
-    const pans        = Math.max(0, currentPar);
+    const currentPar = Number(r?.pars?.[venue]?.[String(guestCount)] || 0);
+    const pans       = Math.max(0, currentPar);
 
     // 4) User input: gross pounds typed on screen
     const sendQtyGross = Number(sendQtyInput);
@@ -3574,69 +3585,81 @@ window.sendStartingPar = async function (recipeId, venue, sendQtyInput) {
     }
 
     // 5) Compute net (subtract pan weight × pans), and total cost
-    const netWeightAdd = round2(Math.max(0, sendQtyGross - (panWeight * pans)));
-    const totalCostAdd = round2(netWeightAdd * costPerLb);
+    const netWeightAdd = r2(Math.max(0, sendQtyGross - (panWeight * pans)));
+    const totalCostAdd = r2(netWeightAdd * costPerLb);
 
     // 6) Deterministic per-day doc (cumulative across multiple sends that day)
     const orderId  = `startingPar_${today}_${venue}_${recipeId}`;
     const orderRef = doc(db, "orders", orderId);
-    const existing = await getDoc(orderRef);
-    const nowTs    = Timestamp.now();
+    const actionId = newActionId();
 
-    if (existing.exists()) {
-      const prev = existing.data() || {};
-      await updateDoc(orderRef, {
-        // required shape
-        type: "starting-par",
-        venue,
-        recipeId,
-        recipeNo,
-        date: today,
-        costPerLb: Number(costPerLb),
-        panWeight: Number(panWeight),
-        pans: Number(pans),                                 // snapshot of today's needed pans
-        sendQty: round2((Number(prev.sendQty||0)) + sendQtyGross),
-        netWeight: round2((Number(prev.netWeight||0)) + netWeightAdd),
-        totalCost: round2((Number(prev.totalCost||0)) + totalCostAdd),
+    // 7) Transaction w/ idempotency + atomic increments
+    await runTransaction(db, async (tx) => {
+      const snap = await tx.get(orderRef);
+      const now = serverTimestamp();
 
-        // delivery/receive lifecycle (sent now; receiving happens later)
-        status: prev.status === "received" ? "received" : "sent",
-        received: Boolean(prev.received || false),
-        receivedAt: prev.receivedAt || null,               // unchanged here
+      if (snap.exists()) {
+        const data = snap.data() || {};
+        // if this exact action was already applied, do nothing
+        if (data.applied && data.applied[actionId]) return;
 
-        // timestamps
-        sentAt: prev.sentAt || nowTs,
-        timestamp: prev.timestamp || nowTs,
-        updatedAt: nowTs
-      });
-    } else {
-      await setDoc(orderRef, {
-        // required shape
-        type: "starting-par",
-        venue,
-        recipeId,
-        recipeNo,
-        date: today,
-        costPerLb: Number(costPerLb),
-        panWeight: Number(panWeight),
-        pans: Number(pans),                   // snapshot of today's needed pans
-        sendQty: round2(sendQtyGross),        // exactly what user typed (gross lbs)
-        netWeight: netWeightAdd,              // gross - panWeight * pans
-        totalCost: totalCostAdd,
+        tx.update(orderRef, {
+          // keep your shape up to date each send
+          type: "starting-par",
+          venue,
+          recipeId,
+          recipeNo,
+          date: today,
+          costPerLb: Number(costPerLb),
+          panWeight: Number(panWeight),
+          pans: Number(pans), // snapshot of today's needed pans
 
-        // delivery/receive lifecycle at SEND time
-        status: "sent",
-        received: false,
-        receivedAt: null,
+          // atomic increments prevent double-add from races
+          sendQty: increment(r2(sendQtyGross)),
+          netWeight: increment(r2(netWeightAdd)),
+          totalCost: increment(r2(totalCostAdd)),
 
-        // timestamps
-        sentAt: nowTs,
-        timestamp: nowTs,
-        updatedAt: nowTs
-      });
-    }
+          // lifecycle
+          status: (data.status === "received") ? "received" : "sent",
+          received: Boolean(data.received || false),
+          receivedAt: data.receivedAt || null,
 
-    console.log("✅ Starting-par recorded", { recipeNo, venue, sendQtyGross, pans, panWeight, netWeightAdd, totalCostAdd });
+          // timestamps
+          sentAt: data.sentAt || now,
+          timestamp: data.timestamp || now,
+          updatedAt: now,
+
+          // idempotency token recorded
+          [`applied.${actionId}`]: true,
+        });
+      } else {
+        tx.set(orderRef, {
+          type: "starting-par",
+          venue,
+          recipeId,
+          recipeNo,
+          date: today,
+          costPerLb: Number(costPerLb),
+          panWeight: Number(panWeight),
+          pans: Number(pans),
+          sendQty: r2(sendQtyGross),
+          netWeight: r2(netWeightAdd),
+          totalCost: r2(totalCostAdd),
+
+          status: "sent",
+          received: false,
+          receivedAt: null,
+
+          sentAt: now,
+          timestamp: now,
+          updatedAt: now,
+
+          applied: { [actionId]: true },
+        });
+      }
+    });
+
+    console.log("✅ Starting-par recorded (idempotent)", { recipeNo, venue, sendQtyGross, pans, panWeight, netWeightAdd, totalCostAdd });
   } catch (err) {
     console.error("❌ Failed to send starting-par:", err);
     throw err;
@@ -3644,6 +3667,7 @@ window.sendStartingPar = async function (recipeId, venue, sendQtyInput) {
     window._startingParInFlight.delete(key);
   }
 };
+
 
 
 
@@ -7445,7 +7469,7 @@ window.loadProductionSummary = async function () {
     return;
   }
 
-  // Attach once (outside the loop)
+  // Keep your existing override behavior
   const onInput = (e) => {
     const el = e.target;
     if (!el.classList.contains("acct-qty-input")) return;
@@ -7454,34 +7478,221 @@ window.loadProductionSummary = async function () {
   tbody.removeEventListener("input", onInput);
   tbody.addEventListener("input", onInput);
 
+  // NEW: delegated click handler for expanding description → details
+  if (!tbody._onProdToggle) {
+    tbody._onProdToggle = async (e) => {
+      const btn = e.target.closest(".prod-desc-toggle");
+      if (!btn) return;
+      const row = btn.closest("tr");
+      const recipeNo = btn.dataset.recipeNo;
+      await toggleProductionDetailRow(row, recipeNo);
+    };
+    tbody.addEventListener("click", tbody._onProdToggle);
+  }
+
+  // Build rows
   for (const recipeNo of recipeKeyList) {
     const item = summaryMap.get(recipeNo);
     const tr = document.createElement("tr");
+    tr.dataset.recipeNo = item.recipeNo; // stable key for the detail row
 
     const prodKey = item.recipeNo; // key for storing edits
     const prodQty = getAcctQty("production", prodKey, Number(item.total) || 0);
 
+   tr.innerHTML = `
+  <td>${item.submenuCode || ""}</td>
+  <td>${item.dishCode}</td>
+  <td>${item.recipeNo}</td>
+  <td>
+    <button class="prod-desc-toggle" data-recipe-no="${item.recipeNo}" style="all:unset; color:#3b82f6; cursor:pointer; text-decoration:underline;">
+      ${item.description}
+    </button>
+  </td>
+  <td>
+    <input
+      type="number"
+      step="0.01"
+      min="0"
+      class="acct-qty-input"
+      data-tab="production"
+      data-key="${prodKey}"
+      value="${prodQty}"
+      readonly
+      aria-readonly="true"
+      tabindex="-1"
+      title="View details to edit individual orders"
+      style="width: 90px; text-align: right; background: rgba(255,255,255,0.04); cursor: not-allowed;"
+    />
+  </td>
+`;
+
+    tbody.appendChild(tr);
+  }
+};
+
+
+async function toggleProductionDetailRow(anchorTr, recipeNo) {
+  const tbody = anchorTr.parentElement;
+  // If an expanded row for this anchor already exists, remove it (collapse)
+  const next = anchorTr.nextElementSibling;
+  if (next && next.classList.contains("prod-detail-row")) {
+    next.remove();
+    return;
+  }
+
+  // Collapse any other open detail row to keep things tidy
+  Array.from(tbody.querySelectorAll(".prod-detail-row")).forEach(r => r.remove());
+
+  // Build the detail row shell
+  const detailTr = document.createElement("tr");
+  detailTr.className = "prod-detail-row";
+  const detailTd = document.createElement("td");
+  detailTd.colSpan = 5;
+  detailTd.innerHTML = `
+    <div style="padding:10px; background: hsl(0 0% 100% / 0.03); border:1px solid hsl(0 0% 100% / 0.08); border-radius:8px;">
+      <div style="font-weight:600; margin-bottom:8px;">Orders for ${recipeNo}</div>
+      <div style="margin-bottom:10px; font-size:12px; opacity:.7">Edit a quantity and press <strong>Enter</strong> to save to Firestore.</div>
+      <table style="width:100%; border-collapse:collapse;">
+        <thead>
+          <tr>
+            <th style="text-align:left; padding:6px 4px;">Type</th>
+            <th style="text-align:left; padding:6px 4px;">Venue</th>
+            <th style="text-align:left; padding:6px 4px;">Station</th>
+            <th style="text-align:left; padding:6px 4px;">Order ID</th>
+            <th style="text-align:right; padding:6px 4px;">Qty</th>
+          </tr>
+        </thead>
+        <tbody class="prod-detail-body">
+          <tr><td colspan="5" style="padding:8px; font-style:italic; color:gray;">Loading…</td></tr>
+        </tbody>
+        <tfoot>
+          <tr>
+            <td colspan="4" style="text-align:right; padding:8px; font-weight:600;">Sum</td>
+            <td style="text-align:right; padding:8px;"><span class="prod-detail-sum">0</span></td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  `;
+  detailTr.appendChild(detailTd);
+  anchorTr.after(detailTr);
+
+  const bodyEl = detailTd.querySelector(".prod-detail-body");
+  const sumEl  = detailTd.querySelector(".prod-detail-sum");
+
+  // Pull today's orders for this recipe
+  const todayStr = (typeof getTodayDate === "function") ? getTodayDate() : new Date().toISOString().slice(0,10);
+  const q = query(
+    collection(db, "orders"),
+    where("date", "==", todayStr),
+    where("recipeNo", "==", recipeNo)
+  );
+  const snap = await getDocs(q);
+
+  bodyEl.innerHTML = ""; // clear loading row
+
+  // Build rows
+  let running = 0;
+  snap.forEach(docSnap => {
+    const d = docSnap.data() || {};
+    const id = docSnap.id;
+    const type = String(d.type || "").toLowerCase();
+    const venue = d.venue || "";
+    const station = d.station || "";
+    // Same quantity rules as your Production Summary
+    const qtySP = Number(d.netWeight ?? d.sendQty ?? d.qty ?? 0);
+    const qtyAO = Number(d.sendQty ?? d.qty ?? d.netWeight ?? 0);
+    const qty   = (type === "starting-par") ? qtySP : qtyAO;
+
+    if (!Number.isFinite(qty) || qty <= 0) return;
+
+    running += qty;
+
+    const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td>${item.submenuCode || ""}</td>
-      <td>${item.dishCode}</td>
-      <td>${item.recipeNo}</td>
-      <td>${item.description}</td>
-      <td>
+      <td style="padding:6px 4px;">${type || ""}</td>
+      <td style="padding:6px 4px;">${venue || ""}</td>
+      <td style="padding:6px 4px;">${station || ""}</td>
+      <td style="padding:6px 4px; font-family:monospace;">${id}</td>
+      <td style="padding:6px 4px; text-align:right;">
         <input
           type="number"
           step="0.01"
           min="0"
-          class="acct-qty-input"
-          data-tab="production"
-          data-key="${prodKey}"
-          value="${prodQty}"
-          style="width: 90px; text-align: right;"
+          value="${qty}"
+          class="prod-order-edit"
+          data-order-id="${id}"
+          data-order-type="${type}"
+          style="width:90px; text-align:right;"
+          title="Press Enter to save"
         />
       </td>
     `;
-    tbody.appendChild(tr);
+    bodyEl.appendChild(tr);
+  });
+
+  if (!bodyEl.children.length) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td colspan="5" style="padding:8px; font-style:italic; color:gray;">No orders found for this recipe today.</td>`;
+    bodyEl.appendChild(tr);
   }
-};
+  sumEl.textContent = running.toFixed(2);
+
+  // Handle inline saves: Enter to persist, then refresh sum + parent total
+  const onKeydown = async (e) => {
+    const el = e.target;
+    if (!el.classList?.contains?.("prod-order-edit")) return;
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+
+    const orderId = el.dataset.orderId;
+    const orderType = el.dataset.orderType; // 'starting-par' or 'add-ons'
+    const newQty = Number(el.value);
+    if (!Number.isFinite(newQty) || newQty < 0) return;
+
+    // Map which field to update, following the same precedence used in your totals:
+    // starting-par → write netWeight; add-ons → write sendQty (and mirror qty for consistency)
+    // Update fields per order type:
+const update =
+  (orderType === "starting-par")
+    ? { netWeight: newQty, sendQty: newQty }
+    : { qty: newQty, sendQty: newQty };
+
+
+    try {
+      await updateDoc(doc(db, "orders", orderId), update);
+      // Recompute the detail sum
+      let sum = 0;
+      bodyEl.querySelectorAll(".prod-order-edit").forEach(input => {
+        const v = Number(input.value);
+        if (Number.isFinite(v)) sum += v;
+      });
+      sumEl.textContent = sum.toFixed(2);
+
+      // Update the parent row's Production Summary qty input (to keep UI consistent)
+      const parentQtyInput = anchorTr.querySelector('input.acct-qty-input[data-tab="production"]');
+      if (parentQtyInput) {
+        parentQtyInput.value = sum.toFixed(2);
+        // also keep overrides map in sync if you use it elsewhere
+        setAcctQty("production", recipeNo, sum);
+      }
+
+      // Optional: subtle flash to confirm save
+      el.style.outline = "2px solid #22c55e";
+      setTimeout(() => (el.style.outline = ""), 400);
+    } catch (err) {
+      console.error("Failed to update order:", err);
+      el.style.outline = "2px solid #ef4444";
+      setTimeout(() => (el.style.outline = ""), 800);
+      alert("Save failed. Check console.");
+    }
+  };
+
+  // Avoid stacking listeners
+  if (detailTd._onOrderEdit) detailTd.removeEventListener("keydown", detailTd._onOrderEdit, true);
+  detailTd._onOrderEdit = onKeydown;
+  detailTd.addEventListener("keydown", detailTd._onOrderEdit, true);
+}
 
 
 function formatDateLocal(dateString) {
@@ -7865,7 +8076,7 @@ async function syncProdOverrideIntoOrders(venueCode, recipeNo, newQty) {
 window.loadVenueShipment = async function (venueCode) {
   window.currentVenueCode = venueCode;
 
-  // ---- ensure helpers exist (safe no-ops if you already defined them elsewhere)
+  // ---- helpers (unchanged)
   window.saveProdShipmentOverride = window.saveProdShipmentOverride || (async function(venueCode, recipeNo, qty){
     try {
       const today = (typeof getTodayDate === "function") ? getTodayDate() : new Date().toISOString().slice(0,10);
@@ -7878,7 +8089,6 @@ window.loadVenueShipment = async function (venueCode) {
         qty: Number(qty) || 0,
         updatedAt: serverTimestamp(),
       }, { merge: true });
-      // console.log("💾 saved override", id, qty);
     } catch (err) {
       console.error("saveProdShipmentOverride failed:", err);
     }
@@ -7906,26 +8116,24 @@ window.loadVenueShipment = async function (venueCode) {
     });
   });
 
-  // ---- mount point
+  // ---- mount
   const container = document.getElementById("singleVenueShipmentContainer");
   container.innerHTML = "";
 
-  // ⏬ bring in any saved overrides for today for this venue (so inputs show persisted values)
+  // preload overrides
   try { await window.preloadProdShipmentOverridesForVenue(venueCode); } catch (e) { console.debug(e); }
 
   const venueLabel = (window.venueNames && window.venueNames[venueCode]) || venueCode.toUpperCase();
-
   const shipments = (window.allShipmentData || []).filter(
     s => String(s.venueCode || "").toLowerCase() === String(venueCode).toLowerCase()
   );
 
-  // Aggregate by recipe (recipeNo + description)
+  // aggregate
   const rows = {};
   shipments.forEach(item => {
     const recipeNo = item.recipeNo || "UNKNOWN";
     const description = item.description || "No Description";
     const qty = Number(item.quantity || 0);
-
     const displayKey = `${recipeNo}__${description}`;
     if (!rows[displayKey]) rows[displayKey] = { recipeNo, description, quantity: 0 };
     rows[displayKey].quantity += qty;
@@ -7954,7 +8162,6 @@ window.loadVenueShipment = async function (venueCode) {
     </thead>
     <tbody></tbody>
   `;
-
   const body = table.querySelector("tbody");
   const keys = Object.keys(rows);
 
@@ -7963,75 +8170,69 @@ window.loadVenueShipment = async function (venueCode) {
     emptyRow.innerHTML = `<td colspan="3" style="text-align:center; font-style:italic; color:gray;">No items</td>`;
     body.appendChild(emptyRow);
   } else {
-    // 🧯 de-dupe handlers so we don’t stack them
+    // 🧯 de-dupe old listeners
     if (body._onProdInput)   body.removeEventListener("input", body._onProdInput);
     if (body._onProdBlur)    body.removeEventListener("blur", body._onProdBlur, true);
     if (body._onProdKeydown) body.removeEventListener("keydown", body._onProdKeydown, true);
 
-    // Debounce bucket for Firestore writes
-    window._prodSaveTimers = window._prodSaveTimers || {};
-
-    // 1) as you type: keep it light (no normalization), just update in-memory cache so UI elsewhere can read it
+    // Keep the same listener variables, but hard-guard them so readonly inputs are ignored
     body._onProdInput = (e) => {
       const el = e.target;
       if (!el.classList?.contains("acct-qty-input")) return;
-      // do NOT coerce mid-typing; just stash string → better UX
+      if (el.hasAttribute("readonly")) return; // 🔒 ignore
       if (!window.accountingQtyOverrides) window.accountingQtyOverrides = {};
       if (!window.accountingQtyOverrides.productionShipments) window.accountingQtyOverrides.productionShipments = new Map();
       window.accountingQtyOverrides.productionShipments.set(el.dataset.key, el.value);
     };
     body.addEventListener("input", body._onProdInput);
 
-    // 2) on Enter: normalize and persist
     body._onProdKeydown = (e) => {
       const el = e.target;
       if (!(el?.classList?.contains("acct-qty-input"))) return;
+      if (el.hasAttribute("readonly")) return; // 🔒 ignore
       if (e.key !== "Enter") return;
 
       e.preventDefault();
-      // normalize (supports "1+1", "2*3", etc. if your helpers exist)
       const v = (typeof normalizeQtyInputValue === "function")
         ? normalizeQtyInputValue(el)
         : Number(el.value);
-
       if (!Number.isFinite(v)) return;
 
       const [vCode, recipeNo] = String(el.dataset.key || "").split("__");
       if (!vCode || !recipeNo) return;
-// inside body._onProdKeydown (on Enter) AND body._onProdBlur (on blur)
-// ...after you computed `v` (the numeric value) and parsed:  const [vCode, recipeNo] = el.dataset.key.split("__");
 
-const tKey = `prod__${el.dataset.key}`;
-clearTimeout(window._prodSaveTimers[tKey]);
-window._prodSaveTimers[tKey] = setTimeout(async () => {
-  try {
-    await window.saveProdShipmentOverride(vCode, recipeNo, v);   // keep your small overrides collection
-    await syncProdOverrideIntoOrders(vCode, recipeNo, v);        // ← NEW: push into orders
-  } catch (e) {
-    console.error("persist override + sync orders failed:", e);
-  }
-}, 200);
+      window._prodSaveTimers = window._prodSaveTimers || {};
+      const tKey = `prod__${el.dataset.key}`;
+      clearTimeout(window._prodSaveTimers[tKey]);
+      window._prodSaveTimers[tKey] = setTimeout(async () => {
+        try {
+          await window.saveProdShipmentOverride(vCode, recipeNo, v);
+          if (typeof syncProdOverrideIntoOrders === "function") {
+            await syncProdOverrideIntoOrders(vCode, recipeNo, v);
+          }
+        } catch (err) {
+          console.error("persist override + sync orders failed:", err);
+        }
+      }, 200);
 
-
-      // keep focus & selection for quick repeated edits
       el.select?.();
     };
     body.addEventListener("keydown", body._onProdKeydown, true);
 
-    // 3) on blur: also normalize and persist (covers mouse/tap away)
     body._onProdBlur = (e) => {
       const el = e.target;
       if (!el.classList?.contains("acct-qty-input")) return;
+      if (el.hasAttribute("readonly")) return; // 🔒 ignore
 
       const v = (typeof normalizeQtyInputValue === "function")
         ? normalizeQtyInputValue(el)
         : Number(el.value);
-
       if (!Number.isFinite(v)) return;
 
       const [vCode, recipeNo] = String(el.dataset.key || "").split("__");
       if (!vCode || !recipeNo) return;
 
+      window._prodSaveTimers = window._prodSaveTimers || {};
       const tKey = `prod__${el.dataset.key}`;
       clearTimeout(window._prodSaveTimers[tKey]);
       window._prodSaveTimers[tKey] = setTimeout(() => {
@@ -8044,15 +8245,15 @@ window._prodSaveTimers[tKey] = setTimeout(async () => {
     keys.forEach(displayKey => {
       const { recipeNo, description, quantity } = rows[displayKey];
 
-      // stable override key per venue+recipe
       const overrideKey = `${venueCode}__${recipeNo}`;
-
-      // Show persisted override if available; else live typed value; else fallback quantity
-      const persisted = window.accountingQtyOverrides?.productionShipments?.get(overrideKey);
+      const persisted   = window.accountingQtyOverrides?.productionShipments?.get(overrideKey);
       const fallbackVal = Number(quantity) || 0;
       const initial =
-        persisted != null && persisted !== "" ? persisted :
-        (typeof getAcctQty === "function" ? getAcctQty("productionShipments", overrideKey, fallbackVal) : fallbackVal);
+        (persisted != null && persisted !== "")
+          ? persisted
+          : (typeof getAcctQty === "function"
+              ? getAcctQty("productionShipments", overrideKey, fallbackVal)
+              : fallbackVal);
 
       const tr = document.createElement("tr");
       tr.innerHTML = `
@@ -8066,7 +8267,11 @@ window._prodSaveTimers[tKey] = setTimeout(async () => {
             data-tab="productionShipments"
             data-key="${overrideKey}"
             value="${initial}"
-            style="width: 90px; text-align:right;"
+            readonly
+            aria-readonly="true"
+            tabindex="-1"
+            title="Shipments are view-only."
+            style="width:90px; text-align:right; background:rgba(255,255,255,0.04); cursor:not-allowed; pointer-events:none;"
             autocomplete="off"
             autocorrect="off"
             spellcheck="false"
@@ -8076,7 +8281,7 @@ window._prodSaveTimers[tKey] = setTimeout(async () => {
       body.appendChild(tr);
     });
 
-    // Optional: enable math helpers globally for these inputs (no harm if fn missing)
+    // You can keep this; inputs are readonly so helpers won't change values anyway
     try { typeof enableMathOnInputs === "function" && enableMathOnInputs(".acct-qty-input", body); } catch {}
   }
 

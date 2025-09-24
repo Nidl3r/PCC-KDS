@@ -29,6 +29,7 @@ import {
   arrayRemove,
   increment,
   connectFirestoreEmulator,
+  runTransaction, // ⬅️ ADDED
 } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore.js";
 
 import {
@@ -36,7 +37,6 @@ import {
   connectAuthEmulator,
 } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-auth.js";
 
-// NEW: Functions + Storage (optional)
 import {
   getFunctions,
   connectFunctionsEmulator,
@@ -68,27 +68,23 @@ const onCodespaces = hasWindow && /\.github\.dev$/i.test(hostname);
 // Treat these as "definitely prod" (ignore ?emu=1 on these)
 const isProdHost =
   hasWindow &&
-  /(web\.app|firebaseapp\.com)$/i.test(hostname); // add your custom domain if needed
+  /(web\.app|firebaseapp\.com)$/i.test(hostname);
 
 // URL flag or sticky flag
 const urlForcesEmu = hasWindow && /[?&]emu=1\b/.test(location.search);
 const stickyForcesEmu =
   hasWindow && localStorage.getItem("USE_EMULATORS") === "1";
 
-// Use emulators when on localhost OR forced via flag (works on Codespaces via ?emu=1 or sticky)
-// Never allow emulators on known prod hosts
+// Use emulators when on localhost OR forced via flag
 const useEmulators =
   !isProdHost && (isLocalhost || urlForcesEmu || stickyForcesEmu);
 
-// Decide which host to use for emulators:
-// - Local dev: 127.0.0.1 (loopback allowed under HTTPS)
-// - Codespaces: the forwarded hostname (e.g. port-8080-xxxx.github.dev)
-// - You can override via localStorage: EMU_HOST
+// Decide which host to use for emulators
 const EMU_HOST =
   (hasWindow && localStorage.getItem("EMU_HOST")) ||
   (isLocalhost ? "127.0.0.1" : hostname);
 
-// Allow port overrides via localStorage for convenience
+// Allow port overrides via localStorage
 const PORTS = {
   firestore: Number(localStorage.getItem("FIRESTORE_PORT")) || 8080,
   auth: Number(localStorage.getItem("AUTH_PORT")) || 9099,
@@ -96,7 +92,7 @@ const PORTS = {
   storage: Number(localStorage.getItem("STORAGE_PORT")) || 9199,
 };
 
-// Per-service host overrides (useful for Codespaces forwarded subdomains)
+// Per-service host overrides
 const HOSTS = {
   firestore: (hasWindow && localStorage.getItem("FIRESTORE_HOST")) || EMU_HOST,
   auth:      (hasWindow && localStorage.getItem("AUTH_HOST"))      || EMU_HOST,
@@ -104,14 +100,10 @@ const HOSTS = {
   storage:   (hasWindow && localStorage.getItem("STORAGE_HOST"))   || EMU_HOST,
 };
 
-// If running behind *.github.dev, we should hit port 443 on that subdomain.
 const isGithubDev = (h) => /\.github\.dev$/i.test(String(h || ""));
 const portOr443 = (host, fallbackPort) => (isGithubDev(host) ? 443 : fallbackPort);
 
-
-// 🧰 Optional: durable multi-tab cache (IndexedDB) toggle
-// Turn on with: localStorage.setItem("FIRESTORE_CACHE","1")  (reload to apply)
-// Turn off with: localStorage.removeItem("FIRESTORE_CACHE")
+// 🧰 Optional: durable multi-tab cache
 const useDurableCache =
   hasWindow && localStorage.getItem("FIRESTORE_CACHE") === "1";
 
@@ -123,8 +115,6 @@ const disableAnalytics = isLocalhost || urlForcesEmu || stickyForcesEmu || onCod
 const analytics = !hasWindow || disableAnalytics ? null : getAnalytics(app);
 
 // ✅ Initialize Firestore
-// - Long-polling helps on odd networks / Codespaces.
-// - Durable cache is opt-in via FIRESTORE_CACHE so you can choose per device.
 const db = initializeFirestore(app, {
   experimentalAutoDetectLongPolling: true,
   useFetchStreams: false,
@@ -133,21 +123,20 @@ const db = initializeFirestore(app, {
     : {}),
 });
 
-// ✅ Auth (ready for emulator)
+// ✅ Auth
 const auth = getAuth(app);
 
-// NEW: Functions/Storage (optional in your app)
+// NEW: Functions/Storage
 const functions = getFunctions(app);
 const storage = getStorage(app);
 
-// 🔌 Hook up emulators (Firestore + Auth + (optional) Functions/Storage)
+// 🔌 Hook up emulators
 if (useEmulators) {
   try {
     connectFirestoreEmulator(db, HOSTS.firestore, portOr443(HOSTS.firestore, PORTS.firestore));
   } catch (e) { console.warn("Firestore emulator connect failed:", e); }
 
   try {
-    // Use https:// when on *.github.dev, otherwise http://
     const authProto = isGithubDev(HOSTS.auth) ? "https" : "http";
     connectAuthEmulator(auth, `${authProto}://${HOSTS.auth}:${portOr443(HOSTS.auth, PORTS.auth)}`, { disableWarnings: true });
   } catch (e) { console.warn("Auth emulator connect failed:", e); }
@@ -160,7 +149,6 @@ if (useEmulators) {
     connectStorageEmulator(storage, HOSTS.storage, portOr443(HOSTS.storage, PORTS.storage));
   } catch (e) { console.info("Storage emulator not connected:", e?.message); }
 
-  // 🎛️ Visible badge so you always know you're on the emulator
   try {
     const div = document.createElement("div");
     div.textContent =
@@ -185,7 +173,6 @@ if (useEmulators) {
     document.addEventListener("DOMContentLoaded", () =>
       document.body.appendChild(div)
     );
-    // Also expose a tiny runtime flag & details
     window.__USING_FIREBASE_EMULATORS__ = true;
   } catch {}
 } else {
@@ -209,8 +196,7 @@ if (hasWindow) {
   };
 }
 
-
-// 🧷 Handy runtime toggles (optional, unchanged + a couple extras)
+// 🧷 Handy runtime toggles
 if (hasWindow) {
   window.__toggleEmulators = (on = true) => {
     if (on) localStorage.setItem("USE_EMULATORS", "1");
@@ -222,7 +208,6 @@ if (hasWindow) {
     else localStorage.removeItem("FIRESTORE_CACHE");
     location.reload();
   };
-  // Optional helpers to tweak host/ports at runtime without code changes
   window.__emuSet = (host = EMU_HOST, p = {}) => {
     if (host) localStorage.setItem("EMU_HOST", host);
     if (p.firestore) localStorage.setItem("FIRESTORE_PORT", String(p.firestore));
@@ -238,7 +223,6 @@ if (hasWindow) {
     );
     location.reload();
   };
-  // Small debug snapshot
   window.firebaseEnv = {
     host: hostname,
     isLocalhost,
@@ -251,7 +235,7 @@ if (hasWindow) {
   };
 }
 
-// ✅ Export everything needed by your app (unchanged + new optional services)
+// ✅ Export everything needed by your app (added runTransaction)
 export {
   db,
   auth,
@@ -275,4 +259,5 @@ export {
   arrayUnion,
   arrayRemove,
   increment,
+  runTransaction, // ⬅️ ADDED
 };
