@@ -32,6 +32,17 @@ window.applyCategoryFilter = applyCategoryFilter; // ✅ expose it to window
 // Set currentVenue on load
 const viewSelect = document.getElementById("viewSelect");
 
+// === Collection config ===
+const RECIPES_COLL = "cookingrecipes";   // new home
+const LEGACY_RECIPES_COLL = "recipes";   // old (read-only fallback)
+
+// Small helpers so we don't sprinkle string literals everywhere
+const recipesCollection = () => collection(db, RECIPES_COLL);
+const legacyRecipesCollection = () => collection(db, LEGACY_RECIPES_COLL);
+const recipeDoc = (id) => doc(db, RECIPES_COLL, id);
+const legacyRecipeDoc = (id) => doc(db, LEGACY_RECIPES_COLL, id);
+
+
 function updateCurrentVenueFromSelect() {
   const val = viewSelect.value;
 
@@ -137,6 +148,45 @@ function updateCurrentVenueFromSelect() {
       console.debug("Recipes init skipped:", e);
     }
   }
+}
+async function ensureRecipeInNewCollection(id) {
+  // If it already exists in cookingrecipes → done
+  const targetRef = recipeDoc(id);
+  const targetSnap = await getDoc(targetRef);
+  if (targetSnap.exists()) return targetRef;
+
+  // Try to migrate from legacy 'recipes'
+  const legacySnap = await getDoc(legacyRecipeDoc(id));
+  if (legacySnap.exists()) {
+    const v = legacySnap.data() || {};
+    // Map only fields you want to carry over
+    const data = {
+      description: v.description ?? v.name ?? v.recipeName ?? "(no name)",
+      recipeNo: v.recipeNo || "",
+      portions: v.portions || 0,
+      methodology: v.methodology || "",
+      ingredients: Array.isArray(v.ingredients) ? v.ingredients : [],
+      category: (v.category || v.Category || "UNCATEGORIZED"),
+      createdAt: v.createdAt || serverTimestamp(),
+      migratedAt: serverTimestamp(),
+      legacyCollection: LEGACY_RECIPES_COLL,
+    };
+    await setDoc(targetRef, data);
+    return targetRef;
+  }
+
+  // Not in legacy either → create a minimal stub so updateDoc won't fail
+  await setDoc(targetRef, {
+    description: id,
+    recipeNo: "",
+    portions: 0,
+    methodology: "",
+    ingredients: [],
+    category: "UNCATEGORIZED",
+    createdAt: serverTimestamp(),
+    createdBy: "auto-stub",
+  });
+  return targetRef;
 }
 
 
@@ -9388,7 +9438,7 @@ function startRecipesListener() {
   if (typeof onSnapshot !== "function") return;
   if (window._recipesUnsub) return;
 
-  const q = query(collection(db, "recipes"), orderBy("description"));
+  const q = query(recipesCollection(), orderBy("description"));
   window._recipesUnsub = onSnapshot(q, (snap) => {
     const rows = [];
     snap.forEach(d => {
@@ -9400,7 +9450,7 @@ function startRecipesListener() {
         portions: v.portions || 0,
         methodology: v.methodology || "",
         ingredients: Array.isArray(v.ingredients) ? v.ingredients : [],
-        category: (v.category || v.Category || "UNCATEGORIZED")  // ← add this
+        category: (v.category || v.Category || "UNCATEGORIZED"),
       });
     });
     window._recipesCache = rows;
@@ -9410,20 +9460,17 @@ function startRecipesListener() {
 }
 
 
+
 // 3) Render list with filter + expandable details + scaled portions
 // Make it async so it can self-prime when cache is empty
 async function renderRecipesList() {
   const wrap = document.getElementById("recipesList");
   if (!wrap) return;
 
-  // --- One-time prime if cache is empty (tries 'recipes' then 'Recipes') ---
-  try {
-    window.startRecipesListener?.(); // live listener if available
-  } catch {}
+  try { window.startRecipesListener?.(); } catch {}
 
   if (!Array.isArray(window._recipesCache) || window._recipesCache.length === 0) {
-    // Fallback prime without orderBy (avoids index issues)
-    const tryNames = ["recipes", "Recipes"];
+    const tryNames = [RECIPES_COLL, LEGACY_RECIPES_COLL]; // new first, then legacy
     for (const collName of tryNames) {
       try {
         const snap = await getDocs(collection(db, collName));
@@ -9438,12 +9485,11 @@ async function renderRecipesList() {
               portions: v.portions || 0,
               methodology: v.methodology || "",
               ingredients: Array.isArray(v.ingredients) ? v.ingredients : [],
-              // NEW: normalize category (support both "category" and "Category")
               category: (v.category || v.Category || "UNCATEGORIZED"),
             });
           });
           window._recipesCache = rows;
-          break; // stop after first collection that returns docs
+          break;
         }
       } catch (e) {
         console.debug(`prime fetch failed for ${collName}:`, e);
@@ -9630,13 +9676,16 @@ window.saveBasePortions = async function(id) {
     const input = document.querySelector(`[data-desired-input="${id}"]`);
     const val = Number(input?.value || 0);
     if (!Number.isFinite(val) || val < 1) return alert("Enter a valid base portion count (>=1).");
-    await updateDoc(doc(db, "recipes", id), { portions: val, updatedAt: serverTimestamp() });
+   const ref = await ensureRecipeInNewCollection(id);
+await updateDoc(ref, { portions: val, updatedAt: serverTimestamp() });
+
     alert("Base portions saved.");
   } catch (e) {
     console.error(e);
     alert("Failed to save base portions.");
   }
 };
+
 
 /** -------------- Add Recipe Dialog logic -------------- */
 function openAddRecipeDialog() {
@@ -9933,31 +9982,31 @@ async function _upgradeRecipeSelectToCombobox() {
     sel.dispatchEvent(new Event("change", { bubbles: true }));
   };
 
-  async function _createRecipeByName(name) {
-    const n = name.trim();
-    if (!n) return null;
+async function _createRecipeByName(name) {
+  const n = name.trim();
+  if (!n) return null;
 
-    const existing = (window._recipesCache || []).find(
-      r => (r.description || r.name || "").trim().toLowerCase() === n.toLowerCase()
-    );
-    if (existing) return existing.id;
+  const existing = (window._recipesCache || []).find(
+    r => (r.description || r.name || "").trim().toLowerCase() === n.toLowerCase()
+  );
+  if (existing) return existing.id;
 
-    const payload = {
-      description: n,
-      portions: 0,
-      methodology: "",
-      ingredients: [],
-      createdAt: serverTimestamp?.(),
-      updatedAt: serverTimestamp?.(),
-    };
-    const ref = await addDoc(collection(db, "recipes"), payload);
+  const payload = {
+    description: n,
+    portions: 0,
+    methodology: "",
+    ingredients: [],
+    createdAt: serverTimestamp?.(),
+    updatedAt: serverTimestamp?.(),
+  };
+  const ref = await addDoc(recipesCollection(), payload);
 
-    const row = { id: ref.id, recipeNo: "", description: n, portions: 0, methodology: "", ingredients: [], category: "UNCATEGORIZED" };
-    window._recipesCache = Array.isArray(window._recipesCache) ? [...window._recipesCache, row] : [row];
-    window._paintRecipeSelect?.();
+  const row = { id: ref.id, recipeNo: "", description: n, portions: 0, methodology: "", ingredients: [], category: "UNCATEGORIZED" };
+  window._recipesCache = Array.isArray(window._recipesCache) ? [...window._recipesCache, row] : [row];
+  window._paintRecipeSelect?.();
+  return ref.id;
+}
 
-    return ref.id;
-  }
 
   // ✅ No max cap; show all recipes (scrollable via CSS max-height on .ing-menu)
   const renderList = (q = "") => {
@@ -10070,6 +10119,7 @@ function _paintRecipeSelect() {
   if (current) sel.value = current;
 }
 
+
 // paint all existing ingredient selects in the dialog
 function _paintIngredientSelectsIfAny() {
   document.querySelectorAll("#addRecipeDialog .ing-id").forEach(el => _paintIngredientSelect(el));
@@ -10096,40 +10146,34 @@ async function saveRecipeConfig() {
   const rows = Array.from(linesBox.children || []);
   if (!rows.length) return alert("Add at least one ingredient line.");
 
- const cooked = rows.map(row => {
-  const ingId   = row.querySelector(".ing-id")?.value || "";
-  const ingName = row.querySelector(".ing-search")?.value?.trim() || "";
-  const qty     = Number(row.querySelector(".ing-qty")?.value || 0);
-  const uom     = (row.querySelector(".ing-uom")?.value || "").trim();
+  const cooked = rows.map(row => {
+    const ingId   = row.querySelector(".ing-id")?.value || "";
+    const ingName = row.querySelector(".ing-search")?.value?.trim() || "";
+    const qty     = Number(row.querySelector(".ing-qty")?.value || 0);
+    const uom     = (row.querySelector(".ing-uom")?.value || "").trim();
+    if ((!ingId && !ingName) || !Number.isFinite(qty) || qty <= 0 || !uom) {
+      throw new Error("Each ingredient row needs a name (pick from list or type), a positive qty, and a UOM.");
+    }
+    return { ingredientId: ingId, name: ingName, qty, uom };
+  });
 
-  // ✅ allow either inventory-picked (ingId) OR custom typed (ingName)
-  if ((!ingId && !ingName) || !Number.isFinite(qty) || qty <= 0 || !uom) {
-    throw new Error("Each ingredient row needs a name (pick from list or type), a positive qty, and a UOM.");
-  }
-
-  return {
-    ingredientId: ingId,   // "" for custom; "recipe:<id>" for sub-recipe; normal id for inventory
-    name: ingName,
-    qty,
-    uom
-  };
-});
-
-
-  try {
-    await updateDoc(doc(db, "recipes", recipeId), {
-      ingredients: cooked,
-      portions,
-      methodology,
-      updatedAt: serverTimestamp(),
-    });
-    closeAddRecipeDialog();
-    alert("Recipe saved.");
-  } catch (e) {
-    console.error(e);
-    alert("Failed to save recipe.");
-  }
+try {
+  const ref = await ensureRecipeInNewCollection(recipeId);
+  await updateDoc(ref, {
+    ingredients: cooked,
+    portions,
+    methodology,
+    updatedAt: serverTimestamp(),
+  });
+  closeAddRecipeDialog();
+  alert("Recipe saved.");
+} catch (e) {
+  console.error(e);
+  alert("Failed to save recipe.");
 }
+
+}
+
 
 // Fill the Add/Configure dialog with an existing recipe
 async function _loadRecipeIntoDialog(recipeId) {
