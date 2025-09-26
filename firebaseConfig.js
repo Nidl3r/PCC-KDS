@@ -75,9 +75,9 @@ const urlForcesEmu = hasWindow && /[?&]emu=1\b/.test(location.search);
 const stickyForcesEmu =
   hasWindow && localStorage.getItem("USE_EMULATORS") === "1";
 
-// Use emulators when on localhost OR forced via flag
+// Default to production services; require explicit opt-in via flag or toggle.
 const useEmulators =
-  !isProdHost && (isLocalhost || urlForcesEmu || stickyForcesEmu);
+  !isProdHost && (urlForcesEmu || stickyForcesEmu);
 
 // Decide which host to use for emulators
 const EMU_HOST =

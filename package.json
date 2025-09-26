@@ -5,11 +5,11 @@
   "main": "firebaseConfig.js",
 "scripts": {
   "start": "live-server --port=5500",
-  "emu": "firebase emulators:start --import=./.emulator-data --export-on-exit",
+  "emu": "firebase emulators:start --project demo-pcc-kds --import=./.emulator-data --export-on-exit",
   "emu:clean": "rimraf ./.emulator-data && mkdir -p ./.emulator-data",
   "seed": "node scripts/seed-local.js",
-  "dev:local": "concurrently \"npm:emu\" \"wait-on tcp:8080 && npm run seed && npm run start\"",
-  "dev": "npm run dev:local"
+  "dev:emulator": "concurrently \"npm:emu\" \"wait-on tcp:8080 && npm run seed && npm run start\"",
+  "dev": "npm run start"
 }
 
 
