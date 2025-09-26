@@ -10,6 +10,12 @@
   --text: #e8eaed;
   --border: #4a4a4a;
 
+  --chat-aloha: #22d3ee;
+  --chat-ohana: #fbbf24;
+  --chat-gateway: #a78bfa;
+  --chat-main: #60a5fa;
+  --chat-default: #9ca3af;
+
   /* additions */
   --radius: 10px;
   --shadow-sm: 0 1px 2px rgba(0,0,0,0.25);
@@ -348,6 +354,30 @@ table button {
   height: 40px; /* thumb-friendly */
   overflow: hidden;
 }
+.chat-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+.chat-title-label { color: var(--text); }
+.chat-title-divider { opacity: 0.6; }
+.chat-title-venue { color: var(--muted); font-weight: 500; }
+.chat-unread-badge {
+  display: none;
+  min-width: 22px;
+  padding: 2px 8px;
+  background: #ef4444;
+  color: #fff;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  justify-content: center;
+  align-items: center;
+  line-height: 1;
+}
 .chat-section.minimized { transform: translateY(calc(100% - 56px)); }
 .chat-toggle-btn {
   background: transparent;
@@ -372,6 +402,43 @@ table button {
   line-height: 1.35;
   border-radius: 8px;
 }
+.chat-message {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border-left: 4px solid var(--chat-default);
+  background: rgba(255, 255, 255, 0.04);
+  margin-bottom: 6px;
+}
+.chat-message-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.chat-sender { font-weight: 600; color: var(--chat-default); }
+.chat-time { opacity: 0.7; }
+.chat-text { font-size: 0.9rem; color: var(--text); }
+
+.chat-message-aloha { border-left-color: var(--chat-aloha); background: rgba(34, 211, 238, 0.12); }
+.chat-message-aloha .chat-sender { color: var(--chat-aloha); }
+
+.chat-message-ohana { border-left-color: var(--chat-ohana); background: rgba(251, 191, 36, 0.15); }
+.chat-message-ohana .chat-sender { color: var(--chat-ohana); }
+
+.chat-message-gateway { border-left-color: var(--chat-gateway); background: rgba(167, 139, 250, 0.14); }
+.chat-message-gateway .chat-sender { color: var(--chat-gateway); }
+
+.chat-message-main-kitchen { border-left-color: var(--chat-main); background: rgba(96, 165, 250, 0.14); }
+.chat-message-main-kitchen .chat-sender { color: var(--chat-main); }
+
+.chat-message-other { border-left-color: var(--chat-default); }
+
 .chat-input-row {
   display: flex;
   flex-wrap: nowrap;

@@ -1407,7 +1407,12 @@ Step 3: …"></textarea>
 <!-- ✅ Place the Chat Box here (outside any .screen or .station-section divs) -->
 <div id="chatBox" class="chat-section open">
   <div id="chatHeader" class="chat-header">
-    <h3>📢 Kitchen Chat - <span id="currentVenueLabel">Main Kitchen</span></h3>
+    <h3 class="chat-title">
+      <span class="chat-title-label">📢 Kitchen Chat</span>
+      <span class="chat-title-divider">–</span>
+      <span id="currentVenueLabel" class="chat-title-venue">Main Kitchen</span>
+      <span id="chatUnreadBadge" class="chat-unread-badge" aria-live="polite"></span>
+    </h3>
     <button id="chatToggleBtn" class="chat-toggle-btn">_</button>
   </div>
 

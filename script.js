@@ -7172,8 +7172,87 @@ function getHawaiiTimestampRange() {
 
 const chatBox = document.getElementById("chatBox");
 const chatToggleBtn = document.getElementById("chatToggleBtn");
+const chatUnreadBadge = document.getElementById("chatUnreadBadge");
 let isChatMinimized = false;
 let chatUnsubscribe = null;
+let latestMessageTimestampMs = null;
+let lastReadTimestampMs = null;
+let chatUnreadCount = 0;
+
+const CHAT_VENUE_CLASS_MAP = {
+  aloha: "chat-message-aloha",
+  ohana: "chat-message-ohana",
+  gateway: "chat-message-gateway",
+  "main kitchen": "chat-message-main-kitchen",
+  "main-kitchen": "chat-message-main-kitchen",
+};
+
+function getChatClassForSender(sender = "") {
+  const key = String(sender).trim().toLowerCase();
+  return CHAT_VENUE_CLASS_MAP[key] || "chat-message-other";
+}
+
+function formatChatTime(date) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return "--:--";
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function buildChatMessageElement({ sender, message, timestamp }) {
+  const messageEl = document.createElement("div");
+  messageEl.className = `chat-message ${getChatClassForSender(sender)}`;
+
+  const meta = document.createElement("div");
+  meta.className = "chat-message-meta";
+
+  const senderEl = document.createElement("span");
+  senderEl.className = "chat-sender";
+  senderEl.textContent = sender || "Unknown";
+
+  const timeEl = document.createElement("span");
+  timeEl.className = "chat-time";
+  timeEl.textContent = formatChatTime(timestamp);
+
+  meta.append(senderEl, timeEl);
+
+  const textEl = document.createElement("div");
+  textEl.className = "chat-text";
+  textEl.textContent = message || "";
+
+  messageEl.append(meta, textEl);
+  return messageEl;
+}
+
+function updateUnreadBadge() {
+  if (!chatUnreadBadge) return;
+  if (chatUnreadCount > 0) {
+    const displayValue = chatUnreadCount > 9 ? "9+" : String(chatUnreadCount);
+    chatUnreadBadge.textContent = displayValue;
+    chatUnreadBadge.style.display = "inline-flex";
+  } else {
+    chatUnreadBadge.textContent = "";
+    chatUnreadBadge.style.display = "none";
+  }
+}
+
+function markChatAsRead() {
+  if (latestMessageTimestampMs) {
+    lastReadTimestampMs = latestMessageTimestampMs;
+  } else if (lastReadTimestampMs === null) {
+    lastReadTimestampMs = 0;
+  }
+  chatUnreadCount = 0;
+  updateUnreadBadge();
+  chatBox?.classList.remove("highlight");
+}
+
+function extractMessageDate(docSnap) {
+  const ts = docSnap.data()?.timestamp;
+  if (ts?.toDate) return ts.toDate();
+  if (ts instanceof Date) return ts;
+  if (typeof ts === "number") return new Date(ts);
+  if (docSnap.metadata?.hasPendingWrites) return new Date();
+  return null;
+}
 
 function startChatListener() {
   if (chatUnsubscribe) return; // Avoid duplicate listeners
@@ -7189,21 +7268,57 @@ function startChatListener() {
     orderBy("timestamp", "asc"),
     limit(50) // ✅ Limit to most recent 50 messages
   );
-
   chatUnsubscribe = onSnapshot(todayChatsQuery, snapshot => {
+    if (!chatMessages) return;
+
     chatMessages.innerHTML = "";
 
-    snapshot.forEach(doc => {
-      const data = doc.data();
-      const time = new Date(data.timestamp?.toDate()).toLocaleTimeString([], {
-        hour: '2-digit',
-        minute: '2-digit'
+    let newestTimestampMs = latestMessageTimestampMs;
+    let unreadDetected = 0;
+
+    snapshot.forEach(docSnap => {
+      const data = docSnap.data();
+      const messageDate = extractMessageDate(docSnap);
+      const messageMs = messageDate ? messageDate.getTime() : 0;
+
+      if (!newestTimestampMs || (messageMs && messageMs > newestTimestampMs)) {
+        newestTimestampMs = messageMs;
+      }
+
+      if (lastReadTimestampMs !== null && messageMs > lastReadTimestampMs) {
+        unreadDetected += 1;
+      }
+
+      const messageEl = buildChatMessageElement({
+        sender: data.sender,
+        message: data.message,
+        timestamp: messageDate,
       });
-      const msg = `<div><strong>${data.sender}</strong> (${time}): ${data.message}</div>`;
-      chatMessages.innerHTML += msg;
+      chatMessages.appendChild(messageEl);
     });
 
     chatMessages.scrollTop = chatMessages.scrollHeight;
+
+    if (newestTimestampMs) {
+      latestMessageTimestampMs = newestTimestampMs;
+    }
+
+    if (!isChatMinimized) {
+      markChatAsRead();
+    } else {
+      if (lastReadTimestampMs === null) {
+        lastReadTimestampMs = latestMessageTimestampMs;
+        chatUnreadCount = 0;
+      } else {
+        chatUnreadCount = unreadDetected;
+        if (chatUnreadCount > 0) {
+          chatBox?.classList.add("highlight");
+        } else {
+          chatBox?.classList.remove("highlight");
+        }
+      }
+      updateUnreadBadge();
+    }
   });
 }
 
@@ -7215,17 +7330,16 @@ function stopChatListener() {
 }
 
 // 🔁 Toggle chat visibility and listener
-chatToggleBtn.addEventListener("click", () => {
-  isChatMinimized = !isChatMinimized;
-  chatBox.classList.toggle("minimized", isChatMinimized);
-  chatBox.classList.remove("highlight");
+if (chatToggleBtn) {
+  chatToggleBtn.addEventListener("click", () => {
+    isChatMinimized = !isChatMinimized;
+    chatBox?.classList.toggle("minimized", isChatMinimized);
 
-  if (isChatMinimized) {
-    stopChatListener(); // 🛑 Save reads
-  } else {
-    startChatListener(); // ▶️ Live feed
-  }
-});
+    if (!isChatMinimized) {
+      markChatAsRead();
+    }
+  });
+}
 
 // ✅ Start listening if chat is visible at page load
 if (!isChatMinimized) {
@@ -7235,13 +7349,19 @@ if (!isChatMinimized) {
 // ✉️ Show temporary new message if chat is minimized
 function handleNewChatMessage(messageText, sender = "Other") {
   const chatMessages = document.getElementById("chatMessages");
-  const message = document.createElement("div");
-  message.textContent = `${sender}: ${messageText}`;
-  chatMessages.appendChild(message);
+  if (!chatMessages) return;
+  const now = new Date();
+  const messageEl = buildChatMessageElement({ sender, message: messageText, timestamp: now });
+  chatMessages.appendChild(messageEl);
   chatMessages.scrollTop = chatMessages.scrollHeight;
 
   if (isChatMinimized) {
-    chatBox.classList.add("highlight");
+    if (latestMessageTimestampMs === null) {
+      latestMessageTimestampMs = now.getTime();
+    }
+    chatUnreadCount += 1;
+    updateUnreadBadge();
+    chatBox?.classList.add("highlight");
   }
 }
 
@@ -10430,5 +10550,3 @@ async function _loadRecipeIntoDialog(recipeId) {
     qtyInp.value     = Number(line.qty || 0) || "";
   }
 }
-
-
