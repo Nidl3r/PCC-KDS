@@ -682,17 +682,7 @@
   <!-- 📦 add on -->
   <div class="main-kitchen-section order-section" data-sec="order">
   <h3>Open Orders</h3>
-<div id="mainKitchenNotif" style="
-  display: none;
-  background: #2e7d32;
-  color: white;
-  padding: 10px 20px;
-  margin-bottom: 10px;
-  border-radius: 6px;
-  font-weight: 500;
-  text-align: center;
-  border: 1px solid #1b5e20;
-"></div>
+<div id="mainKitchenNotif"></div>
 
   <!-- 🔍 Search Bar -->
   <div style="margin-bottom: 1em;">
@@ -703,29 +693,30 @@
         id="kitchenSearchInput"
         placeholder="Search by item name..."
         oninput="filterKitchenOrders()"
-        style="padding: 6px; border-radius: 4px; border: 1px solid #ccc;"
       />
     </label>
   </div>
 
   <!-- 📋 Orders Table -->
-  <table id="kitchenTable">
-    <thead>
-      <tr>
-        <th>Time</th>
-        <th>Due</th>
-        <th>Area</th>
-        <th>Item</th>
-        <th>Notes</th>
-        <th>Qty</th>
-        <th>Status</th>
-        <th>Send Qty</th>
-        <th>UOM</th>
-        <th>Send</th>
-      </tr>
-    </thead>
-    <tbody></tbody>
-  </table>
+  <div class="table-wrap table-wrap--addons">
+    <table id="kitchenTable">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Due</th>
+          <th>Area</th>
+          <th>Item</th>
+          <th>Notes</th>
+          <th>Qty</th>
+          <th>Status</th>
+          <th>Send Qty</th>
+          <th>UOM</th>
+          <th>Send</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
 </div>
 
 <!-- 🥄 Starting Pars Section -->
@@ -735,7 +726,7 @@
   <!-- Controls bar the JS toggles via showKitchenSection() -->
   <div id="mainKitchenControls"
        class="order-controls"
-       style="display:none; margin: 8px 0; gap: 12px; flex-wrap: wrap; align-items: center; justify-content: space-between;">
+       style="display:none;">
 
     <!-- Left: filters -->
     <div class="filter-controls" style="display:flex; flex-wrap:wrap; gap:12px; align-items:center;">

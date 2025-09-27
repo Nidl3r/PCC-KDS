@@ -28,6 +28,27 @@ import {
 
 window.startingCache = {};
 
+const VENUE_CLASS_MAP = {
+  aloha: "venue-aloha",
+  ohana: "venue-ohana",
+  gateway: "venue-gateway",
+  concessions: "venue-concessions",
+  "main kitchen": "venue-main",
+  main: "venue-main"
+};
+
+function getVenueClassName(venue) {
+  const key = typeof venue === "string" ? venue.trim().toLowerCase() : "";
+  return VENUE_CLASS_MAP[key] || "venue-default";
+}
+
+function decorateVenueRow(row, venue) {
+  if (!row) return;
+  row.classList.add("venue-row");
+  row.classList.add(getVenueClassName(venue));
+  row.dataset.venue = venue || "";
+}
+
 window.applyCategoryFilter = applyCategoryFilter; // ✅ expose it to window
 
 // Set currentVenue on load
@@ -1739,6 +1760,7 @@ function renderKitchen(orders, { skipCache = false } = {}) {
 
   orders.forEach(order => {
     const row = document.createElement("tr");
+    decorateVenueRow(row, order.venue);
 
     const createdAt = order.timestamp?.toDate?.() || new Date();
     const cookTime = order.cookTime || 0;
@@ -1748,31 +1770,43 @@ function renderKitchen(orders, { skipCache = false } = {}) {
     const timeFormatted = createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const dueFormatted = dueTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-    if (dueTime < now) row.style.backgroundColor = "rgba(255, 0, 0, 0.15)";
+    if (dueTime < now) {
+      row.classList.add("order-late");
+    }
 
     const cachedQty = kitchenSendQtyCache[order.id] ?? "";
+    const venueLabel = order.venue || "";
+    const safeVenue = escapeHtml(venueLabel);
+    const safeItem = escapeHtml(order.item || "");
+    const safeNotes = escapeHtml(order.notes || "");
+    const formattedNotes = safeNotes.replace(/\n/g, "<br />");
+    const safeStatus = escapeHtml(order.status || "");
+    const safeUom = escapeHtml(order.uom || "ea");
+    const qtyDisplay = order.qty ?? "";
+
+    row.dataset.status = order.status || "";
 
     row.innerHTML = `
-      <td>${timeFormatted}</td>
-      <td>${dueFormatted}</td>
-      <td>${order.venue || ""}</td>
-      <td>${order.item}</td>
-      <td>${order.notes || ""}</td>
-      <td>${order.qty}</td>
-      <td>${order.status}</td>
-      <td>
+      <td data-label="Time">${timeFormatted}</td>
+      <td data-label="Due">${dueFormatted}</td>
+      <td data-label="Area"><span class="venue-pill">${safeVenue}</span></td>
+      <td data-label="Item">${safeItem}</td>
+      <td data-label="Notes">${formattedNotes}</td>
+      <td data-label="Qty">${qtyDisplay}</td>
+      <td data-label="Status">${safeStatus}</td>
+      <td data-label="Send Qty">
         <input
           type="text"
           inputmode="decimal"
           value="${cachedQty}"
           class="send-qty-input"
           data-order-id="${order.id}"
-          style="width: 80px; text-align: right;"
           placeholder="0"
+          aria-label="Send quantity for ${safeItem}"
         />
       </td>
-      <td>${order.uom || "ea"}</td>
-      <td>
+      <td data-label="UOM">${safeUom}</td>
+      <td data-label="Send">
         <button onclick="sendKitchenOrder('${order.id}', this)" disabled>Send</button>
       </td>
     `;
@@ -1840,19 +1874,20 @@ function showMainKitchenNotif(message, duration = 3000, type = "info") {
   }
 
   notif.textContent = message;
-
-  const styles = {
-    success: { background: "#2e7d32", border: "#1b5e20" },
-    error: { background: "#c62828", border: "#b71c1c" },
-    info: { background: "#1565c0", border: "#0d47a1" }
+  const classMap = {
+    success: "notif--success",
+    error: "notif--error",
+    info: "notif--info"
   };
 
-  const { background, border } = styles[type] || styles.info;
-  notif.style.background = background;
-  notif.style.border = `1px solid ${border}`;
+  notif.classList.remove("notif--success", "notif--error", "notif--info");
+  const nextClass = classMap[type] || classMap.info;
+  if (nextClass) notif.classList.add(nextClass);
+
   notif.style.display = "block";
 
-  setTimeout(() => {
+  if (notif.hideTimer) clearTimeout(notif.hideTimer);
+  notif.hideTimer = setTimeout(() => {
     notif.style.display = "none";
   }, duration);
 }
@@ -3331,39 +3366,48 @@ window.renderMainKitchenPars = function () {
       const row = document.createElement("tr");
       row.dataset.recipeId = recipe.id;
       row.dataset.venue    = venue;
+      decorateVenueRow(row, venue);
 
       const uom = recipe.uom || "ea";
-      const sentBadge = `<div style="font-size:12px;opacity:.85;margin-top:2px;">Sent so far: <strong>${fmt(sentSoFar)}</strong> ${uom}</div>`;
+      const safeVenue = escapeHtml(venue);
+      const safeUom = escapeHtml(uom);
+      const description = recipe.description || recipe.recipeNo || recipe.id;
+      const safeDescription = escapeHtml(description);
+      const sentBadge = `<div class="sent-meta">Sent so far: <strong>${fmt(sentSoFar)}</strong> ${safeUom}</div>`;
+      const parDisplay = fmt(parPans);
 
       const isCompleted = (remaining <= 0) || (status === "na");
       if (isCompleted) {
         row.classList.add("row-completed");
-        row.style.background = "rgba(28,150,80,0.10)";
       }
 
       const controls = (status === "na")
-        ? `<em style="opacity:.7;">Marked NA</em>`
+        ? `<span class="status-pill status-pill--na">Marked NA</span>`
         : `
-            <input class="send-qty-input" type="text" inputmode="decimal"
-                   value="${cachedVal}" style="width:80px; margin-left:6px; text-align:right;" placeholder="0"
-                   data-cache-key="${cacheKey}" />
-            <button onclick="sendSingleStartingPar('${recipe.id}', '${venue}', this)">Send</button>
-            <button onclick="markStartingParNA && markStartingParNA('${recipe.id}', '${venue}', this)" style="margin-left:6px;">NA</button>
+            <div class="starting-actions">
+              <input class="send-qty-input" type="text" inputmode="decimal"
+                     value="${cachedVal}"
+                     placeholder="0"
+                     data-cache-key="${cacheKey}" />
+              <button class="starting-send" onclick="sendSingleStartingPar('${recipe.id}', '${venue}', this)">Send</button>
+              <button class="starting-na" onclick="markStartingParNA && markStartingParNA('${recipe.id}', '${venue}', this)">NA</button>
+            </div>
           `;
 
       // ✅ SHOW TARGET in Par Qty cell (parPans), not remaining
       row.innerHTML = `
-        <td>${venue}</td>
-        <td>${recipe.description || recipe.recipeNo || recipe.id}${sentBadge}</td>
-        <td>${fmt(parPans)}</td>
-        <td>${uom}</td>
-        <td>${controls}</td>
+        <td data-label="Area"><span class="venue-pill">${safeVenue}</span></td>
+        <td data-label="Item"><div class="item-cell"><span class="item-title">${safeDescription}</span>${sentBadge}</div></td>
+        <td data-label="Par Qty">${parDisplay}</td>
+        <td data-label="UOM">${safeUom}</td>
+        <td data-label="Send / NA">${controls}</td>
       `;
       tbody.appendChild(row);
       totalRows++;
 
       const input = row.querySelector('.send-qty-input');
       if (input) {
+        input.setAttribute("aria-label", `Quantity to send for ${description}`);
         input.addEventListener('input', () => {
           window.mainStartingQtyCache[cacheKey] = input.value;
         });
