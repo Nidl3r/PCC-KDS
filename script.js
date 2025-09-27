@@ -33,9 +33,31 @@ const VENUE_CLASS_MAP = {
   ohana: "venue-ohana",
   gateway: "venue-gateway",
   concessions: "venue-concessions",
+  concession: "venue-concessions",
   "main kitchen": "venue-main",
   main: "venue-main"
 };
+
+// Canonical display names so data saved as "Aloha" still matches rows rendered as "Aloha"
+const VENUE_CANONICAL_MAP = {
+  aloha: "Aloha",
+  "aloha buffet": "Aloha",
+  ohana: "Ohana",
+  "ohana buffet": "Ohana",
+  gateway: "Gateway",
+  "gateway kitchen": "Gateway",
+  concessions: "Concessions",
+  concession: "Concessions",
+  "concession stand": "Concessions",
+  "main kitchen": "Main Kitchen",
+  main: "Main Kitchen"
+};
+
+function canonicalizeVenueName(rawVenue) {
+  const key = typeof rawVenue === "string" ? rawVenue.trim().toLowerCase() : "";
+  if (!key) return "";
+  return VENUE_CANONICAL_MAP[key] || rawVenue.toString().trim();
+}
 
 function getVenueClassName(venue) {
   const key = typeof venue === "string" ? venue.trim().toLowerCase() : "";
@@ -949,10 +971,23 @@ window.connectScaleSerialDebug = async function(baud = 9600) {
       const input = window._activeQtyInput;
       if (!input) { console.warn('No focused input for weight'); return; }
 
-      const mode = (window._scale?.writeMode || 'replace');
-      if (mode === 'add' && input.value?.trim()) {
-        const endsWithOp = /[+\-*/]\s*$/.test(input.value);
-        input.value = endsWithOp ? `${input.value} ${val}` : `${input.value} + ${val}`;
+      const mode = window._scale?.writeMode || 'replace';
+      const existingText = typeof input.value === 'string' ? input.value : '';
+      const trimmed = existingText.trim();
+      const hasDigits = /\d/.test(trimmed);
+      const selectionCoversAll =
+        typeof input.selectionStart === 'number' &&
+        typeof input.selectionEnd === 'number' &&
+        input.selectionStart === 0 &&
+        input.selectionEnd === existingText.length;
+      const autoAdd = (window._scale?.autoAddWhenFilled === undefined)
+        ? true
+        : Boolean(window._scale.autoAddWhenFilled);
+      const shouldAppend = hasDigits && !selectionCoversAll && (mode === 'add' || autoAdd);
+
+      if (shouldAppend) {
+        const endsWithOp = /[+\-*/]\s*$/.test(trimmed);
+        input.value = endsWithOp ? `${trimmed} ${val}` : `${trimmed} + ${val}`;
       } else {
         input.value = String(val);
       }
@@ -993,10 +1028,23 @@ window.connectScaleSerialDebug = async function(baud = 9600) {
     const input = window._activeQtyInput;
     if (!input) return;
 
-    const mode = (window._scale?.writeMode || 'replace');
-    if (mode === 'add' && input.value?.trim()) {
-      const endsWithOp = /[+\-*/]\s*$/.test(input.value);
-      input.value = endsWithOp ? `${input.value} ${val}` : `${input.value} + ${val}`;
+    const mode = window._scale?.writeMode || 'replace';
+    const existingText = typeof input.value === 'string' ? input.value : '';
+    const trimmed = existingText.trim();
+    const hasDigits = /\d/.test(trimmed);
+    const selectionCoversAll =
+      typeof input.selectionStart === 'number' &&
+      typeof input.selectionEnd === 'number' &&
+      input.selectionStart === 0 &&
+      input.selectionEnd === existingText.length;
+    const autoAdd = (window._scale?.autoAddWhenFilled === undefined)
+      ? true
+      : Boolean(window._scale.autoAddWhenFilled);
+    const shouldAppend = hasDigits && !selectionCoversAll && (mode === 'add' || autoAdd);
+
+    if (shouldAppend) {
+      const endsWithOp = /[+\-*/]\s*$/.test(trimmed);
+      input.value = endsWithOp ? `${trimmed} ${val}` : `${trimmed} + ${val}`;
     } else {
       input.value = String(val);
     }
@@ -1033,6 +1081,7 @@ window.connectScaleSerialDebug = async function(baud = 9600) {
     reader: null,
     connected: false,
     writeMode: 'replace', // 'replace' | 'add'
+    autoAddWhenFilled: true,
     unitConversion: null, // e.g., { from:'kg', to:'lb', factor: 2.20462 } if you ever want auto-convert
     lineBuf: ''
   };
@@ -1074,6 +1123,11 @@ window.connectScaleSerialDebug = async function(baud = 9600) {
     console.log(`⚖️ Scale write mode: ${window._scale.writeMode}`);
   };
 
+  window.setScaleAutoAddWhenFilled = function(enabled = true) {
+    window._scale.autoAddWhenFilled = Boolean(enabled);
+    console.log(`⚖️ Scale auto-add when filled: ${window._scale.autoAddWhenFilled}`);
+  };
+
   // Parse one line from the scale, return {value, unit} or null
   function parseScaleLine(line) {
     // Common formats seen: "  1.250 kg", "W: 0.55 lb", "ST,GS,  0.120 kg", "1.234"
@@ -1100,17 +1154,29 @@ window.connectScaleSerialDebug = async function(baud = 9600) {
     const input = window._activeQtyInput;
     if (!input) { console.warn('⚖️ No active input focused; ignoring weight'); return; }
 
-    const { writeMode } = window._scale;
+    const { writeMode, autoAddWhenFilled } = window._scale;
     const safeVal = Number(weight);
     if (!Number.isFinite(safeVal)) return;
 
-    if (writeMode === 'add' && input.value?.trim()) {
+    const existingText = typeof input.value === 'string' ? input.value : '';
+    const trimmed = existingText.trim();
+    const hasDigits = /\d/.test(trimmed);
+    const selectionCoversAll =
+      typeof input.selectionStart === 'number' &&
+      typeof input.selectionEnd === 'number' &&
+      input.selectionStart === 0 &&
+      input.selectionEnd === existingText.length;
+
+    const autoAdd = (autoAddWhenFilled === undefined) ? true : Boolean(autoAddWhenFilled);
+    const shouldAppend = hasDigits && !selectionCoversAll && (writeMode === 'add' || autoAdd);
+
+    if (shouldAppend) {
       // Append as math: "existing + weight"
       // If existing already ends with an operator, just append the number.
-      const endsWithOp = /[+\-*/]\s*$/.test(input.value);
-      input.value = endsWithOp ? `${input.value} ${safeVal}` : `${input.value} + ${safeVal}`;
+      const endsWithOp = /[+\-*/]\s*$/.test(trimmed);
+      input.value = endsWithOp ? `${trimmed} ${safeVal}` : `${trimmed} + ${safeVal}`;
     } else {
-      // Replace current value
+      // Replace current value or overwrite selected text
       input.value = String(safeVal);
     }
 
@@ -1225,10 +1291,26 @@ window.serialProbe = async function(options = {}) {
           const val = Number(m[1]);
           if (Number.isFinite(val)) {
             const input = window._activeQtyInput;
-            const add = (window._scale?.writeMode || 'replace') === 'add';
-            input.value = add && input.value?.trim()
-              ? (/[+\-*/]\s*$/.test(input.value) ? `${input.value} ${val}` : `${input.value} + ${val}`)
-              : String(val);
+            const mode = window._scale?.writeMode || 'replace';
+            const existingText = typeof input.value === 'string' ? input.value : '';
+            const trimmed = existingText.trim();
+            const hasDigits = /\d/.test(trimmed);
+            const selectionCoversAll =
+              typeof input.selectionStart === 'number' &&
+              typeof input.selectionEnd === 'number' &&
+              input.selectionStart === 0 &&
+              input.selectionEnd === existingText.length;
+            const autoAdd = (window._scale?.autoAddWhenFilled === undefined)
+              ? true
+              : Boolean(window._scale.autoAddWhenFilled);
+            const shouldAppend = hasDigits && !selectionCoversAll && (mode === 'add' || autoAdd);
+
+            if (shouldAppend) {
+              const endsWithOp = /[+\-*/]\s*$/.test(trimmed);
+              input.value = endsWithOp ? `${trimmed} ${val}` : `${trimmed} + ${val}`;
+            } else {
+              input.value = String(val);
+            }
             if (typeof window.normalizeQtyInputValue === 'function') window.normalizeQtyInputValue(input);
             input.dispatchEvent(new Event('input', { bubbles: true }));
             console.log('✅ wrote weight to focused input:', input.value);
@@ -3279,39 +3361,41 @@ window.loadMainKitchenStartingPars = async function () {
 const sentQtyTotals = {}; 
 
   ordersSnap.forEach(s => {
-    const o = s.data();
-    const venue    = o.venue;
+    const o = s.data() || {};
+    const venue    = canonicalizeVenueName(o.venue);
     const recipeId = o.recipeId;
     if (!venue || !recipeId) return;
 
     const status = String(o.status || "sent").toLowerCase();
-    const isConcessions = /concessions?/i.test(venue);
+    const statusCounts = (status === "sent" || status === "received");
+    const isConcessions = venue === "Concessions";
 
-    // Robust value; only used for Concessions remainder
     const sentValue = isConcessions
-      ? Number(o.netWeight ?? o.sendQty ?? o.qty ?? 0)   // lbs
-      : Number(o.pans ?? o.sendQty ?? o.qty ?? 0);       // pans (ignored for buffet logic below)
+      ? Number(o.netWeight ?? o.sendQty ?? o.qty ?? 0)   // lbs for baseline math
+      : Number(o.pans ?? o.sendQty ?? o.qty ?? 0);       // pans fallback for buffet venues
+
+    const qtyForDisplay = isConcessions
+      ? Number(o.netWeight ?? o.sendQty ?? o.qty ?? 0)
+      : Number(o.sendQty ?? o.pans ?? o.qty ?? 0);
 
     if (!sentPars[venue])      sentPars[venue] = {};
     if (!receivedPars[venue])  receivedPars[venue] = {};
     if (!sentParStatus[venue]) sentParStatus[venue] = {};
     if (!wasSentToday[venue])  wasSentToday[venue] = {};
+    if (!sentQtyTotals[venue]) sentQtyTotals[venue] = {};
 
-    // Mark "was sent" for buffet logic
-    if (status === "sent" || status === "received") {
+    if (statusCounts) {
       wasSentToday[venue][recipeId] = true;
-    }
-// 👇 Sum the exact Firestore sendQty (no par/pans fallback)
-if (!sentQtyTotals[venue]) sentQtyTotals[venue] = {};
-const sq = Number(o.sendQty || 0);
-if (sq > 0 && (status === "sent" || status === "received")) {
-  sentQtyTotals[venue][recipeId] = (sentQtyTotals[venue][recipeId] || 0) + sq;
-}
 
-    // Maintain other flags/tallies for completeness and Concessions
-    if (sentValue > 0 && (status === "sent" || status === "received")) {
-      sentPars[venue][recipeId] = (sentPars[venue][recipeId] || 0) + sentValue;
+      if (qtyForDisplay > 0) {
+        sentQtyTotals[venue][recipeId] = (sentQtyTotals[venue][recipeId] || 0) + qtyForDisplay;
+      }
+
+      if (sentValue > 0) {
+        sentPars[venue][recipeId] = (sentPars[venue][recipeId] || 0) + sentValue;
+      }
     }
+
     if (status === "received" || o.received) {
       receivedPars[venue][recipeId] = true;
     }
@@ -3363,14 +3447,22 @@ window.renderMainKitchenPars = function () {
   const { sentBase: finalSentBase } = readConcessionBaseline();
 
   const fmt = n => (Number(n) % 1 ? Number(n).toFixed(2) : Number(n));
+  const perVenueTotals = data.sentQtyTotals || {};
   let totalRows = 0;
 
   (data.recipes || []).forEach(recipe => {
     const station = recipe.category || "";
     if (stationFilter && station.toLowerCase() !== stationFilter.toLowerCase()) return;
 
-    for (const code of (recipe.venueCodes || [])) {
-      const venue = venueCodeMap[code] || "Unknown";
+    const recipeVenues = Array.from(new Set(
+      (recipe.venueCodes || [])
+        .map(code => canonicalizeVenueName(venueCodeMap[code] || code || ""))
+        .filter(Boolean)
+    ));
+
+    if (recipeVenues.length === 0) return;
+
+    for (const venue of recipeVenues) {
       if (venueFilter && venue !== venueFilter) continue;
 
       // 1) Compute target PAR (pans) — this is what we'll ALWAYS show in "Par Qty"
@@ -3390,7 +3482,18 @@ window.renderMainKitchenPars = function () {
           parPans = Number(recipe.pars?.[venue]?.[String(gc)] || 0);
         }
       }
-      if (parPans <= 0) continue;
+      const statusMap = data.sentParStatus?.[venue] || {};
+      const status = String(statusMap[recipe.id] || "").toLowerCase();
+
+      const sentForVenue = Number(
+        perVenueTotals?.[venue]?.[recipe.id] ??
+        data.sentPars?.[venue]?.[recipe.id] ??
+        0
+      );
+
+      if (parPans <= 0 && !(sentForVenue > 0 || status === "na" || status === "received")) {
+        continue;
+      }
 
       // 2) Compute REMAINING (for completion styling/ordering only)
       let remaining = 0;
@@ -3402,15 +3505,12 @@ window.renderMainKitchenPars = function () {
         const effectiveSentSinceIncrease = Math.max(0, sentNow - sentAtBaseline);
         remaining = Math.max(0, parPans - effectiveSentSinceIncrease);
       } else {
-        // ✅ Buffet venues: use exact pans sent today from sentQtyTotals (not sentPars)
-        const sentPansToday = Number(data.sentQtyTotals?.[venue]?.[recipe.id] || 0);
-        remaining = Math.max(0, parPans - sentPansToday);
+        // ✅ Buffet venues: use exact quantity sent today from per-venue totals
+        remaining = Math.max(0, parPans - sentForVenue);
       }
 
       // 👉 Always render, even if remaining <= 0
-      const statusMap = data.sentParStatus?.[venue] || {};
-      const status = String(statusMap[recipe.id] || "").toLowerCase(); // "", "sent", "received", "na"
-      const sentSoFar = Number(data.sentQtyTotals?.[venue]?.[recipe.id] || 0);
+      const sentSoFar = sentForVenue;
 
       const cacheKey  = `${getTodayDate()}|${venue}|${recipe.id}`;
       const cachedVal = window.mainStartingQtyCache[cacheKey] ?? "";
@@ -3425,10 +3525,28 @@ window.renderMainKitchenPars = function () {
       const safeUom = escapeHtml(uom);
       const description = recipe.description || recipe.recipeNo || recipe.id;
       const safeDescription = escapeHtml(description);
-      const sentBadge = `<div class="sent-meta">Sent so far: <strong>${fmt(sentSoFar)}</strong> ${safeUom}</div>`;
+      const showBreakdown = !venueFilter && recipeVenues.length > 1;
+      const breakdownParts = showBreakdown
+        ? recipeVenues.map(name => {
+            const qty = Number(
+              perVenueTotals?.[name]?.[recipe.id] ??
+              data.sentPars?.[name]?.[recipe.id] ??
+              0
+            );
+            const qtyDisplay = fmt(qty);
+            const safeName = escapeHtml(name);
+            return name === venue
+              ? `${safeName}: <strong>${qtyDisplay}</strong>`
+              : `${safeName}: ${qtyDisplay}`;
+          })
+        : null;
+
+      const sentBadge = showBreakdown && breakdownParts?.length
+        ? `<div class="sent-meta">Sent today — ${breakdownParts.join(" • ")} ${safeUom}</div>`
+        : `<div class="sent-meta">Sent to ${safeVenue} today: <strong>${fmt(sentSoFar)}</strong> ${safeUom}</div>`;
       const parDisplay = fmt(parPans);
 
-      const isCompleted = (remaining <= 0) || (status === "na");
+      const isCompleted = (remaining <= 0) || (status === "na") || (status === "received") || (sentSoFar > 0);
       if (isCompleted) {
         row.classList.add("row-completed");
       }
@@ -3606,7 +3724,8 @@ window.sendSingleStartingPar = async function (recipeId, venue, button) {
 // 📌 Mark Starting Par item as NA for today (drops to bottom, turns green)
 window.markStartingParNA = async function (recipeId, venue, button) {
   const today = getTodayDate();
-  const orderId  = `startingPar_${today}_${venue}_${recipeId}`;
+  const venueName = canonicalizeVenueName(venue) || String(venue || "").trim();
+  const orderId  = `startingPar_${today}_${venueName}_${recipeId}`;
   const orderRef = doc(db, "orders", orderId);
 
   try {
@@ -3614,7 +3733,7 @@ window.markStartingParNA = async function (recipeId, venue, button) {
     await setDoc(orderRef, {
       type: "starting-par",
       date: today,
-      venue,
+      venue: venueName,
       recipeId,
       status: "na",
       updatedAt: serverTimestamp(),
@@ -3640,6 +3759,12 @@ window.sendStartingPar = async function (recipeId, venue, sendQtyInput) {
   // local, in-window lock (helps UX; the transaction is the real guard)
   window._startingParInFlight ||= new Set();
 
+  const venueName = canonicalizeVenueName(venue) || String(venue || "").trim();
+  if (!venueName) {
+    console.warn("❌ sendStartingPar called without a valid venue", { recipeId, venue });
+    return;
+  }
+
   function getTodayISO() {
     try { return (typeof getTodayDate === "function") ? getTodayDate() : new Date().toISOString().slice(0,10); }
     catch { return new Date().toISOString().slice(0,10); }
@@ -3651,7 +3776,7 @@ window.sendStartingPar = async function (recipeId, venue, sendQtyInput) {
   function r2(n){ return Math.round((Number(n)||0)*100)/100; } // safe round2 if you don't already have one
 
   const today = getTodayISO();
-  const key = `${today}|${venue}|${recipeId}`;
+  const key = `${today}|${venueName}|${recipeId}`;
   if (window._startingParInFlight.has(key)) return;
   window._startingParInFlight.add(key);
 
@@ -3659,7 +3784,7 @@ window.sendStartingPar = async function (recipeId, venue, sendQtyInput) {
     // 1) Load guest count for today's PAR lookup
     const gcSnap = await getDoc(doc(db, "guestCounts", today));
     const guestCounts = gcSnap.exists() ? (gcSnap.data() || {}) : {};
-    const guestCount = Number(guestCounts?.[venue] || 0);
+    const guestCount = Number(guestCounts?.[venueName] || 0);
 
     // 2) Load recipe
     const rSnap = await getDoc(doc(db, "recipes", recipeId));
@@ -3670,7 +3795,7 @@ window.sendStartingPar = async function (recipeId, venue, sendQtyInput) {
     const panWeight = Number(r.panWeight ?? 0);
 
     // 3) Determine today's needed pans (PAR snapshot)
-    const currentPar = Number(r?.pars?.[venue]?.[String(guestCount)] || 0);
+    const currentPar = Number(r?.pars?.[venueName]?.[String(guestCount)] || 0);
     const pans       = Math.max(0, currentPar);
 
     // 4) User input: gross pounds typed on screen
@@ -3685,7 +3810,7 @@ window.sendStartingPar = async function (recipeId, venue, sendQtyInput) {
     const totalCostAdd = r2(netWeightAdd * costPerLb);
 
     // 6) Deterministic per-day doc (cumulative across multiple sends that day)
-    const orderId  = `startingPar_${today}_${venue}_${recipeId}`;
+    const orderId  = `startingPar_${today}_${venueName}_${recipeId}`;
     const orderRef = doc(db, "orders", orderId);
     const actionId = newActionId();
 
@@ -3702,7 +3827,7 @@ window.sendStartingPar = async function (recipeId, venue, sendQtyInput) {
         tx.update(orderRef, {
           // keep your shape up to date each send
           type: "starting-par",
-          venue,
+          venue: venueName,
           recipeId,
           recipeNo,
           date: today,
@@ -3731,7 +3856,7 @@ window.sendStartingPar = async function (recipeId, venue, sendQtyInput) {
       } else {
         tx.set(orderRef, {
           type: "starting-par",
-          venue,
+          venue: venueName,
           recipeId,
           recipeNo,
           date: today,
@@ -3755,7 +3880,7 @@ window.sendStartingPar = async function (recipeId, venue, sendQtyInput) {
       }
     });
 
-    console.log("✅ Starting-par recorded (idempotent)", { recipeNo, venue, sendQtyGross, pans, panWeight, netWeightAdd, totalCostAdd });
+    console.log("✅ Starting-par recorded (idempotent)", { recipeNo, venue: venueName, sendQtyGross, pans, panWeight, netWeightAdd, totalCostAdd });
   } catch (err) {
     console.error("❌ Failed to send starting-par:", err);
     throw err;
