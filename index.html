@@ -702,11 +702,9 @@
     <table id="kitchenTable">
       <thead>
         <tr>
-          <th>Time</th>
           <th>Due</th>
           <th>Area</th>
           <th>Item</th>
-          <th>Notes</th>
           <th>Qty</th>
           <th>Status</th>
           <th>Send Qty</th>
@@ -716,6 +714,17 @@
       </thead>
       <tbody></tbody>
     </table>
+  </div>
+
+  <div id="noteModal" class="note-modal" role="dialog" aria-modal="true" aria-hidden="true">
+    <div class="note-modal__backdrop" data-dismiss="note-modal"></div>
+    <div class="note-modal__content" role="document">
+      <div class="note-modal__header">
+        <span>Item Note</span>
+        <button type="button" class="note-modal__close" data-dismiss="note-modal">Close</button>
+      </div>
+      <div id="noteModalBody" class="note-modal__body"></div>
+    </div>
   </div>
 </div>
 

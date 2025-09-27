@@ -1728,6 +1728,41 @@ window.showKitchenSection = function (sectionId) {
 //Kitchen add ons
 // Kitchen add ons
 const kitchenSendQtyCache = {};
+
+const kitchenNoteModal = document.getElementById("noteModal");
+const kitchenNoteModalBody = document.getElementById("noteModalBody");
+const NOTE_MODAL_VISIBLE_CLASS = "note-modal--visible";
+
+function openKitchenNoteModal(text = "") {
+  if (!kitchenNoteModal || !kitchenNoteModalBody) return;
+  kitchenNoteModalBody.textContent = text;
+  kitchenNoteModal.classList.add(NOTE_MODAL_VISIBLE_CLASS);
+  kitchenNoteModal.setAttribute("aria-hidden", "false");
+}
+
+function closeKitchenNoteModal() {
+  if (!kitchenNoteModal || !kitchenNoteModalBody) return;
+  kitchenNoteModal.classList.remove(NOTE_MODAL_VISIBLE_CLASS);
+  kitchenNoteModal.setAttribute("aria-hidden", "true");
+  kitchenNoteModalBody.textContent = "";
+}
+
+if (kitchenNoteModal) {
+  kitchenNoteModal.addEventListener("click", (event) => {
+    const target = event.target;
+    if (!target) return;
+    if (target.dataset.dismiss === "note-modal") {
+      closeKitchenNoteModal();
+    }
+  });
+}
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && kitchenNoteModal?.classList.contains(NOTE_MODAL_VISIBLE_CLASS)) {
+    closeKitchenNoteModal();
+  }
+});
+
 function renderKitchen(orders, { skipCache = false } = {}) {
   const container = document.getElementById("kitchenTable").querySelector("tbody");
   if (!container) return;
@@ -1767,7 +1802,6 @@ function renderKitchen(orders, { skipCache = false } = {}) {
     const dueTime = new Date(createdAt.getTime() + cookTime * 60000);
     const now = new Date();
 
-    const timeFormatted = createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const dueFormatted = dueTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
     if (dueTime < now) {
@@ -1778,20 +1812,28 @@ function renderKitchen(orders, { skipCache = false } = {}) {
     const venueLabel = order.venue || "";
     const safeVenue = escapeHtml(venueLabel);
     const safeItem = escapeHtml(order.item || "");
-    const safeNotes = escapeHtml(order.notes || "");
-    const formattedNotes = safeNotes.replace(/\n/g, "<br />");
     const safeStatus = escapeHtml(order.status || "");
     const safeUom = escapeHtml(order.uom || "ea");
     const qtyDisplay = order.qty ?? "";
+    const rawNote = typeof order.notes === "string" ? order.notes : "";
+    const noteText = rawNote.trim();
+    const hasNote = noteText.length > 0;
+    const encodedNote = encodeURIComponent(noteText);
+    const noteButtonHtml = hasNote
+      ? `<button type="button" class="note-btn note-btn--inline" data-note="${encodedNote}" aria-label="View note for ${safeItem}">View Note</button>`
+      : "";
 
     row.dataset.status = order.status || "";
 
     row.innerHTML = `
-      <td data-label="Time">${timeFormatted}</td>
       <td data-label="Due">${dueFormatted}</td>
       <td data-label="Area"><span class="venue-pill">${safeVenue}</span></td>
-      <td data-label="Item">${safeItem}</td>
-      <td data-label="Notes">${formattedNotes}</td>
+      <td data-label="Item">
+        <div class="item-cell">
+          <span class="item-title">${safeItem}</span>
+          ${noteButtonHtml}
+        </div>
+      </td>
       <td data-label="Qty">${qtyDisplay}</td>
       <td data-label="Status">${safeStatus}</td>
       <td data-label="Send Qty">
@@ -1812,6 +1854,16 @@ function renderKitchen(orders, { skipCache = false } = {}) {
     `;
 
     container.appendChild(row);
+
+    if (hasNote) {
+      const noteBtn = row.querySelector(".note-btn");
+      if (noteBtn) {
+        noteBtn.addEventListener("click", () => {
+          const noteValue = noteBtn.dataset.note ? decodeURIComponent(noteBtn.dataset.note) : "";
+          openKitchenNoteModal(noteValue);
+        });
+      }
+    }
   });
 
   // 🔄 Add input listeners to enable/disable send buttons (live as you type)
