@@ -9210,6 +9210,7 @@ window.sendAllMainLunch = async function () {
   const S = (window.analyticsState = window.analyticsState || {
     start: null, end: null, venue: "All", section: "All",
     charts: { categoryLine: null },
+    timingOutlierMode: 'all',
     // COGS-only filters:
     allCategories: new Set(),
     allItems: new Set(),
@@ -9236,6 +9237,22 @@ window.sendAllMainLunch = async function () {
     await ensureSectionsPopulated();
 
     // filters area (checkbox handlers)
+    // Timing outlier controls
+    const timingControls = document.getElementById("timingOutlierControls");
+    if (timingControls && !timingControls.dataset.ready){
+      timingControls.dataset.ready = '1';
+      timingControls.querySelectorAll('button[data-mode]').forEach(btn => {
+        btn.addEventListener('click', () => setTimingOutlierMode(btn.dataset.mode));
+      });
+    }
+    updateTimingOutlierButtons();
+
+    const copyTimingBtn = document.getElementById("copyTimingTableBtn");
+    if (copyTimingBtn && !copyTimingBtn.dataset.ready){
+      copyTimingBtn.dataset.ready = '1';
+      copyTimingBtn.addEventListener('click', () => copyFoodTimingTable());
+    }
+
     hydrateFilterUI();
 
     // Apply button: run active tab
@@ -9414,6 +9431,146 @@ window.sendAllMainLunch = async function () {
       loading && (loading.style.display="none");
     }
   }
+
+  window.refreshAnalyticsTab = function refreshAnalyticsTab(){
+    return runActiveTab();
+  };
+
+  function updateTimingOutlierButtons(){
+    const wrap = document.getElementById("timingOutlierControls");
+    if (!wrap) return;
+    const mode = S.timingOutlierMode || 'all';
+    wrap.querySelectorAll('button[data-mode]').forEach(btn => {
+      const isActive = (btn.dataset.mode === mode);
+      btn.classList.toggle('active', isActive);
+      if (isActive){
+        btn.style.backgroundColor = '#3a3d4a';
+        btn.style.color = '#fff';
+      } else {
+        btn.style.backgroundColor = '';
+        btn.style.color = '';
+      }
+    });
+  }
+
+  function setTimingOutlierMode(mode){
+    const valid = new Set(['all','std1','std2']);
+    const desired = valid.has(mode) ? mode : 'all';
+    if (S.timingOutlierMode === desired){
+      updateTimingOutlierButtons();
+      return;
+    }
+    S.timingOutlierMode = desired;
+    updateTimingOutlierButtons();
+    if (getActiveTab() === 'timing'){
+      runActiveTab();
+    }
+  }
+
+  window.copyFoodTimingTable = copyFoodTimingTable;
+
+  async function copyFoodTimingTable(){
+    const btn = document.getElementById("copyTimingTableBtn");
+    const ok = await copyTableToClipboard('foodTimingTable');
+    if (btn){
+      const original = btn.textContent;
+      if (ok){
+        btn.textContent = 'Copied!';
+        btn.disabled = true;
+        setTimeout(() => { btn.textContent = original; btn.disabled = false; }, 1500);
+      } else {
+        btn.textContent = original;
+      }
+    }
+  }
+
+  async function copyTableToClipboard(tableId){
+    const table = document.getElementById(tableId);
+    if (!table) { alert('Table not found.'); return false; }
+    const rows = Array.from(table.querySelectorAll('tr'));
+    if (!rows.length) { alert('No rows to copy.'); return false; }
+    const lines = rows.map(row => Array.from(row.querySelectorAll('th,td')).map(cell => (cell.innerText || cell.textContent || '').replace(/\s+/g,' ').trim()).join('	'));
+    const text = lines.join('\n');
+    try {
+      if (navigator.clipboard?.writeText){
+        await navigator.clipboard.writeText(text);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+      return true;
+    } catch (err){
+      console.error('copy failed', err);
+      alert('Copy failed. Try manually selecting the table.');
+      return false;
+    }
+  }
+
+  window.setTimingOutlierMode = setTimingOutlierMode;
+
+  function resolveAnalyticsRange(startStr, endStr, startTs, endTs){
+    if (startTs && endTs && startStr && endStr){
+      return { startStr, endStr, startTs, endTs };
+    }
+    const fallback = getHawaiiRangeFromInputs("fStart","fEnd") || {};
+    if (!fallback.startTs || !fallback.endTs){
+      return null;
+    }
+    return fallback;
+  }
+
+  function coalesceAnalyticsValue(primary, fallback, defaultValue){
+    const first = primary ?? fallback;
+    if (first === undefined || first === null || first === "") return defaultValue;
+    return first;
+  }
+
+  function resolveAnalyticsFilters(venue, section){
+    const domVenue = document.getElementById("fVenue")?.value;
+    const domSection = document.getElementById("fSection")?.value;
+    return {
+      venue: coalesceAnalyticsValue(venue, domVenue, "All"),
+      section: coalesceAnalyticsValue(section, domSection, "All"),
+    };
+  }
+
+  async function runLoaderWithState(loader, range, filters){
+    if (!range?.startTs || !range?.endTs){
+      console.warn("Analytics loader skipped: missing date range");
+      return;
+    }
+    const { startStr, endStr, startTs, endTs } = range;
+    const { venue, section } = filters;
+    Object.assign(S, { start: startStr, end: endStr, venue, section });
+    await loader(startStr, endStr, startTs, endTs, venue, section);
+  }
+
+  window.loadFoodItemCOGS = async function loadFoodItemCOGS(startStr, endStr, startTs, endTs, venue, section){
+    const range = resolveAnalyticsRange(startStr, endStr, startTs, endTs);
+    if (!range) return;
+    const filters = resolveAnalyticsFilters(venue, section);
+    return runLoaderWithState(runCOGS, range, filters);
+  };
+
+  window.loadFoodTiming = async function loadFoodTiming(startStr, endStr, startTs, endTs, venue, section){
+    const range = resolveAnalyticsRange(startStr, endStr, startTs, endTs);
+    if (!range) return;
+    const filters = resolveAnalyticsFilters(venue, section);
+    return runLoaderWithState(runTiming, range, filters);
+  };
+
+  window.loadQtyPerGuest = async function loadQtyPerGuest(startStr, endStr, startTs, endTs, venue, section){
+    const range = resolveAnalyticsRange(startStr, endStr, startTs, endTs);
+    if (!range) return;
+    const filters = resolveAnalyticsFilters(venue, section);
+    return runLoaderWithState(runQtyPerGuest, range, filters);
+  };
 
 function itemKeyFrom(recipeNo, description){
   return `${(recipeNo || "").toUpperCase()}__${(description || "").trim()}`;
@@ -9615,7 +9772,33 @@ if (tEl) tEl.textContent = `$${total.toFixed(2)}`;
     });
   }
 
-  // -------------------- Tab 2: Food Timing (Add-ons) --------------------
+  function filterDurationsByStd(values, mode){
+    if (!Array.isArray(values) || values.length === 0) return [];
+    if (mode === 'std1' || mode === 'std2'){
+      const multiplier = mode === 'std1' ? 1 : 2;
+      const mean = values.reduce((sum, v) => sum + v, 0) / values.length;
+      const variance = values.reduce((sum, v) => sum + Math.pow(v - mean, 2), 0) / values.length;
+      const std = Math.sqrt(variance);
+      if (!Number.isFinite(std) || std === 0) return values.slice();
+      const limit = multiplier * std;
+      return values.filter(v => Math.abs(v - mean) <= limit);
+    }
+    return values.slice();
+  }
+
+  function computeSegmentStats(values, mode){
+    if (!Array.isArray(values) || values.length === 0){
+      return { average: 0, count: 0, originalCount: 0 };
+    }
+    const filtered = filterDurationsByStd(values, mode);
+    if (!filtered.length){
+      return { average: NaN, count: 0, originalCount: values.length };
+    }
+    const avg = filtered.reduce((sum, v) => sum + v, 0) / filtered.length;
+    return { average: avg, count: filtered.length, originalCount: values.length };
+  }
+
+// -------------------- Tab 2: Food Timing (Add-ons) --------------------
 async function runTiming(startStr, endStr, startTs, endTs, venue, section){
   // Pull add-ons in time window
   const q = query(
@@ -9687,13 +9870,17 @@ async function runTiming(startStr, endStr, startTs, endTs, venue, section){
   // Bucket timing segments
   const buckets = new Map();
   const mins = (a,b)=> (a && b) ? (b - a)/60000 : NaN;
-  const addSeg = (obj, seg, v)=>{ if(Number.isFinite(v)&&v>=0){ obj[seg].sum+=v; obj[seg].count++; } };
+  const addSeg = (segments, seg, v)=>{
+    if (Number.isFinite(v) && v >= 0){
+      segments[seg].push(v);
+    }
+  };
 
   enriched.forEach(({item, recipe, venue, raw})=>{
     const key = `${item}||${recipe}||${venue}`;
     if (!buckets.has(key)) buckets.set(key, {
       item, recipe, venue,
-      o2r:{sum:0,count:0}, r2s:{sum:0,count:0}, s2v:{sum:0,count:0}, tot:{sum:0,count:0}
+      segments: { o2r: [], r2s: [], s2v: [], tot: [] }
     });
 
     const tOrder = raw.timestamp?.toDate?.();
@@ -9701,23 +9888,35 @@ async function runTiming(startStr, endStr, startTs, endTs, venue, section){
     const tSent  = raw.sentAt?.toDate?.();
     const tRecv  = raw.receivedAt?.toDate?.();
 
-    const bag = buckets.get(key);
-    if (tOrder && tReady) addSeg(bag,"o2r", mins(tOrder,tReady));
-    if (tReady && tSent)  addSeg(bag,"r2s", mins(tReady,tSent));
-    if (tSent  && tRecv)  addSeg(bag,"s2v", mins(tSent,tRecv));
-    if (tOrder && tRecv)  addSeg(bag,"tot", mins(tOrder,tRecv));
+    const { segments } = buckets.get(key);
+    if (tOrder && tReady) addSeg(segments, "o2r", mins(tOrder,tReady));
+    if (tReady && tSent)  addSeg(segments, "r2s", mins(tReady,tSent));
+    if (tSent  && tRecv)  addSeg(segments, "s2v", mins(tSent,tRecv));
+    if (tOrder && tRecv)  addSeg(segments, "tot", mins(tOrder,tRecv));
   });
 
+  const mode = S.timingOutlierMode || 'all';
   const rows = [];
-  for (const v of buckets.values()){
-    const avg = seg => v[seg].count ? v[seg].sum / v[seg].count : 0;
+  for (const bucket of buckets.values()){
+    const segs = bucket.segments;
+    const statsO2R = computeSegmentStats(segs.o2r, mode);
+    const statsR2S = computeSegmentStats(segs.r2s, mode);
+    const statsS2V = computeSegmentStats(segs.s2v, mode);
+    const statsTot = computeSegmentStats(segs.tot, mode);
+
+    const filteredMax = Math.max(statsO2R.count, statsR2S.count, statsS2V.count, statsTot.count);
+    const originalMax = Math.max(statsO2R.originalCount, statsR2S.originalCount, statsS2V.originalCount, statsTot.originalCount);
+    const samplesLabel = (originalMax > 0 && originalMax !== filteredMax)
+      ? `${filteredMax} / ${originalMax}`
+      : String(filteredMax);
+
     rows.push([
-      v.item, v.recipe, v.venue,
-      toFixedOrEmpty(avg("o2r"),1),
-      toFixedOrEmpty(avg("r2s"),1),
-      toFixedOrEmpty(avg("s2v"),1),
-      toFixedOrEmpty(avg("tot"),1),
-      Math.max(v.o2r.count, v.r2s.count, v.s2v.count, v.tot.count)
+      bucket.item, bucket.recipe, bucket.venue,
+      toFixedOrEmpty(statsO2R.average,1),
+      toFixedOrEmpty(statsR2S.average,1),
+      toFixedOrEmpty(statsS2V.average,1),
+      toFixedOrEmpty(statsTot.average,1),
+      samplesLabel
     ]);
   }
   rows.sort((a,b)=> Number(b[6]) - Number(a[6]));

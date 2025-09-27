@@ -1249,7 +1249,16 @@ Step 3: …"></textarea>
 
         <!-- TIMING TAB -->
         <div class="analytics-section" data-analytics="timing" style="display:none;">
-          <h3 style="margin:0 0 8px;">Food Timing (Add-ons)</h3>
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin:0 0 8px;">
+            <h3 style="margin:0;">Food Timing (Add-ons)</h3>
+            <div id="timingOutlierControls" style="display:flex; gap:6px; align-items:center; font-size:12px;">
+              <span style="opacity:.7;">Outliers</span>
+              <button type="button" class="timing-outlier-btn active" data-mode="all">Keep All</button>
+              <button type="button" class="timing-outlier-btn" data-mode="std1">±1σ</button>
+              <button type="button" class="timing-outlier-btn" data-mode="std2">±2σ</button>
+            </div>
+            <button type="button" id="copyTimingTableBtn" style="font-size:12px; padding:6px 10px; border-radius:8px; border:1px solid #555; background:#2b2d36; color:#f5f5f5;">Copy Table</button>
+          </div>
           <table id="foodTimingTable" style="width:100%; border-collapse:collapse;">
             <thead>
               <tr style="text-align:left; border-bottom:1px solid #444;">
@@ -1361,7 +1370,10 @@ Step 3: …"></textarea>
     cogsOnly.forEach(el => el.style.display = isCogs ? '' : 'none');
   }
 
-  tabs.forEach(b => b.addEventListener('click', () => show(b.dataset.analytics)));
+  tabs.forEach(b => b.addEventListener('click', () => {
+    show(b.dataset.analytics);
+    window.refreshAnalyticsTab?.().catch(err => console.error('Analytics refresh failed', err));
+  }));
 
   // Hook "Apply Filters" to run the correct loader (expects your JS functions to exist)
   document.getElementById('applyAnalyticsFilters')?.addEventListener('click', async () => {
