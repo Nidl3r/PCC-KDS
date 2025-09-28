@@ -8,33 +8,56 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <div class="topbar">
-    <select id="viewSelect">
-      <option value="guest-count">Guest Count</option>
-      <option value="aloha">Aloha</option>
-      <option value="ohana">Ohana</option>
-      <option value="gateway">Gateway</option>
-      <option value="concession">Concession</option>
-      <option value="main-kitchen">Main Kitchen</option>
-      <option value="stations">Stations</option>
-      <option value="accounting">Accounting</option>
-
-
-    </select>
+  <div id="offlineBanner" style="
+    display: none;
+    position: fixed;
+    top: 0;
+    width: 100%;
+    background: #ff9800;
+    color: white;
+    text-align: center;
+    padding: 10px;
+    z-index: 1000;
+    font-weight: bold;">
+    ⚠️ Offline Mode: Some features may not be updated in real-time
   </div>
-<div id="offlineBanner" style="
-  display: none;
-  position: fixed;
-  top: 0;
-  width: 100%;
-  background: #ff9800;
-  color: white;
-  text-align: center;
-  padding: 10px;
-  z-index: 1000;
-  font-weight: bold;">
-  ⚠️ Offline Mode: Some features may not be updated in real-time
-</div>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar" aria-label="Screen selection">
+      <div class="sidebar-header">
+        <span class="sidebar-title">Screens</span>
+        <button type="button" class="sidebar-toggle" id="sidebarToggle" aria-label="Collapse sidebar">
+          <span class="sidebar-toggle-icon" aria-hidden="true"></span>
+          <span class="sidebar-toggle-text">Hide</span>
+        </button>
+      </div>
+      <nav class="sidebar-nav" id="sidebarNav">
+        <button type="button" class="sidebar-item" data-target="guest-count">Guest Count</button>
+        <button type="button" class="sidebar-item" data-target="aloha">Aloha</button>
+        <button type="button" class="sidebar-item" data-target="ohana">Ohana</button>
+        <button type="button" class="sidebar-item" data-target="gateway">Gateway</button>
+        <button type="button" class="sidebar-item" data-target="concession">Concession</button>
+        <button type="button" class="sidebar-item" data-target="main-kitchen">Main Kitchen</button>
+        <button type="button" class="sidebar-item" data-target="stations">Stations</button>
+        <button type="button" class="sidebar-item" data-target="accounting">Accounting</button>
+      </nav>
+    </aside>
+    <div class="sidebar-backdrop" id="sidebarBackdrop" hidden></div>
+    <button type="button" class="sidebar-trigger" id="sidebarTrigger" aria-label="Open navigation">
+      <span class="sidebar-toggle-icon" aria-hidden="true"></span>
+    </button>
+    <main class="main-content" id="mainContent">
+      <div class="topbar topbar--legacy" aria-hidden="true">
+        <select id="viewSelect">
+          <option value="guest-count">Guest Count</option>
+          <option value="aloha">Aloha</option>
+          <option value="ohana">Ohana</option>
+          <option value="gateway">Gateway</option>
+          <option value="concession">Concession</option>
+          <option value="main-kitchen">Main Kitchen</option>
+          <option value="stations">Stations</option>
+          <option value="accounting">Accounting</option>
+        </select>
+      </div>
 
 <div class="screen" id="guest-count">
   <h2>Guest Count</h2>
@@ -100,7 +123,6 @@
 
 
 
-  </div>
 <!-- ✅ Aloha Screen (fixed) -->
 <div class="screen" id="aloha">
   <div class="header-container">
@@ -111,8 +133,10 @@
       <!--<button class="area-tab" data-area="aloha" data-sec="waste" onclick="showAreaSection('aloha','waste')">Waste</button> -->
       <button class="area-tab" data-area="aloha" data-sec="returns" onclick="showAreaSection('aloha','returns')">Returns</button>
     </div>
+    <button type="button" class="collapse-toggle" data-target="aloha" aria-expanded="true">Hide</button>
   </div>
 
+<div class="collapsible-content" data-screen="aloha">
 <!-- ➊ Add-Ons -->
 <div class="aloha-section" data-sec="order">
   <div class="order-controls">
@@ -209,7 +233,7 @@
   </div>
 
   <!-- ➌ Waste -->
-<div class="aloha-section" data-sec="waste" style="display:none">
+  <div class="aloha-section" data-sec="waste" style="display:none">
   <h3>Aloha Waste</h3>
 
   <!-- Category + Search Filters + Send All -->
@@ -268,6 +292,7 @@
     </table>
   </div>
 </div>
+</div>
 
 
 
@@ -280,8 +305,10 @@
       <!--<button class="area-tab" data-area="ohana" data-sec="waste" onclick="showAreaSection('ohana','waste')">Waste</button> -->
       <button class="area-tab" data-area="ohana" data-sec="returns" onclick="showAreaSection('ohana','returns')">Returns</button>
     </div>
+    <button type="button" class="collapse-toggle" data-target="ohana" aria-expanded="true">Hide</button>
   </div>
 
+<div class="collapsible-content" data-screen="ohana">
 <!-- ➊ Add-Ons -->
 <div class="ohana-section" data-sec="order">
   <div class="order-controls">
@@ -377,7 +404,7 @@
   </div>
 
   <!-- ➌ Waste -->
-<div class="ohana-section" data-sec="waste" style="display:none">
+  <div class="ohana-section" data-sec="waste" style="display:none">
   <h3>Ohana Waste</h3>
 
   <div class="order-controls">
@@ -429,6 +456,7 @@
     </table>
   </div>
 </div>
+</div>
 
 
   <div class="screen" id="gateway">
@@ -440,8 +468,10 @@
      <!-- <button class="area-tab" data-area="gateway" data-sec="waste" onclick="showAreaSection('gateway','waste')">Waste</button> -->
       <button class="area-tab" data-area="gateway" data-sec="returns" onclick="showAreaSection('gateway','returns')">Returns</button>
     </div>
+    <button type="button" class="collapse-toggle" data-target="gateway" aria-expanded="true">Hide</button>
   </div>
 
+<div class="collapsible-content" data-screen="gateway">
 <!-- ➊ Add-Ons -->
 <div class="gateway-section" data-sec="order">
   <div class="order-controls">
@@ -590,6 +620,7 @@
     </table>
   </div>
 </div>
+</div>
 
 
  <div class="screen" id="concession">
@@ -599,8 +630,10 @@
       <button class="area-tab" data-area="concession" data-sec="order" onclick="showAreaSection('concession','order')">Add-ons</button>
       <button class="area-tab" data-area="concession" data-sec="starting" onclick="showAreaSection('concession','starting')">Starting Par</button>
     </div>
+    <button type="button" class="collapse-toggle" data-target="concession" aria-expanded="true">Hide</button>
   </div>
 
+  <div class="collapsible-content" data-screen="concession">
   <!-- Add-Ons Section -->
   <div class="concession-section" data-sec="order">
     <div class="order-controls">
@@ -661,6 +694,7 @@
     </table>
   </div>
 </div>
+</div>
 
 <div id="main-kitchen" class="screen">
   <div class="header-container">
@@ -678,8 +712,10 @@
       <button class="area-tab" data-area="mainkitchen" data-sec="returns" onclick="showKitchenSection('returns')">Returns</button>
       <button class="area-tab" data-area="mainkitchen" data-sec="lunch" onclick="showKitchenSection('lunch')">Lunch</button>
     </div>
+    <button type="button" class="collapse-toggle" data-target="main-kitchen" aria-expanded="true">Hide</button>
   </div>
 
+  <div class="collapsible-content" data-screen="main-kitchen">
   <!-- 📦 add on -->
   <div class="main-kitchen-section order-section" data-sec="order">
   <h3>Open Orders</h3>
@@ -968,38 +1004,45 @@ Step 3: …"></textarea>
       </select>
       <button onclick="sendAllMainLunch()" style="margin-left: 12px;">Send All Lunch</button>
     </div>
-    <table class="main-lunch-table">
-      <thead>
-        <tr>
-          <th>Item</th>
-          <th>UOM</th>
-          <th>Qty</th>
-          <th>Send</th>
-        </tr>
-      </thead>
-      <tbody></tbody>
-    </table>
+  <table class="main-lunch-table">
+    <thead>
+      <tr>
+        <th>Item</th>
+        <th>UOM</th>
+        <th>Qty</th>
+        <th>Send</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
   </div>
 </div>
 
 
-<div class="screen" id="stations">
-  <h2>Stations</h2>
-
-  <!-- Navigation Tabs -->
-<div class="station-tabs">
-  <button onclick="showStationTab('Wok')">Wok</button>
-  <button onclick="showStationTab('Fryer')">Fryer</button>
-  <button onclick="showStationTab('Grill')">Grill</button>
-  <button onclick="showStationTab('Oven')">Oven</button>
-  <button onclick="showStationTab('Pantry')">Pantry</button>
-  <button onclick="showStationTab('Pastry')">Pastry</button>
 </div>
 
-<!-- Station Tables -->
 
-<!-- Wok Section -->
-<div id="WokSection" class="station-section">
+<div class="screen" id="stations">
+  <div class="header-container header-container--simple">
+    <h2>Stations</h2>
+
+    <!-- Navigation Tabs -->
+    <div class="station-tabs">
+      <button onclick="showStationTab('Wok')">Wok</button>
+      <button onclick="showStationTab('Fryer')">Fryer</button>
+      <button onclick="showStationTab('Grill')">Grill</button>
+      <button onclick="showStationTab('Oven')">Oven</button>
+      <button onclick="showStationTab('Pantry')">Pantry</button>
+      <button onclick="showStationTab('Pastry')">Pastry</button>
+    </div>
+    <button type="button" class="collapse-toggle" data-target="stations" aria-expanded="true">Hide</button>
+  </div>
+
+  <div class="collapsible-content" data-screen="stations">
+  <!-- Station Tables -->
+
+  <!-- Wok Section -->
+  <div id="WokSection" class="station-section">
   <h3>Wok Station</h3>
 
   
@@ -1087,6 +1130,8 @@ Step 3: …"></textarea>
     <tbody></tbody>
   </table>
 </div>
+  </div>
+
 </div>
 
 <!-- 🔐 Accounting screen with passcode protection -->
@@ -1482,6 +1527,8 @@ Step 3: …"></textarea>
 
 
   <!-- ✅ Scripts stay below everything -->
+  </main>
+  </div>
   <script type="module" src="./firebaseConfig.js"></script>
   <script type="module" src="./script.js"></script>
 </body>

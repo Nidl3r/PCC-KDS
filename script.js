@@ -477,16 +477,158 @@ window.normalizeQtyInputValue  = window.normalizeQtyInputValue  || normalizeQtyI
 // Update on change
 viewSelect.addEventListener("change", updateCurrentVenueFromSelect);
 document.addEventListener("DOMContentLoaded", () => {
-  const viewSelect = document.getElementById("viewSelect");
-  const screens    = document.querySelectorAll(".screen");
-  const chatBox    = document.getElementById("chatBox");
+  const viewSelect      = document.getElementById("viewSelect");
+  const screens         = document.querySelectorAll(".screen");
+  const chatBox         = document.getElementById("chatBox");
+  const sidebar           = document.getElementById("sidebar");
+  const sidebarToggle     = document.getElementById("sidebarToggle");
+  const sidebarToggleText = sidebarToggle?.querySelector(".sidebar-toggle-text");
+  const sidebarBackdrop   = document.getElementById("sidebarBackdrop");
+  const sidebarTrigger    = document.getElementById("sidebarTrigger");
+  const sidebarButtons    = Array.from(document.querySelectorAll(".sidebar-item"));
+  const collapseButtons   = Array.from(document.querySelectorAll(".collapse-toggle"));
+  const mobileQuery       = window.matchMedia("(max-width: 900px)");
+
+  let isSidebarCollapsed = sidebar ? sidebar.classList.contains("collapsed") : false;
+
+  function updateSidebarActive(id) {
+    sidebarButtons.forEach(btn => {
+      btn.classList.toggle("active", btn.dataset.target === id);
+    });
+  }
 
   function showScreen(id) {
     screens.forEach(screen => {
       screen.style.display = (screen.id === id) ? "block" : "none";
     });
+    updateSidebarActive(id);
     if (chatBox) chatBox.style.display = "block";
   }
+
+  const syncBackdrop = (show) => {
+    if (!sidebarBackdrop) return;
+    if (show) {
+      sidebarBackdrop.classList.add("visible");
+      sidebarBackdrop.removeAttribute("hidden");
+    } else {
+      sidebarBackdrop.classList.remove("visible");
+      sidebarBackdrop.setAttribute("hidden", "");
+    }
+  };
+
+  const setSidebarCollapsed = (collapsed) => {
+    if (!sidebar) return;
+    const isMobile = mobileQuery.matches;
+    isSidebarCollapsed = Boolean(collapsed);
+
+    if (isMobile) {
+      if (isSidebarCollapsed) {
+        sidebar.classList.add("collapsed");
+        sidebar.classList.remove("is-open");
+        syncBackdrop(false);
+        sidebarTrigger?.classList.add("visible");
+      } else {
+        sidebar.classList.remove("collapsed");
+        sidebar.classList.add("is-open");
+        syncBackdrop(true);
+        sidebarTrigger?.classList.remove("visible");
+      }
+    } else {
+      sidebar.classList.toggle("collapsed", isSidebarCollapsed);
+      sidebar.classList.remove("is-open");
+      syncBackdrop(false);
+      sidebarTrigger?.classList.remove("visible");
+    }
+
+    if (sidebarToggle) {
+      sidebarToggle.setAttribute("aria-label", isSidebarCollapsed ? "Expand sidebar" : "Collapse sidebar");
+    }
+    if (sidebarToggleText) {
+      sidebarToggleText.textContent = isSidebarCollapsed ? "Show" : "Hide";
+    }
+  };
+
+  if (mobileQuery.matches) {
+    isSidebarCollapsed = true;
+  }
+  setSidebarCollapsed(isSidebarCollapsed);
+
+  const onViewportChange = () => {
+    isSidebarCollapsed = mobileQuery.matches ? true : false;
+    setSidebarCollapsed(isSidebarCollapsed);
+  };
+
+  if (typeof mobileQuery.addEventListener === "function") {
+    mobileQuery.addEventListener("change", onViewportChange);
+  } else if (typeof mobileQuery.addListener === "function") {
+    mobileQuery.addListener(onViewportChange);
+  }
+
+  sidebarTrigger?.addEventListener("click", () => {
+    setSidebarCollapsed(false);
+  });
+
+  sidebarBackdrop?.addEventListener("click", () => {
+    setSidebarCollapsed(true);
+  });
+
+  document.addEventListener("keydown", (evt) => {
+    if (evt.key === "Escape" && mobileQuery.matches && !isSidebarCollapsed) {
+      setSidebarCollapsed(true);
+    }
+  });
+
+  sidebarToggle?.addEventListener("click", () => {
+    const next = !isSidebarCollapsed;
+    setSidebarCollapsed(next);
+  });
+
+  if (sidebarToggle) {
+    sidebarToggle.addEventListener("keydown", (evt) => {
+      if (evt.key === "Enter" || evt.key === " ") {
+        evt.preventDefault();
+        const next = !isSidebarCollapsed;
+        setSidebarCollapsed(next);
+      }
+    });
+  }
+
+  sidebarButtons.forEach(btn => {
+    btn.addEventListener("click", () => {
+      const target = btn.dataset.target;
+      if (!target) return;
+      if (viewSelect && viewSelect.value !== target) {
+        viewSelect.value = target;
+        const evt = new Event("change", { bubbles: true });
+        viewSelect.dispatchEvent(evt);
+      } else {
+        showScreen(target);
+        updateCurrentVenueFromSelect?.();
+      }
+      if (mobileQuery.matches) {
+        setSidebarCollapsed(true);
+      }
+    }, { passive: true });
+  });
+
+  collapseButtons.forEach(btn => {
+    const target = btn.dataset.target;
+    if (!target) return;
+    const screen = document.getElementById(target);
+    if (!screen) return;
+
+    const setState = (collapsed) => {
+      btn.setAttribute("aria-expanded", String(!collapsed));
+      btn.textContent = collapsed ? "Show" : "Hide";
+    };
+
+    setState(screen.classList.contains("collapsed"));
+
+    btn.addEventListener("click", () => {
+      const collapsed = screen.classList.toggle("collapsed");
+      setState(collapsed);
+    }, { passive: true });
+  });
 
   // --- tiny local helpers for notes (safe if your global versions exist too)
   function setGuestNotes(name, val) {
@@ -535,7 +677,17 @@ function paintGuestCountsScreenFromCache() {
 }
 
   // ---- Initial screen (guarded)
-  if (viewSelect && viewSelect.value) showScreen(viewSelect.value);
+  const initialId = (viewSelect && viewSelect.value)
+    ? viewSelect.value
+    : sidebarButtons[0]?.dataset.target;
+
+  if (initialId) {
+    if (viewSelect && viewSelect.value !== initialId) {
+      viewSelect.value = initialId;
+    }
+    showScreen(initialId);
+    updateCurrentVenueFromSelect?.();
+  }
 
   // ---- On view change: swap screens, update venue, repaint counts from cache
   viewSelect?.addEventListener("change", () => {
