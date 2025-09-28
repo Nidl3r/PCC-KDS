@@ -10257,7 +10257,39 @@ async function runTiming(startStr, endStr, startTs, endTs, venue, section){
 // Global caches
 window._recipesCache = [];
 window._ingredientsCache = [];
+window._legacyRecipesCache = [];
 window._recipesUnsub = null;
+
+let _recipesPrimePromise = null;
+let _legacyRecipesPrimed = false;
+
+function _normalizeRecipeRecord(id, data = {}) {
+  if (!id) return null;
+  const v = data || {};
+  return {
+    id,
+    recipeNo: v.recipeNo || "",
+    description: v.description ?? v.name ?? v.recipeName ?? "(no name)",
+    portions: v.portions || 0,
+    methodology: v.methodology || "",
+    ingredients: Array.isArray(v.ingredients) ? v.ingredients : [],
+    category: (v.category || v.Category || "UNCATEGORIZED"),
+  };
+}
+
+function _mergeRecipeLists(primary = [], secondary = []) {
+  const merged = [];
+  const seen = new Set();
+  const push = (row) => {
+    if (!row || !row.id) return;
+    if (seen.has(row.id)) return;
+    merged.push(row);
+    seen.add(row.id);
+  };
+  primary.forEach(push);
+  secondary.forEach(push);
+  return merged;
+}
 
 // Public entries so HTML can call these
 window.openAddRecipeDialog = openAddRecipeDialog;
@@ -10286,23 +10318,68 @@ function startRecipesListener() {
   const q = query(recipesCollection(), orderBy("description"));
   window._recipesUnsub = onSnapshot(q, (snap) => {
     const rows = [];
-    snap.forEach(d => {
-      const v = d.data() || {};
-      rows.push({
-        id: d.id,
-        recipeNo: v.recipeNo,
-        description: v.description ?? v.name ?? "(no name)",
-        portions: v.portions || 0,
-        methodology: v.methodology || "",
-        ingredients: Array.isArray(v.ingredients) ? v.ingredients : [],
-        category: (v.category || v.Category || "UNCATEGORIZED"),
-      });
+    snap.forEach((d) => {
+      const normalized = _normalizeRecipeRecord(d.id, d.data());
+      if (normalized) rows.push(normalized);
     });
-    window._recipesCache = rows;
+    window._recipesCache = _mergeRecipeLists(rows, window._legacyRecipesCache);
     renderRecipesList();
     _paintRecipeSelect();
   });
 }
+
+
+async function _ensureRecipesPrimed() {
+  if (_recipesPrimePromise) return _recipesPrimePromise;
+
+  const hasRecipes = Array.isArray(window._recipesCache) && window._recipesCache.length > 0;
+  if (hasRecipes && _legacyRecipesPrimed) return;
+
+  _recipesPrimePromise = (async () => {
+    let newRows = [];
+    if (!hasRecipes) {
+      try {
+        const snap = await getDocs(recipesCollection());
+        snap.forEach((d) => {
+          const row = _normalizeRecipeRecord(d.id, d.data());
+          if (row) newRows.push(row);
+        });
+      } catch (e) {
+        console.debug("Prime fetch failed for cookingrecipes:", e);
+      }
+    }
+
+    if (!_legacyRecipesPrimed) {
+      try {
+        const legacySnap = await getDocs(legacyRecipesCollection());
+        const legacyRows = [];
+        legacySnap.forEach((d) => {
+          const row = _normalizeRecipeRecord(d.id, d.data());
+          if (row) legacyRows.push(row);
+        });
+        window._legacyRecipesCache = legacyRows;
+        _legacyRecipesPrimed = true;
+      } catch (e) {
+        console.debug("Prime fetch failed for legacy recipes:", e);
+      }
+    }
+
+    const baseline = newRows.length ? newRows : (Array.isArray(window._recipesCache) ? window._recipesCache : []);
+    const merged = _mergeRecipeLists(baseline, window._legacyRecipesCache);
+    if (merged.length) {
+      window._recipesCache = merged;
+    }
+
+    window._paintRecipeSelect?.();
+  })();
+
+  try {
+    await _recipesPrimePromise;
+  } finally {
+    _recipesPrimePromise = null;
+  }
+}
+window._ensureRecipesPrimed = _ensureRecipesPrimed;
 
 
 
@@ -10314,32 +10391,8 @@ async function renderRecipesList() {
 
   try { window.startRecipesListener?.(); } catch {}
 
-  if (!Array.isArray(window._recipesCache) || window._recipesCache.length === 0) {
-    const tryNames = [RECIPES_COLL, LEGACY_RECIPES_COLL]; // new first, then legacy
-    for (const collName of tryNames) {
-      try {
-        const snap = await getDocs(collection(db, collName));
-        if (!snap.empty) {
-          const rows = [];
-          snap.forEach((d) => {
-            const v = d.data() || {};
-            rows.push({
-              id: d.id,
-              recipeNo: v.recipeNo,
-              description: v.description ?? v.name ?? v.recipeName ?? "(no name)",
-              portions: v.portions || 0,
-              methodology: v.methodology || "",
-              ingredients: Array.isArray(v.ingredients) ? v.ingredients : [],
-              category: (v.category || v.Category || "UNCATEGORIZED"),
-            });
-          });
-          window._recipesCache = rows;
-          break;
-        }
-      } catch (e) {
-        console.debug(`prime fetch failed for ${collName}:`, e);
-      }
-    }
+  if (!Array.isArray(window._recipesCache) || window._recipesCache.length === 0 || !_legacyRecipesPrimed) {
+    await _ensureRecipesPrimed();
   }
 
   // Normalize category even if listener didn't include it yet
