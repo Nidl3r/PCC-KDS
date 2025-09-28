@@ -80,11 +80,85 @@ const viewSelect = document.getElementById("viewSelect");
 const RECIPES_COLL = "cookingrecipes";   // new home
 const LEGACY_RECIPES_COLL = "recipes";   // old (read-only fallback)
 
+// Live version control (auto-refresh)
+const APP_VERSION_COLLECTION = "appMeta";
+const APP_VERSION_DOC_ID = "version";
+
+const CURRENT_BUILD_ID = (() => {
+  const globalHint = typeof window !== "undefined" ? (window.__APP_BUILD_ID || window.APP_BUILD_ID) : "";
+  if (globalHint && typeof globalHint === "string") return globalHint;
+  const meta = typeof document !== "undefined"
+    ? document.querySelector('meta[name="app-build-id"], meta[name="build-id"]')
+    : null;
+  if (meta?.content) return meta.content;
+  return "dev-local"; // fallback when running locally with no build marker
+})();
+window.APP_CURRENT_BUILD = CURRENT_BUILD_ID;
+
 // Small helpers so we don't sprinkle string literals everywhere
 const recipesCollection = () => collection(db, RECIPES_COLL);
 const legacyRecipesCollection = () => collection(db, LEGACY_RECIPES_COLL);
 const recipeDoc = (id) => doc(db, RECIPES_COLL, id);
 const legacyRecipeDoc = (id) => doc(db, LEGACY_RECIPES_COLL, id);
+const appVersionDoc = () => doc(db, APP_VERSION_COLLECTION, APP_VERSION_DOC_ID);
+
+window._appVersionUnsub = null;
+
+function startAppVersionWatcher() {
+  if (typeof onSnapshot !== "function") return;
+  if (startAppVersionWatcher._started) return;
+  startAppVersionWatcher._started = true;
+
+  try { window._appVersionUnsub?.(); } catch {}
+
+  const ref = appVersionDoc();
+  let current = window.APP_CURRENT_BUILD || CURRENT_BUILD_ID;
+  let hasRealBuild = current && current !== "dev-local";
+
+  window._appVersionUnsub = onSnapshot(ref, (snap) => {
+    if (!snap?.exists?.()) return;
+    const data = snap.data() || {};
+    const remote = [data.buildId, data.version, data.tag, data.commit, data.hash]
+      .find((val) => typeof val === "string" && val.trim().length > 0) || "";
+    if (!remote) return;
+
+    if (!hasRealBuild && (!current || current === "dev-local")) {
+      current = remote; // adopt first value during local dev so we don't thrash reloads
+      window.APP_CURRENT_BUILD = current;
+      hasRealBuild = true;
+      return;
+    }
+
+    if (remote === current) return;
+    if (window.__APP_VERSION_RELOAD_PENDING) return;
+
+    window.__APP_VERSION_RELOAD_PENDING = true;
+    const previous = current;
+    window.APP_NEXT_BUILD = remote;
+    window.APP_CURRENT_BUILD = remote;
+    current = remote;
+
+    const delayValue = Number(data.autoReloadDelayMs);
+    const delay = Number.isFinite(delayValue) ? delayValue : 2000;
+    console.info(`New app build detected (${remote} ← ${previous}). Reloading…`);
+    setTimeout(() => {
+      try {
+        window.location.reload(true);
+      } catch (err) {
+        console.debug("Hard reload failed, falling back to soft reload", err);
+        window.location.reload();
+      }
+    }, Math.max(0, delay));
+  }, (err) => {
+    console.warn("App version watcher error", err);
+  });
+}
+window.startAppVersionWatcher = startAppVersionWatcher;
+try {
+  startAppVersionWatcher();
+} catch (err) {
+  console.debug("App version watcher init skipped", err);
+}
 
 
 function updateCurrentVenueFromSelect() {
