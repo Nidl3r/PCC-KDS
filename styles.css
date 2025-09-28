@@ -905,6 +905,29 @@ body { padding-bottom: max(160px, calc(140px + env(safe-area-inset-bottom))); }
 }
 .ready-btn:hover { background: #5a5a6a; }
 
+.fire-btn {
+  padding: 8px 12px;
+  font-size: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #f97316;
+  color: #fff;
+  transition: background 0.2s ease;
+  box-shadow: var(--shadow-sm);
+}
+.fire-btn:hover { background: #ea580c; }
+.station-actions {
+  display: flex;
+  gap: 8px;
+}
+.station-actions button {
+  flex: 1 1 auto;
+}
+.station-actions button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
 /* Utilities */
 .chip {
   display: inline-flex; align-items: center; gap: 6px;

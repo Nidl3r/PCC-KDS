@@ -2035,7 +2035,7 @@ function listenToAddonOrders() {
   const addonQuery = query(
     ordersRef,
     where("type", "==", "addon"),
-    where("status", "in", ["open", "Ready to Send"])
+    where("status", "in", ["open", "fired", "Ready to Send"])
   );
 
   onSnapshot(addonQuery, (snapshot) => {
@@ -2464,7 +2464,7 @@ function listenToAlohaOrders() {
 const alohaQuery = query(
   ordersRef,
   where("venue", "==", "Aloha"),
-  where("status", "in", ["open", "Ready to Send", "sent", "received"]),
+  where("status", "in", ["open", "fired", "Ready to Send", "sent", "received"]),
   where("date", "==", getTodayDate())
 );
 
@@ -2588,7 +2588,8 @@ function renderAlohaTable(orders) {
     const statusOrder = {
       sent: 0,
       "Ready to Send": 1,
-      open: 2
+      fired: 2,
+      open: 3,
     };
 
     const aPriority = statusOrder[a.status] ?? 3;
@@ -2656,15 +2657,27 @@ window.editAddonOrder = async function(order) {
 
   try {
     const orderRef = doc(db, "orders", order.id);
-    await updateDoc(orderRef, {
-      qty: parseFloat(newQty),
-      notes: newNotes.trim(),
-      updatedAt: serverTimestamp()
+    await runTransaction(db, async (transaction) => {
+      const snap = await transaction.get(orderRef);
+      if (!snap.exists()) {
+        throw new Error("Order no longer exists.");
+      }
+      const status = snap.data().status;
+      if (status && status !== "open") {
+        throw new Error("Order can no longer be edited.");
+      }
+
+      transaction.update(orderRef, {
+        qty: parseFloat(newQty),
+        notes: newNotes.trim(),
+        updatedAt: serverTimestamp()
+      });
     });
+
     alert("✅ Order updated.");
   } catch (err) {
     console.error("❌ Failed to update order:", err);
-    alert("❌ Failed to update order.");
+    alert(err?.message === "Order can no longer be edited." ? "⚠️ Order has already been fired and cannot be edited." : "❌ Failed to update order.");
   }
 };
 
@@ -2694,20 +2707,37 @@ document.getElementById("confirmEditBtn").addEventListener("click", async () => 
 
   try {
     const orderRef = doc(db, "orders", orderToEdit.id);
-    await updateDoc(orderRef, {
-      qty: newQty,
-      notes: newNotes,
-      updatedAt: serverTimestamp()
+    await runTransaction(db, async (transaction) => {
+      const snap = await transaction.get(orderRef);
+      if (!snap.exists()) {
+        throw new Error("Order no longer exists.");
+      }
+      const status = snap.data().status;
+      if (status && status !== "open") {
+        throw new Error("Order can no longer be edited.");
+      }
+
+      transaction.update(orderRef, {
+        qty: newQty,
+        notes: newNotes,
+        updatedAt: serverTimestamp()
+      });
     });
 
-    // ✅ Only notify Main Kitchen screen to avoid errors
     if (orderToEdit.venue === "Main Kitchen") {
       showMainKitchenNotif("✅ Order updated.", 3000, "success");
     }
   } catch (err) {
     console.error("❌ Failed to update order:", err);
+    const locked = err?.message === "Order can no longer be edited.";
+    const message = locked
+      ? "⚠️ Order has already been fired and cannot be edited."
+      : "❌ Failed to update order.";
+
     if (orderToEdit.venue === "Main Kitchen") {
-      showMainKitchenNotif("❌ Failed to update order.", 3000, "error");
+      showMainKitchenNotif(message, 3000, locked ? "info" : "error");
+    } else {
+      alert(message);
     }
   }
 
@@ -2736,7 +2766,20 @@ document.getElementById("confirmDeleteBtn").addEventListener("click", async () =
     const orderSnap = await getDoc(orderRef);
 
     if (orderSnap.exists()) {
-      deletedOrderData = orderSnap.data();
+      const data = orderSnap.data();
+      const status = data?.status;
+      if (status && status !== "open") {
+        const message = "⚠️ Order has already been fired and cannot be deleted.";
+        if (data?.venue === "Main Kitchen") {
+          showMainKitchenNotif(message, 3000, "info");
+        } else {
+          alert(message);
+        }
+        closeDeleteModal();
+        return;
+      }
+
+      deletedOrderData = data;
     }
 
     await deleteDoc(orderRef);
@@ -3072,7 +3115,7 @@ function listenToStationOrders(stationName) {
   const stationQuery = query(
     stationRef,
     where("station", "==", stationName),
-    where("status", "==", "open"),
+    where("status", "in", ["open", "fired"]),
     where("date", "==", today)   // ✅ only today’s orders
   );
 
@@ -3165,27 +3208,84 @@ function renderStationTable(stationName, orders) {
       );
     }
 
-    // Other stations: Ready button only
+    // Other stations: Fired → Ready workflow
     else {
-      const readyCell = document.createElement("td");
-    const readyButton = document.createElement("button");
-readyButton.textContent = "✅ Ready";
-readyButton.classList.add("ready-btn");
+      const actionCell = document.createElement("td");
+      actionCell.classList.add("station-actions");
 
+      const readyButton = document.createElement("button");
+      readyButton.textContent = "✅ Ready";
+      readyButton.classList.add("ready-btn");
 
       readyButton.onclick = async () => {
+        if (readyButton.disabled) return;
+        readyButton.disabled = true;
         try {
-          await updateDoc(doc(db, "orders", order.id), {
-            status: "Ready to Send",
-            readyAt: serverTimestamp()
+          await runTransaction(db, async (transaction) => {
+            const orderRef = doc(db, "orders", order.id);
+            const snap = await transaction.get(orderRef);
+            if (!snap.exists()) {
+              throw new Error("Order not found");
+            }
+            const currentStatus = snap.data().status;
+            if (currentStatus !== "fired") {
+              throw new Error("Order must be fired before ready.");
+            }
+            transaction.update(orderRef, {
+              status: "Ready to Send",
+              readyAt: serverTimestamp(),
+            });
           });
         } catch (err) {
           console.error("Error updating order:", err);
           alert("Failed to mark as ready.");
+          readyButton.disabled = false;
         }
       };
 
-      readyCell.appendChild(readyButton);
+      const fireButton = document.createElement("button");
+      fireButton.textContent = "Fired";
+      fireButton.classList.add("fire-btn");
+
+      fireButton.onclick = async () => {
+        if (fireButton.disabled) return;
+        fireButton.disabled = true;
+        try {
+          await runTransaction(db, async (transaction) => {
+            const orderRef = doc(db, "orders", order.id);
+            const snap = await transaction.get(orderRef);
+            if (!snap.exists()) {
+              throw new Error("Order not found");
+            }
+            const currentStatus = snap.data().status;
+            if (currentStatus === "fired") {
+              return;
+            }
+            if (currentStatus !== "open") {
+              throw new Error("Order can no longer be fired.");
+            }
+            transaction.update(orderRef, {
+              status: "fired",
+              firedAt: serverTimestamp(),
+            });
+          });
+
+          actionCell.innerHTML = "";
+          readyButton.disabled = false;
+          actionCell.appendChild(readyButton);
+        } catch (err) {
+          console.error("Error firing order:", err);
+          alert("Failed to mark order as fired.");
+          fireButton.disabled = false;
+        }
+      };
+
+      if (order.status === "fired") {
+        readyButton.disabled = false;
+        actionCell.appendChild(readyButton);
+      } else {
+        actionCell.appendChild(fireButton);
+      }
 
       row.append(
         timeCell,
@@ -3194,7 +3294,7 @@ readyButton.classList.add("ready-btn");
         itemCell,
         qtyCell,
         notesCell,
-        readyCell
+        actionCell
       );
     }
 
@@ -5100,7 +5200,7 @@ function listenToGatewayOrders() {
   const gatewayQuery = query(
   ordersRef,
   where("venue", "==", "Gateway"),
-  where("status", "in", ["open", "Ready to Send", "sent", "received"]),
+  where("status", "in", ["open", "fired", "Ready to Send", "sent", "received"]),
   where("date", "==", getTodayDate())
 );
 
@@ -5291,7 +5391,7 @@ function renderGatewayTable(orders) {
   // Clear and sort
   tbody.innerHTML = "";
   orders.sort((a, b) => {
-    const orderMap = { sent: 0, "Ready to Send": 1, open: 2 };
+    const orderMap = { sent: 0, "Ready to Send": 1, fired: 2, open: 3 };
     const ap = orderMap[a?.status] ?? 3;
     const bp = orderMap[b?.status] ?? 3;
     if (ap !== bp) return ap - bp;
@@ -6111,7 +6211,7 @@ function listenToOhanaOrders() {
  const ohanaQuery = query(
   ordersRef,
   where("venue", "==", "Ohana"),
-  where("status", "in", ["open", "Ready to Send", "sent", "received"]),
+  where("status", "in", ["open", "fired", "Ready to Send", "sent", "received"]),
   where("date", "==", getTodayDate())
 );
 
@@ -6259,7 +6359,7 @@ function renderOhanaTable(orders) {
   tbody.innerHTML = "";
 
   orders.sort((a, b) => {
-    const statusOrder = { sent: 0, "Ready to Send": 1, open: 2 };
+    const statusOrder = { sent: 0, "Ready to Send": 1, fired: 2, open: 3 };
     const aPriority = statusOrder[a.status] ?? 3;
     const bPriority = statusOrder[b.status] ?? 3;
 
@@ -6424,7 +6524,7 @@ function listenToConcessionOrders() {
   const queryRef = query(
     ordersRef,
     where("venue", "==", "Concessions"), // ✅ Matches Firestore
-    where("status", "in", ["open", "Ready to Send", "sent"]),
+    where("status", "in", ["open", "fired", "Ready to Send", "sent"]),
     where("date", "==", getTodayDate()) // ✅ CRITICAL
   );
 
@@ -6447,7 +6547,7 @@ function renderConcessionTable(orders) {
   tbody.innerHTML = "";
 
   orders.sort((a, b) => {
-    const statusOrder = { sent: 0, "Ready to Send": 1, open: 2 };
+    const statusOrder = { sent: 0, "Ready to Send": 1, fired: 2, open: 3 };
     const aPriority = statusOrder[a.status] ?? 3;
     const bPriority = statusOrder[b.status] ?? 3;
     if (aPriority !== bPriority) return aPriority - bPriority;

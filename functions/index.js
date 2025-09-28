@@ -3,7 +3,7 @@ const { onSchedule } = require("firebase-functions/v2/scheduler");
 const { onRequest } = require("firebase-functions/v2/https");
 const { defineSecret } = require("firebase-functions/params");
 const { initializeApp } = require("firebase-admin/app");
-const { getFirestore, Timestamp, FieldValue } = require("firebase-admin/firestore");
+const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 
 // --- Init ---
 initializeApp();
@@ -15,26 +15,35 @@ const SHOWWARE_WEBHOOK_SECRET = defineSecret("SHOWWARE_WEBHOOK_SECRET");
 // ===========================
 // 1) Scheduled cleanup (yours)
 // ===========================
-exports.deleteOldChatMessages = onSchedule("every day 00:00", async (event) => {
-  const now = new Date();
-  const hawaiiNow = new Date(now.getTime() - 10 * 60 * 60 * 1000); // Midnight HST
-  hawaiiNow.setUTCHours(0, 0, 0, 0);
+exports.deleteOldChatMessages = onSchedule(
+  {
+    schedule: "every day 00:00",
+    timeZone: "Pacific/Honolulu",
+  },
+  async () => {
+    const snapshot = await db.collection("chats").get();
 
-  const start = new Date(hawaiiNow);
-  const end = new Date(hawaiiNow);
-  end.setUTCDate(end.getUTCDate() + 1);
+    if (snapshot.empty) {
+      console.log("No chat messages to delete.");
+      return;
+    }
 
-  const snapshot = await db
-    .collection("chats")
-    .where("timestamp", ">=", Timestamp.fromDate(start))
-    .where("timestamp", "<", Timestamp.fromDate(end))
-    .get();
+    const docs = snapshot.docs;
+    const batchSize = 500;
+    let deleted = 0;
 
-  const deletions = snapshot.docs.map((doc) => doc.ref.delete());
-  await Promise.all(deletions);
+    for (let i = 0; i < docs.length; i += batchSize) {
+      const batch = db.batch();
+      const slice = docs.slice(i, i + batchSize);
 
-  console.log(`✅ Deleted ${deletions.length} chat messages.`);
-});
+      slice.forEach((doc) => batch.delete(doc.ref));
+      await batch.commit();
+      deleted += slice.length;
+    }
+
+    console.log(`✅ Deleted ${deleted} chat messages.`);
+  }
+);
 
 // ===================================
 // 2) Showware → Firestore webhook (v2)
