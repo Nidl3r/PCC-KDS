@@ -474,6 +474,14 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   box-sizing: border-box;
 }
 
+@media (max-width: 600px) {
+  .screen {
+    padding-inline: clamp(12px, 6vw, 20px);
+    padding-block: clamp(16px, 6vw, 28px);
+    gap: 16px;
+  }
+}
+
 .screen.collapsed .collapsible-content {
   display: none;
 }
@@ -621,6 +629,57 @@ table {
 }
 @media (max-width: 900px) {
   .table-wrap table { min-width: 660px; }
+}
+
+@media (max-width: 600px) {
+  .table-wrap {
+    overflow-x: visible;
+  }
+  .table-wrap table {
+    min-width: 100%;
+  }
+}
+
+@media (max-width: 600px) {
+  .table-wrap--addons {
+    border: none;
+    background: transparent;
+    box-shadow: none;
+    padding: 0;
+    display: contents;
+  }
+  .table-wrap--addons table {
+    min-width: 0 !important;
+    width: 100% !important;
+  }
+  .table-wrap--addons td {
+    width: 100%;
+  }
+  #kitchenTable th,
+  #kitchenTable td {
+    width: 100% !important;
+    max-width: 100% !important;
+    white-space: normal !important;
+  }
+  .table-wrap--addons td[data-label="Send Qty"] input,
+  .table-wrap--addons .send-qty-input {
+    width: 100%;
+    max-width: none !important;
+  }
+  .table-wrap--addons td[data-label="Send Qty"] {
+    padding-right: 12px;
+  }
+  .table-wrap--addons td[data-label="Send"] {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+    align-items: center;
+    padding-right: 12px;
+  }
+  .table-wrap--addons td[data-label="Send"] button {
+    width: 100%;
+    max-width: none !important;
+  }
 }
 
 #kitchenTable {
@@ -878,25 +937,35 @@ table button {
 
 /* Small screens = card rows */
 @media (max-width: 600px) {
-  table, thead, tbody, th, td, tr { display: block; }
+  table,
+  thead,
+  tbody,
+  th,
+  td,
+  tr {
+    display: block;
+    width: 100%;
+  }
   thead { display: none; }
   tr {
-    margin-bottom: 10px;
-    border-radius: 8px;
+    margin-bottom: 14px;
+    border-radius: 14px;
     box-shadow: var(--shadow-sm);
-    padding: 6px;
-    border-left-width: 4px;
+    padding: 10px 12px;
+    border-left-width: 0;
+    background: var(--surface);
   }
   td {
     border: none;
-    border-bottom: 1px solid rgba(255,255,255,0.06);
-    position: relative;
-    text-align: left;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
     margin: 0;
-    padding-block: 10px;
-    padding-left: 50%;
-    word-break: break-word;
-    overflow-wrap: break-word;
+    padding: 10px 4px 10px 6px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    align-items: flex-start;
+    text-align: left;
+    font-size: 0.95rem;
   }
   .send-qty-input { width: 100%; }
   .starting-actions {
@@ -911,14 +980,46 @@ table button {
   td:last-child { border-bottom: none; }
   td::before {
     content: attr(data-label);
-    position: absolute;
-    left: 8px;
-    width: 45%;
-    white-space: nowrap;
-    font-weight: bold;
-    text-align: left;
-    opacity: .85;
+    display: block;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
     color: var(--muted);
+    opacity: 0.9;
+  }
+}
+
+@media (max-width: 480px) {
+  .order-controls select,
+  .order-controls input,
+  .order-controls button {
+    font-size: 1rem;
+    min-height: 42px;
+  }
+  .order-controls input[type="number"] {
+    max-width: 72px;
+  }
+  .order-controls input[type="text"] {
+    width: 100%;
+  }
+}
+
+@media (max-width: 600px) {
+  h2 {
+    font-size: clamp(1.15rem, 5vw, 1.4rem);
+  }
+  h3 {
+    font-size: clamp(1rem, 4.5vw, 1.2rem);
+  }
+  #alohaCostSummary {
+    flex-wrap: wrap !important;
+    justify-content: flex-start !important;
+    gap: 10px !important;
+    row-gap: 6px !important;
+  }
+  #alohaCostSummary > div {
+    min-width: 140px;
   }
 }
 
