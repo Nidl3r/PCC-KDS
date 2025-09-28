@@ -2155,7 +2155,13 @@ function renderKitchen(orders, { skipCache = false } = {}) {
       </td>
       <td data-label="UOM">${safeUom}</td>
       <td data-label="Send">
-        <button onclick="sendKitchenOrder('${order.id}', this)" disabled>Send</button>
+        <button
+          type="button"
+          class="send-btn"
+          data-send-order-id="${order.id}"
+          onclick="sendKitchenOrder('${order.id}', this)"
+          disabled
+        >Send</button>
       </td>
     `;
 
@@ -2174,7 +2180,7 @@ function renderKitchen(orders, { skipCache = false } = {}) {
 
   // 🔄 Add input listeners to enable/disable send buttons (live as you type)
   container.querySelectorAll(".send-qty-input").forEach(input => {
-    const sendBtn = input.closest("tr")?.querySelector("button");
+    const sendBtn = input.closest("tr")?.querySelector(".send-btn");
     const id = input.getAttribute("data-order-id");
 
     const setEnabledFromValue = () => {
