@@ -1462,23 +1462,30 @@ Step 3: …"></textarea>
 
   <!-- Chat Box -->
 
-<!-- ✅ Place the Chat Box here (outside any .screen or .station-section divs) -->
-<div id="chatBox" class="chat-section open">
-  <div id="chatHeader" class="chat-header">
-    <h3 class="chat-title">
-      <span class="chat-title-label">📢 Kitchen Chat</span>
-      <span class="chat-title-divider">–</span>
-      <span id="currentVenueLabel" class="chat-title-venue">Main Kitchen</span>
-      <span id="chatUnreadBadge" class="chat-unread-badge" aria-live="polite"></span>
-    </h3>
-    <button id="chatToggleBtn" class="chat-toggle-btn">_</button>
-  </div>
+<!-- ✅ Chat floating dock -->
+<div id="chatDock" class="chat-dock chat-dock--bottom-right" aria-live="polite">
+  <button type="button" id="chatLauncher" class="chat-launcher" aria-expanded="false" aria-controls="chatBox" aria-label="Open Kitchen Chat">
+    <span class="chat-launcher-icon" aria-hidden="true">💬</span>
+    <span id="chatLauncherBadge" class="chat-launcher-badge"></span>
+  </button>
 
-  <div id="chatMessages" class="chat-messages"></div>
+  <div id="chatBox" class="chat-panel" role="dialog" aria-labelledby="chatTitle" aria-hidden="true" hidden>
+    <div id="chatHeader" class="chat-header">
+      <h3 id="chatTitle" class="chat-title">
+        <span class="chat-title-label">📢 Kitchen Chat</span>
+        <span class="chat-title-divider">–</span>
+        <span id="currentVenueLabel" class="chat-title-venue">Main Kitchen</span>
+        <span id="chatUnreadBadge" class="chat-unread-badge" aria-live="polite"></span>
+      </h3>
+      <button type="button" id="chatToggleBtn" class="chat-toggle-btn" aria-label="Close chat">×</button>
+    </div>
 
-  <div class="chat-input-row">
-    <input id="chatInput" type="text" placeholder="Type your message..." />
-    <button onclick="sendChatMessage()">Send</button>
+    <div id="chatMessages" class="chat-messages"></div>
+
+    <div class="chat-input-row">
+      <input id="chatInput" type="text" placeholder="Type your message..." />
+      <button type="button" onclick="sendChatMessage()">Send</button>
+    </div>
   </div>
 </div>
 

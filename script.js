@@ -479,7 +479,6 @@ viewSelect.addEventListener("change", updateCurrentVenueFromSelect);
 document.addEventListener("DOMContentLoaded", () => {
   const viewSelect      = document.getElementById("viewSelect");
   const screens         = document.querySelectorAll(".screen");
-  const chatBox         = document.getElementById("chatBox");
   const sidebar           = document.getElementById("sidebar");
   const sidebarToggle     = document.getElementById("sidebarToggle");
   const sidebarToggleText = sidebarToggle?.querySelector(".sidebar-toggle-text");
@@ -502,7 +501,6 @@ document.addEventListener("DOMContentLoaded", () => {
       screen.style.display = (screen.id === id) ? "block" : "none";
     });
     updateSidebarActive(id);
-    if (chatBox) chatBox.style.display = "block";
   }
 
   const syncBackdrop = (show) => {
@@ -7717,14 +7715,31 @@ function getHawaiiTimestampRange() {
   };
 }
 
+const chatDock = document.getElementById("chatDock");
 const chatBox = document.getElementById("chatBox");
 const chatToggleBtn = document.getElementById("chatToggleBtn");
+const chatLauncher = document.getElementById("chatLauncher");
+const chatLauncherBadge = document.getElementById("chatLauncherBadge");
 const chatUnreadBadge = document.getElementById("chatUnreadBadge");
-let isChatMinimized = false;
+const chatLauncherIcon = document.querySelector("#chatLauncher .chat-launcher-icon");
+
+const CHAT_CORNER_STORAGE_KEY = "pccChatCorner";
+const CHAT_DOCK_CLASS_LIST = [
+  "chat-dock--bottom-right",
+  "chat-dock--bottom-left",
+  "chat-dock--top-right",
+  "chat-dock--top-left",
+];
+const VALID_CHAT_CORNERS = new Set(["bottom-right", "bottom-left", "top-right", "top-left"]);
+
+let isChatOpen = chatBox ? !chatBox.hasAttribute("hidden") : false;
 let chatUnsubscribe = null;
 let latestMessageTimestampMs = null;
 let lastReadTimestampMs = null;
 let chatUnreadCount = 0;
+let chatCorner = "bottom-right";
+let suppressLauncherClick = false;
+let chatDragState = null;
 
 const CHAT_VENUE_CLASS_MAP = {
   aloha: "chat-message-aloha",
@@ -7732,6 +7747,10 @@ const CHAT_VENUE_CLASS_MAP = {
   gateway: "chat-message-gateway",
   "main kitchen": "chat-message-main-kitchen",
   "main-kitchen": "chat-message-main-kitchen",
+  accounting: "chat-message-accounting",
+  "guest count": "chat-message-guest-count",
+  "guest-count": "chat-message-guest-count",
+  "guestcount": "chat-message-guest-count",
 };
 
 function getChatClassForSender(sender = "") {
@@ -7769,16 +7788,80 @@ function buildChatMessageElement({ sender, message, timestamp }) {
   return messageEl;
 }
 
-function updateUnreadBadge() {
-  if (!chatUnreadBadge) return;
-  if (chatUnreadCount > 0) {
-    const displayValue = chatUnreadCount > 9 ? "9+" : String(chatUnreadCount);
-    chatUnreadBadge.textContent = displayValue;
-    chatUnreadBadge.style.display = "inline-flex";
-  } else {
-    chatUnreadBadge.textContent = "";
-    chatUnreadBadge.style.display = "none";
+function setChatCorner(nextCorner, persist = true) {
+  if (!chatDock || !VALID_CHAT_CORNERS.has(nextCorner)) return;
+  chatDock.classList.remove(...CHAT_DOCK_CLASS_LIST);
+  chatDock.classList.add(`chat-dock--${nextCorner}`);
+  chatCorner = nextCorner;
+  if (!persist) return;
+  try {
+    localStorage?.setItem(CHAT_CORNER_STORAGE_KEY, nextCorner);
+  } catch (err) {
+    /* ignore persistence errors */
   }
+}
+
+(function applyStoredChatCorner() {
+  if (!chatDock) return;
+  let stored = null;
+  try {
+    stored = localStorage?.getItem(CHAT_CORNER_STORAGE_KEY) || null;
+  } catch (err) {
+    stored = null;
+  }
+  if (stored && VALID_CHAT_CORNERS.has(stored)) {
+    setChatCorner(stored, false);
+    chatCorner = stored;
+  } else {
+    setChatCorner(chatCorner, false);
+  }
+})();
+
+function toggleUnreadStyles(hasUnread) {
+  if (chatBox) {
+    const shouldHighlight = hasUnread && !isChatOpen;
+    chatBox.classList.toggle("highlight", shouldHighlight);
+  }
+  if (chatLauncher) {
+    chatLauncher.classList.toggle("has-unread", hasUnread);
+  }
+}
+
+function syncLauncherState() {
+  if (!chatLauncher) return;
+  chatLauncher.classList.toggle("is-open", isChatOpen);
+  chatLauncher.setAttribute("aria-expanded", isChatOpen ? "true" : "false");
+  chatLauncher.setAttribute("aria-label", isChatOpen ? "Close Kitchen Chat" : "Open Kitchen Chat");
+  if (chatLauncherIcon) {
+    chatLauncherIcon.textContent = isChatOpen ? "×" : "💬";
+  }
+}
+
+function updateUnreadBadge() {
+  const hasUnread = chatUnreadCount > 0;
+  const displayValue = chatUnreadCount > 9 ? "9+" : String(chatUnreadCount);
+
+  if (chatUnreadBadge) {
+    if (hasUnread) {
+      chatUnreadBadge.textContent = displayValue;
+      chatUnreadBadge.classList.add("is-visible");
+    } else {
+      chatUnreadBadge.textContent = "";
+      chatUnreadBadge.classList.remove("is-visible");
+    }
+  }
+
+  if (chatLauncherBadge) {
+    if (hasUnread) {
+      chatLauncherBadge.textContent = displayValue;
+      chatLauncherBadge.style.display = "flex";
+    } else {
+      chatLauncherBadge.textContent = "";
+      chatLauncherBadge.style.display = "none";
+    }
+  }
+
+  toggleUnreadStyles(hasUnread);
 }
 
 function markChatAsRead() {
@@ -7789,7 +7872,34 @@ function markChatAsRead() {
   }
   chatUnreadCount = 0;
   updateUnreadBadge();
-  chatBox?.classList.remove("highlight");
+}
+
+function openChat() {
+  if (isChatOpen) return;
+  isChatOpen = true;
+  if (chatBox) {
+    chatBox.removeAttribute("hidden");
+    chatBox.setAttribute("data-state", "open");
+    chatBox.setAttribute("aria-hidden", "false");
+  }
+  syncLauncherState();
+  markChatAsRead();
+  const chatMessages = document.getElementById("chatMessages");
+  if (chatMessages) {
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+  }
+}
+
+function closeChat() {
+  if (!isChatOpen) return;
+  isChatOpen = false;
+  if (chatBox) {
+    chatBox.setAttribute("hidden", "");
+    chatBox.removeAttribute("data-state");
+    chatBox.setAttribute("aria-hidden", "true");
+  }
+  syncLauncherState();
+  updateUnreadBadge();
 }
 
 function extractMessageDate(docSnap) {
@@ -7850,7 +7960,7 @@ function startChatListener() {
       latestMessageTimestampMs = newestTimestampMs;
     }
 
-    if (!isChatMinimized) {
+    if (isChatOpen) {
       markChatAsRead();
     } else {
       if (lastReadTimestampMs === null) {
@@ -7858,11 +7968,6 @@ function startChatListener() {
         chatUnreadCount = 0;
       } else {
         chatUnreadCount = unreadDetected;
-        if (chatUnreadCount > 0) {
-          chatBox?.classList.add("highlight");
-        } else {
-          chatBox?.classList.remove("highlight");
-        }
       }
       updateUnreadBadge();
     }
@@ -7876,24 +7981,100 @@ function stopChatListener() {
   }
 }
 
-// 🔁 Toggle chat visibility and listener
+// 🔁 Wire up open/close controls
+if (chatLauncher) {
+  chatLauncher.addEventListener("click", () => {
+    if (suppressLauncherClick) {
+      suppressLauncherClick = false;
+      return;
+    }
+    if (isChatOpen) {
+      closeChat();
+    } else {
+      openChat();
+    }
+  });
+
+  chatLauncher.addEventListener("pointerdown", event => {
+    if (!chatDock) return;
+    suppressLauncherClick = false;
+    chatDragState = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      moved: false,
+    };
+    chatDock.style.transition = "none";
+    chatLauncher.setPointerCapture(event.pointerId);
+  });
+
+  chatLauncher.addEventListener("pointermove", event => {
+    if (!chatDragState || event.pointerId !== chatDragState.pointerId || !chatDock) return;
+    const deltaX = event.clientX - chatDragState.startX;
+    const deltaY = event.clientY - chatDragState.startY;
+    if (!chatDragState.moved && Math.hypot(deltaX, deltaY) > 6) {
+      chatDragState.moved = true;
+      chatLauncher.classList.add("is-dragging");
+    }
+    if (chatDragState.moved) {
+      chatDock.style.transform = `translate(${deltaX}px, ${deltaY}px)`;
+    }
+  });
+
+  const finishChatDrag = event => {
+    if (!chatDragState || event.pointerId !== chatDragState.pointerId || !chatDock) return;
+    const { moved } = chatDragState;
+    chatLauncher.classList.remove("is-dragging");
+    chatLauncher.releasePointerCapture(event.pointerId);
+    chatDock.style.transition = "transform 0.18s ease";
+
+    if (moved) {
+      const pointerX = Math.min(Math.max(event.clientX, 0), window.innerWidth);
+      const pointerY = Math.min(Math.max(event.clientY, 0), window.innerHeight);
+      const horizontal = pointerX > window.innerWidth / 2 ? "right" : "left";
+      const vertical = pointerY > window.innerHeight / 2 ? "bottom" : "top";
+      setChatCorner(`${vertical}-${horizontal}`);
+    }
+
+    chatDock.style.transform = "translate(0, 0)";
+    setTimeout(() => {
+      if (chatDock) chatDock.style.transition = "";
+    }, 180);
+
+    chatDragState = null;
+    suppressLauncherClick = moved;
+  };
+
+  chatLauncher.addEventListener("pointerup", finishChatDrag);
+  chatLauncher.addEventListener("pointercancel", finishChatDrag);
+}
+
 if (chatToggleBtn) {
   chatToggleBtn.addEventListener("click", () => {
-    isChatMinimized = !isChatMinimized;
-    chatBox?.classList.toggle("minimized", isChatMinimized);
-
-    if (!isChatMinimized) {
-      markChatAsRead();
-    }
+    closeChat();
+    chatLauncher?.focus({ preventScroll: true });
   });
 }
 
-// ✅ Start listening if chat is visible at page load
-if (!isChatMinimized) {
-  startChatListener();
-}
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape" && isChatOpen) {
+    closeChat();
+  }
+});
 
-// ✉️ Show temporary new message if chat is minimized
+document.addEventListener("pointerdown", event => {
+  if (!isChatOpen) return;
+  if (!chatDock) return;
+  const target = event.target;
+  if (!(target instanceof Node)) return;
+  if (chatDock.contains(target)) return;
+  closeChat();
+});
+
+syncLauncherState();
+startChatListener();
+
+// ✉️ Show temporary new message if chat is closed
 function handleNewChatMessage(messageText, sender = "Other") {
   const chatMessages = document.getElementById("chatMessages");
   if (!chatMessages) return;
@@ -7902,13 +8083,12 @@ function handleNewChatMessage(messageText, sender = "Other") {
   chatMessages.appendChild(messageEl);
   chatMessages.scrollTop = chatMessages.scrollHeight;
 
-  if (isChatMinimized) {
+  if (!isChatOpen) {
     if (latestMessageTimestampMs === null) {
       latestMessageTimestampMs = now.getTime();
     }
     chatUnreadCount += 1;
     updateUnreadBadge();
-    chatBox?.classList.add("highlight");
   }
 }
 
