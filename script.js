@@ -486,6 +486,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const sidebarTrigger    = document.getElementById("sidebarTrigger");
   const sidebarButtons    = Array.from(document.querySelectorAll(".sidebar-item"));
   const collapseButtons   = Array.from(document.querySelectorAll(".collapse-toggle"));
+  const fullscreenToggle  = document.getElementById("fullscreenToggle");
   const mobileQuery       = window.matchMedia("(max-width: 900px)");
 
   let isSidebarCollapsed = sidebar ? sidebar.classList.contains("collapsed") : false;
@@ -589,6 +590,83 @@ document.addEventListener("DOMContentLoaded", () => {
         setSidebarCollapsed(next);
       }
     });
+  }
+
+  const getFullscreenElement = () => (
+    document.fullscreenElement ||
+    document.webkitFullscreenElement ||
+    document.msFullscreenElement ||
+    null
+  );
+
+  const requestFullscreen = () => {
+    const el = document.documentElement;
+    if (!el) {
+      return typeof Promise !== "undefined"
+        ? Promise.reject(new Error("No document element"))
+        : undefined;
+    }
+    if (el.requestFullscreen) return el.requestFullscreen();
+    if (el.webkitRequestFullscreen) return el.webkitRequestFullscreen();
+    if (el.msRequestFullscreen) return el.msRequestFullscreen();
+    return typeof Promise !== "undefined"
+      ? Promise.reject(new Error("Fullscreen API unavailable"))
+      : undefined;
+  };
+
+  const exitFullscreen = () => {
+    if (document.exitFullscreen) return document.exitFullscreen();
+    if (document.webkitExitFullscreen) return document.webkitExitFullscreen();
+    if (document.msExitFullscreen) return document.msExitFullscreen();
+    return typeof Promise !== "undefined" ? Promise.resolve() : undefined;
+  };
+
+  const isFullscreenSupported = () => {
+    if (typeof document === "undefined") return false;
+    return Boolean(
+      document.fullscreenEnabled ||
+      document.webkitFullscreenEnabled ||
+      document.msFullscreenEnabled ||
+      document.documentElement?.requestFullscreen ||
+      document.documentElement?.webkitRequestFullscreen ||
+      document.documentElement?.msRequestFullscreen
+    );
+  };
+
+  const updateFullscreenButton = () => {
+    if (!fullscreenToggle) return;
+    const active = Boolean(getFullscreenElement());
+    fullscreenToggle.textContent = active ? "Exit Full Screen" : "Full Screen";
+    fullscreenToggle.setAttribute("aria-pressed", String(active));
+    fullscreenToggle.setAttribute("aria-label", active ? "Exit full screen" : "Enter full screen");
+    fullscreenToggle.title = active ? "Exit full screen" : "Enter full screen";
+  };
+
+  if (fullscreenToggle) {
+    if (!isFullscreenSupported()) {
+      fullscreenToggle.hidden = true;
+    } else {
+      fullscreenToggle.addEventListener("click", () => {
+        const active = Boolean(getFullscreenElement());
+        try {
+          const action = active ? exitFullscreen : requestFullscreen;
+          const result = action();
+          if (result && typeof result.catch === "function") {
+            result.catch((err) => {
+              console.warn("Fullscreen toggle failed", err);
+            });
+          }
+        } catch (err) {
+          console.warn("Fullscreen toggle failed", err);
+        }
+      });
+
+      ["fullscreenchange", "webkitfullscreenchange", "msfullscreenchange"].forEach((evt) => {
+        document.addEventListener(evt, updateFullscreenButton, { passive: true });
+      });
+
+      updateFullscreenButton();
+    }
   }
 
   sidebarButtons.forEach(btn => {
