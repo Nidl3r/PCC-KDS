@@ -1137,6 +1137,57 @@ function getTodayDate() {
 //  - If your scale is a "keyboard wedge", you may not need Web Serial at all: it will type directly into the focused input.
 //    This module still helps by normalizing after Enter and capturing active input for consistency.
 
+function parseScaleLine(line, options = {}) {
+  const { zeroFloor = 0 } = options || {};
+  const floor = Number.isFinite(zeroFloor) ? Math.abs(zeroFloor) : 0;
+
+  const cleaned = cleanScaleText(line);
+  if (!cleaned) return null;
+
+  const matches = [...cleaned.matchAll(/([-+]?\d+(?:\.\d+)?)(?:\s*([a-zA-Z]+))?/g)]
+    .map((m, index) => {
+      const raw = m[1];
+      const value = Number(raw);
+      if (!Number.isFinite(value)) return null;
+      return {
+        value,
+        unit: m[2]?.toLowerCase?.() || null,
+        hasDecimal: raw.includes('.'),
+        index
+      };
+    })
+    .filter(Boolean);
+
+  if (!matches.length) return null;
+
+  const nonZero = matches.filter((c) => Math.abs(c.value) > floor);
+  const prioritized = nonZero.length ? nonZero : matches;
+  const withDecimal = prioritized.filter((c) => c.hasDecimal);
+  const targetList = withDecimal.length ? withDecimal : prioritized;
+  const chosen = targetList[targetList.length - 1];
+  return chosen ? { value: chosen.value, unit: chosen.unit } : null;
+}
+
+function cleanScaleText(raw) {
+  if (!raw) return '';
+  let result = '';
+  for (let i = 0; i < raw.length; i++) {
+    let code = raw.charCodeAt(i);
+    if (!Number.isFinite(code) || code === 0) continue;
+    if (code === 3) break; // ETX often marks end of packet
+    if (code > 127) code = code & 0x7f; // strip parity bit
+    if (code < 32) {
+      // Preserve minus/plus and decimal if somehow encoded below 32, else treat as space
+      const replacements = { 0x1b: ' ', 0x1c: ' ', 0x1d: ' ', 0x1e: ' ', 0x1f: ' ' };
+      const repl = replacements[code];
+      result += repl !== undefined ? repl : ' ';
+      continue;
+    }
+    result += String.fromCharCode(code);
+  }
+  return result.replace(/[\0\u0001-\u001F]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
 // ===== DEBUG: connect + log raw serial data and parsed lines =====
 window.connectScaleSerialDebug = async function(baud = 9600) {
   if (!('serial' in navigator)) return alert('Web Serial not supported here.');
@@ -1151,7 +1202,7 @@ window.connectScaleSerialDebug = async function(baud = 9600) {
     // Some scales need control lines asserted
     try { await port.setSignals?.({ dataTerminalReady: true, requestToSend: true }); } catch {}
 
-    const decoder = new TextDecoderStream();
+    const decoder = new TextDecoderStream('latin1');
     const closed = port.readable.pipeTo(decoder.writable).catch(()=>{});
     const reader = decoder.readable.getReader();
 
@@ -1170,7 +1221,7 @@ window.connectScaleSerialDebug = async function(baud = 9600) {
       buf += value;
 
       let idx;
-      while ((idx = buf.search(/[\r\n]+/)) >= 0) {
+      while ((idx = buf.search(/[\r\n\x03]+/)) >= 0) {
         const line = buf.slice(0, idx);
         buf = buf.slice(idx + 1);
         handleLine(line);
@@ -1187,35 +1238,35 @@ window.connectScaleSerialDebug = async function(baud = 9600) {
       if (!txt) return;
       console.log('🐛 LINE:', txt);
 
-      const m = txt.match(/([-+]?\d+(?:\.\d+)?)(?:\s*([a-zA-Z]+))?/);
-      if (!m) return;
-      const val = Number(m[1]);
-      if (!Number.isFinite(val)) return;
+      const parsed = parseScaleLine(txt, { zeroFloor: window._scale?.zeroFloor });
+      if (!parsed) return;
+      const val = parsed.value;
 
       const input = window._activeQtyInput;
       if (!input) { console.warn('No focused input for weight'); return; }
 
       const mode = window._scale?.writeMode || 'replace';
       const existingText = typeof input.value === 'string' ? input.value : '';
-      const trimmed = existingText.trim();
-      const hasDigits = /\d/.test(trimmed);
       const selectionCoversAll =
         typeof input.selectionStart === 'number' &&
         typeof input.selectionEnd === 'number' &&
         input.selectionStart === 0 &&
         input.selectionEnd === existingText.length;
+      const trimmedTrailing = existingText.replace(/\s+$/, '');
+      const trimmed = trimmedTrailing.trim();
+      const hasContent = trimmed.length > 0;
       const autoAdd = (window._scale?.autoAddWhenFilled === undefined)
         ? true
         : Boolean(window._scale.autoAddWhenFilled);
-      const shouldAppend = hasDigits && !selectionCoversAll && (mode === 'add' || autoAdd);
+      const shouldAppend = hasContent && !selectionCoversAll && (mode === 'add' || (mode !== 'add' && autoAdd));
 
       if (shouldAppend) {
-        const endsWithOp = /[+\-*/]\s*$/.test(trimmed);
-        input.value = endsWithOp ? `${trimmed} ${val}` : `${trimmed} + ${val}`;
+        const endsWithOp = /[+\-*/]$/.test(trimmedTrailing);
+        input.value = `${trimmedTrailing}${endsWithOp ? '' : '+'}${val}`;
       } else {
         input.value = String(val);
+        if (typeof window.normalizeQtyInputValue === 'function') window.normalizeQtyInputValue(input);
       }
-      if (typeof window.normalizeQtyInputValue === 'function') window.normalizeQtyInputValue(input);
       input.dispatchEvent(new Event('input', { bubbles: true }));
       console.log('✅ wrote weight to focused input:', input.value);
     }
@@ -1244,35 +1295,35 @@ window.connectScaleSerialDebug = async function(baud = 9600) {
   }
 
   function parseLineAndWrite(txt) {
-    const m = String(txt).trim().match(/([-+]?\d+(?:\.\d+)?)(?:\s*([a-zA-Z]+))?/);
-    if (!m) return;
-    const val = Number(m[1]);
-    if (!Number.isFinite(val)) return;
+    const parsed = parseScaleLine(txt, { zeroFloor: window._scale?.zeroFloor });
+    if (!parsed) return;
+    const val = parsed.value;
 
     const input = window._activeQtyInput;
     if (!input) return;
 
     const mode = window._scale?.writeMode || 'replace';
     const existingText = typeof input.value === 'string' ? input.value : '';
-    const trimmed = existingText.trim();
-    const hasDigits = /\d/.test(trimmed);
     const selectionCoversAll =
       typeof input.selectionStart === 'number' &&
       typeof input.selectionEnd === 'number' &&
       input.selectionStart === 0 &&
       input.selectionEnd === existingText.length;
+    const trimmedTrailing = existingText.replace(/\s+$/, '');
+    const trimmed = trimmedTrailing.trim();
+    const hasContent = trimmed.length > 0;
     const autoAdd = (window._scale?.autoAddWhenFilled === undefined)
       ? true
       : Boolean(window._scale.autoAddWhenFilled);
-    const shouldAppend = hasDigits && !selectionCoversAll && (mode === 'add' || autoAdd);
+    const shouldAppend = hasContent && !selectionCoversAll && (mode === 'add' || (mode !== 'add' && autoAdd));
 
     if (shouldAppend) {
-      const endsWithOp = /[+\-*/]\s*$/.test(trimmed);
-      input.value = endsWithOp ? `${trimmed} ${val}` : `${trimmed} + ${val}`;
+      const endsWithOp = /[+\-*/]$/.test(trimmedTrailing);
+      input.value = `${trimmedTrailing}${endsWithOp ? '' : '+'}${val}`;
     } else {
       input.value = String(val);
+      if (typeof window.normalizeQtyInputValue === 'function') window.normalizeQtyInputValue(input);
     }
-    if (typeof window.normalizeQtyInputValue === 'function') window.normalizeQtyInputValue(input);
     input.dispatchEvent(new Event('input', { bubbles: true }));
     console.log('✅ HID wrote weight to focused input:', input.value);
   }
@@ -1307,7 +1358,12 @@ window.connectScaleSerialDebug = async function(baud = 9600) {
     writeMode: 'replace', // 'replace' | 'add'
     autoAddWhenFilled: true,
     unitConversion: null, // e.g., { from:'kg', to:'lb', factor: 2.20462 } if you ever want auto-convert
-    lineBuf: ''
+    lineBuf: '',
+    readableClosed: null,
+    lastNonZeroValue: null,
+    lastNonZeroAt: 0,
+    zeroFloor: 0.0005,
+    recentZeroIgnoreMs: 1200,
   };
 
   // Track the active qty input so the scale knows where to write.
@@ -1339,6 +1395,7 @@ window.connectScaleSerialDebug = async function(baud = 9600) {
   // Initial pass on load
   document.addEventListener('DOMContentLoaded', () => {
     registerQtyFocusTargets(document);
+    autoConnectToGrantedPort();
   });
 
   // Public: change write mode at runtime
@@ -1351,18 +1408,6 @@ window.connectScaleSerialDebug = async function(baud = 9600) {
     window._scale.autoAddWhenFilled = Boolean(enabled);
     console.log(`⚖️ Scale auto-add when filled: ${window._scale.autoAddWhenFilled}`);
   };
-
-  // Parse one line from the scale, return {value, unit} or null
-  function parseScaleLine(line) {
-    // Common formats seen: "  1.250 kg", "W: 0.55 lb", "ST,GS,  0.120 kg", "1.234"
-    // Grab first decimal number and optional unit
-    const m = String(line).trim().match(/([-+]?\d+(?:\.\d+)?)(?:\s*([a-zA-Z]+))?/);
-    if (!m) return null;
-    const val = Number(m[1]);
-    if (!Number.isFinite(val)) return null;
-    const unit = m[2]?.toLowerCase?.() || null;
-    return { value: val, unit };
-  }
 
   // Apply optional unit conversion (if configured)
   function maybeConvert({ value, unit }) {
@@ -1383,30 +1428,47 @@ window.connectScaleSerialDebug = async function(baud = 9600) {
     if (!Number.isFinite(safeVal)) return;
 
     const existingText = typeof input.value === 'string' ? input.value : '';
-    const trimmed = existingText.trim();
-    const hasDigits = /\d/.test(trimmed);
     const selectionCoversAll =
       typeof input.selectionStart === 'number' &&
       typeof input.selectionEnd === 'number' &&
       input.selectionStart === 0 &&
       input.selectionEnd === existingText.length;
 
+    const trimmedTrailing = existingText.replace(/\s+$/, '');
+    const trimmed = trimmedTrailing.trim();
+    const hasContent = trimmed.length > 0;
+
     const autoAdd = (autoAddWhenFilled === undefined) ? true : Boolean(autoAddWhenFilled);
-    const shouldAppend = hasDigits && !selectionCoversAll && (writeMode === 'add' || autoAdd);
+    const shouldAppend = hasContent && !selectionCoversAll && (writeMode === 'add' || (writeMode !== 'add' && autoAdd));
+
+    const now = Date.now();
+    const zeroFloor = Number.isFinite(window._scale.zeroFloor) ? Math.abs(window._scale.zeroFloor) : 0.0005;
+    const ignoreMs = Number.isFinite(window._scale.recentZeroIgnoreMs) ? window._scale.recentZeroIgnoreMs : 1200;
+    const isEssentiallyZero = Math.abs(safeVal) <= zeroFloor;
+
+    if (isEssentiallyZero) {
+      const lastAt = window._scale.lastNonZeroAt || 0;
+      const shouldIgnoreZero = hasContent && !selectionCoversAll && lastAt && (now - lastAt) < ignoreMs;
+      if (shouldIgnoreZero) {
+        console.debug('⚖️ Ignoring transient zero reading from scale');
+        return;
+      }
+    } else {
+      window._scale.lastNonZeroValue = safeVal;
+      window._scale.lastNonZeroAt = now;
+    }
 
     if (shouldAppend) {
-      // Append as math: "existing + weight"
-      // If existing already ends with an operator, just append the number.
-      const endsWithOp = /[+\-*/]\s*$/.test(trimmed);
-      input.value = endsWithOp ? `${trimmed} ${safeVal}` : `${trimmed} + ${safeVal}`;
+      // Append the new weight as a "+value" suffix so the math helper can sum it later.
+      const endsWithOp = /[+\-*/]$/.test(trimmedTrailing);
+      input.value = `${trimmedTrailing}${endsWithOp ? '' : '+'}${safeVal}`;
     } else {
       // Replace current value or overwrite selected text
       input.value = String(safeVal);
-    }
-
-    // Normalize (your helper rounds to step/2dp etc.)
-    if (typeof window.normalizeQtyInputValue === 'function') {
-      window.normalizeQtyInputValue(input);
+      // Normalize (your helper rounds to step/2dp etc.)
+      if (typeof window.normalizeQtyInputValue === 'function') {
+        window.normalizeQtyInputValue(input);
+      }
     }
 
     // Fire an input event so any listeners (like enabling buttons) react
@@ -1416,9 +1478,10 @@ window.connectScaleSerialDebug = async function(baud = 9600) {
   // Continuously read lines from the serial scale
   async function startReading(port) {
     window._scale.lineBuf = '';
-    const decoder = new TextDecoderStream();
+    const decoder = new TextDecoderStream('latin1');
     const readableStreamClosed = port.readable.pipeTo(decoder.writable).catch(() => {});
     window._scale.reader = decoder.readable.getReader();
+    window._scale.readableClosed = readableStreamClosed;
 
     try {
       while (true) {
@@ -1428,13 +1491,22 @@ window.connectScaleSerialDebug = async function(baud = 9600) {
           // Accumulate into lines
           window._scale.lineBuf += value;
           let idx;
-          while ((idx = window._scale.lineBuf.search(/[\r\n]+/)) >= 0) {
+          while ((idx = window._scale.lineBuf.search(/[\r\n\x03]+/)) >= 0) {
             const line = window._scale.lineBuf.slice(0, idx);
             window._scale.lineBuf = window._scale.lineBuf.slice(idx + 1);
-            const parsed = parseScaleLine(line);
+            const parsed = parseScaleLine(line, { zeroFloor: window._scale?.zeroFloor });
+            window._scale.lastRawLine = line;
+            window._scale.lastRawCodes = Array.from(line, ch => ch.charCodeAt(0));
+            window._scale.lastCleanLine = cleanScaleText(line);
             if (parsed) {
               const conv = maybeConvert(parsed);
+              window._scale.lastParsedValue = conv.value;
+              const codesList = window._scale.lastRawCodes.join(',');
+              console.log('⚖️ Serial line parsed', { raw: line, clean: window._scale.lastCleanLine, codes: window._scale.lastRawCodes, codesList, value: conv.value, unit: conv.unit });
               writeWeightToActiveInput(conv.value);
+            } else {
+              const codesList = window._scale.lastRawCodes.join(',');
+              console.log('⚖️ Serial line (unparsed)', { raw: line, clean: window._scale.lastCleanLine, codes: window._scale.lastRawCodes, codesList });
             }
           }
         }
@@ -1444,8 +1516,72 @@ window.connectScaleSerialDebug = async function(baud = 9600) {
     } finally {
       try { await window._scale.reader.releaseLock(); } catch {}
       try { await readableStreamClosed; } catch {}
+      window._scale.reader = null;
+      window._scale.readableClosed = null;
+      window._scale.connected = false;
+      if (window._scale.port === port) {
+        window._scale.port = null;
+      }
     }
   }
+
+  async function openSerialPort(port, { quiet = false } = {}) {
+    if (!port) return null;
+
+    const currentPort = window._scale.port;
+    if (currentPort && currentPort !== port) {
+      await window.disconnectScaleSerial?.({ quiet: true });
+    } else if (currentPort === port && window._scale.reader) {
+      console.log('⚖️ Scale already connected to selected port.');
+      return port;
+    }
+
+    try {
+      if (port.readable) {
+        try { await port.close(); } catch {}
+      }
+      await port.open({ baudRate: 9600 });
+      try { await port.setSignals?.({ dataTerminalReady: true, requestToSend: true }); } catch {}
+      window._scale.port = port;
+      window._scale.connected = true;
+      window._scale.lastNonZeroValue = null;
+      window._scale.lastNonZeroAt = 0;
+      console.log(`⚖️ Scale connected${quiet ? ' (auto)' : ''} (Serial).`);
+      startReading(port);
+      return port;
+    } catch (err) {
+      window._scale.connected = false;
+      if (!quiet) {
+        console.error('⚠️ Failed to open scale port:', err);
+      } else {
+        console.debug('⚠️ Auto-connect to scale port failed:', err);
+      }
+      throw err;
+    }
+  }
+
+  window.disconnectScaleSerial = async function({ quiet = false } = {}) {
+    const reader = window._scale.reader;
+    const port = window._scale.port;
+
+    try { await reader?.cancel?.(); } catch {}
+    try {
+      const closed = window._scale.readableClosed;
+      if (closed) await closed;
+    } catch {}
+
+    if (port) {
+      try { await port.close(); } catch (err) { if (!quiet) console.warn('⚠️ Failed to close scale port cleanly:', err); }
+    }
+
+    window._scale.port = null;
+    window._scale.reader = null;
+    window._scale.readableClosed = null;
+    window._scale.lineBuf = '';
+    window._scale.connected = false;
+    window._scale.lastNonZeroValue = null;
+    window._scale.lastNonZeroAt = 0;
+  };
 
   // Public: connect via Web Serial
   window.connectScaleSerial = async function() {
@@ -1458,16 +1594,60 @@ window.connectScaleSerialDebug = async function(baud = 9600) {
         // Filters are optional. If you know VID/PID you can add them here to narrow devices.
         // filters: [{ usbVendorId: 0x????, usbProductId: 0x???? }]
       });
-      await port.open({ baudRate: 9600 }); // Many scales default to 9600; adjust if needed.
-      window._scale.port = port;
-      window._scale.connected = true;
-      console.log('⚖️ Scale connected (Serial).');
-      startReading(port);
+      await openSerialPort(port);
     } catch (e) {
+      if (e?.name === 'NotFoundError') return; // User cancelled the device picker.
       console.error('⚠️ Failed to connect to scale:', e);
       alert('Failed to connect to scale.');
     }
   };
+
+  function resolveSerialEventPort(event) {
+    if (!event) return null;
+    if (event.port) return event.port;
+    if (event.target && typeof event.target.getInfo === 'function') return event.target;
+    if (event.target?.port && typeof event.target.port.getInfo === 'function') return event.target.port;
+    return null;
+  }
+
+  async function autoConnectToGrantedPort() {
+    if (!('serial' in navigator) || typeof navigator.serial.getPorts !== 'function') return;
+    try {
+      const ports = await navigator.serial.getPorts();
+      for (const port of ports) {
+        if (!port) continue;
+        try {
+          await openSerialPort(port, { quiet: true });
+          if (window._scale.reader) return;
+        } catch (err) {
+          console.debug('⚠️ Auto-connect attempt failed for a port:', err);
+        }
+      }
+    } catch (err) {
+      console.warn('⚠️ Unable to enumerate serial ports for auto-connect:', err);
+    }
+  }
+
+  function setupSerialEventListeners() {
+    if (!('serial' in navigator) || typeof navigator.serial.addEventListener !== 'function') return;
+
+    navigator.serial.addEventListener('connect', (event) => {
+      const port = resolveSerialEventPort(event);
+      if (!port) return;
+      if (window._scale.reader) return; // Already connected
+      openSerialPort(port, { quiet: true }).catch(() => {});
+    });
+
+    navigator.serial.addEventListener('disconnect', (event) => {
+      const port = resolveSerialEventPort(event);
+      const current = window._scale.port;
+      if (!port || !current || port === current) {
+        window.disconnectScaleSerial?.({ quiet: true });
+      }
+    });
+  }
+
+  setupSerialEventListeners();
 
   // Optional: wire a connect button if present
   document.addEventListener('DOMContentLoaded', () => {
@@ -1505,37 +1685,39 @@ window.serialProbe = async function(options = {}) {
         if (done) break;
         if (!value) continue;
         chunkCount++;
-        const hex   = Array.from(value).map(b => b.toString(16).padStart(2,'0')).join(' ');
-        const ascii = Array.from(value).map(b => (b>=32 && b<=126) ? String.fromCharCode(b) : '.').join('');
+        const masked = Array.from(value, b => b & 0x7f);
+        const hex   = masked.map(b => b.toString(16).padStart(2,'0')).join(' ');
+        const ascii = masked.map(b => (b>=32 && b<=126) ? String.fromCharCode(b) : '.').join('');
         console.log(`🔹 BYTES[${value.length}] HEX: ${hex}`);
         console.log(`🔹 ASCII: ${ascii}`);
 
-        const m = ascii.match(/([-+]?\d+(?:\.\d+)?)/);
-        if (m && window._activeQtyInput) {
-          const val = Number(m[1]);
+        const parsed = parseScaleLine(ascii, { zeroFloor: window._scale?.zeroFloor });
+        if (parsed && window._activeQtyInput) {
+          const val = parsed.value;
           if (Number.isFinite(val)) {
             const input = window._activeQtyInput;
             const mode = window._scale?.writeMode || 'replace';
             const existingText = typeof input.value === 'string' ? input.value : '';
-            const trimmed = existingText.trim();
-            const hasDigits = /\d/.test(trimmed);
             const selectionCoversAll =
               typeof input.selectionStart === 'number' &&
               typeof input.selectionEnd === 'number' &&
               input.selectionStart === 0 &&
               input.selectionEnd === existingText.length;
+            const trimmedTrailing = existingText.replace(/\s+$/, '');
+            const trimmed = trimmedTrailing.trim();
+            const hasContent = trimmed.length > 0;
             const autoAdd = (window._scale?.autoAddWhenFilled === undefined)
               ? true
               : Boolean(window._scale.autoAddWhenFilled);
-            const shouldAppend = hasDigits && !selectionCoversAll && (mode === 'add' || autoAdd);
+            const shouldAppend = hasContent && !selectionCoversAll && (mode === 'add' || (mode !== 'add' && autoAdd));
 
             if (shouldAppend) {
-              const endsWithOp = /[+\-*/]\s*$/.test(trimmed);
-              input.value = endsWithOp ? `${trimmed} ${val}` : `${trimmed} + ${val}`;
+              const endsWithOp = /[+\-*/]$/.test(trimmedTrailing);
+              input.value = `${trimmedTrailing}${endsWithOp ? '' : '+'}${val}`;
             } else {
               input.value = String(val);
+              if (typeof window.normalizeQtyInputValue === 'function') window.normalizeQtyInputValue(input);
             }
-            if (typeof window.normalizeQtyInputValue === 'function') window.normalizeQtyInputValue(input);
             input.dispatchEvent(new Event('input', { bubbles: true }));
             console.log('✅ wrote weight to focused input:', input.value);
           }
