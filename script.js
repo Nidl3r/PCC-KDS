@@ -3834,35 +3834,6 @@ const totalCost = parseFloat((netQty * costPerUOM).toFixed(2));
     alert("Error sending order.");
   }
 }
-// --- Concessions "wave" control (per day) ---
-function getConcessionKeysForToday() {
-  const k = getTodayDate();
-  return {
-    guestKey: `concession_guest_baseline_${k}`,
-    sentKey:  `concession_sent_baseline_${k}`
-  };
-}
-
-// Read the baseline guest count (and per-recipe sent snapshot) for today's wave
-function readConcessionBaseline() {
-  const { guestKey, sentKey } = getConcessionKeysForToday();
-  const guestBase = Number(localStorage.getItem(guestKey) || "0");
-
-  let sentBase = {};
-  try {
-    sentBase = JSON.parse(localStorage.getItem(sentKey) || "{}");
-  } catch { sentBase = {}; }
-
-  return { guestBase, sentBase };
-}
-
-// Reset the baseline to "now": guest baseline := current guests; sent snapshot := current sent per recipe
-function writeConcessionBaseline(currentGuests, currentSentMap /* object: recipeId -> pans */) {
-  const { guestKey, sentKey } = getConcessionKeysForToday();
-  localStorage.setItem(guestKey, String(currentGuests));
-  localStorage.setItem(sentKey, JSON.stringify(currentSentMap || {}));
-}
-
 // --- utilities to keep notes synced ---
 function setGuestNote(name, val) {
   const el = document.getElementById(`current-${name}`);
@@ -3944,11 +3915,11 @@ window.loadMainKitchenStartingPars = async function () {
   ));
 
   // Aggregates
-  const sentPars      = {};   // only *needed* for Concessions math (lbs)
+  const sentPars      = {};
   const receivedPars  = {};
   const sentParStatus = {};
   const wasSentToday  = {};
-const sentQtyTotals = {}; 
+  const sentQtyTotals = {};
 
   ordersSnap.forEach(s => {
     const o = s.data() || {};
@@ -3958,15 +3929,10 @@ const sentQtyTotals = {};
 
     const status = String(o.status || "sent").toLowerCase();
     const statusCounts = (status === "sent" || status === "received");
-    const isConcessions = venue === "Concessions";
 
-    const sentValue = isConcessions
-      ? Number(o.netWeight ?? o.sendQty ?? o.qty ?? 0)   // lbs for baseline math
-      : Number(o.pans ?? o.sendQty ?? o.qty ?? 0);       // pans fallback for buffet venues
+    const sentValue = Number(o.pans ?? o.sendQty ?? o.netWeight ?? o.qty ?? 0);
 
-    const qtyForDisplay = isConcessions
-      ? Number(o.netWeight ?? o.sendQty ?? o.qty ?? 0)
-      : Number(o.sendQty ?? o.pans ?? o.qty ?? 0);
+    const qtyForDisplay = Number(o.netWeight ?? o.sendQty ?? o.pans ?? o.qty ?? 0);
 
     if (!sentPars[venue])      sentPars[venue] = {};
     if (!receivedPars[venue])  receivedPars[venue] = {};
@@ -3997,11 +3963,11 @@ const sentQtyTotals = {};
   window.startingCache["MainKitchenAll"] = {
     recipes,
     guestCounts,
-    sentPars,         // Concessions in lbs; buffet value unused by renderer
+    sentPars,         // per-venue totals captured in pans for completion checks
     receivedPars,
     sentParStatus,
     wasSentToday,      // ✅ buffet baseline driver
-      sentQtyTotals 
+    sentQtyTotals,
   };
 
   renderMainKitchenPars();
@@ -4027,14 +3993,6 @@ window.renderMainKitchenPars = function () {
   tbody.innerHTML = "";
 
   window.mainStartingQtyCache = window.mainStartingQtyCache || {};
-
-  // --- Concessions baseline (unchanged)
-  const currentConGuests = Number(data.guestCounts?.Concession || data.guestCounts?.Concessions || 0);
-  const { guestBase, sentBase } = readConcessionBaseline();
-  if (currentConGuests > guestBase) {
-    writeConcessionBaseline(currentConGuests, (data.sentPars?.Concessions || {}));
-  }
-  const { sentBase: finalSentBase } = readConcessionBaseline();
 
   const fmt = n => (Number(n) % 1 ? Number(n).toFixed(2) : Number(n));
   const perVenueTotals = data.sentQtyTotals || {};
@@ -4088,16 +4046,8 @@ window.renderMainKitchenPars = function () {
       // 2) Compute REMAINING (for completion styling/ordering only)
       let remaining = 0;
 
-      if (venue === "Concessions") {
-        // lbs-based baseline logic (unchanged)
-        const sentAtBaseline = Number(finalSentBase?.[recipe.id] || 0);
-        const sentNow = Number(data.sentPars?.Concessions?.[recipe.id] || 0); // lbs
-        const effectiveSentSinceIncrease = Math.max(0, sentNow - sentAtBaseline);
-        remaining = Math.max(0, parPans - effectiveSentSinceIncrease);
-      } else {
-        // ✅ Buffet venues: use exact quantity sent today from per-venue totals
-        remaining = Math.max(0, parPans - sentForVenue);
-      }
+      // ✅ All venues: use per-venue totals just like buffet venues
+      remaining = Math.max(0, parPans - sentForVenue);
 
       // 👉 Always render, even if remaining <= 0
       const sentSoFar = sentForVenue;
@@ -4385,8 +4335,31 @@ window.sendStartingPar = async function (recipeId, venue, sendQtyInput) {
     const panWeight = Number(r.panWeight ?? 0);
 
     // 3) Determine today's needed pans (PAR snapshot)
-    const currentPar = Number(r?.pars?.[venueName]?.[String(guestCount)] || 0);
-    const pans       = Math.max(0, currentPar);
+    const pans = (() => {
+      if (venueName === "Concessions") {
+        const defaults = [
+          r?.pars?.Concessions?.default,
+          r?.pars?.Concession?.default,
+          r?.pars?.concessions?.default,
+          r?.pars?.concession?.default,
+        ];
+        const fallback = defaults.find((val) => Number.isFinite(Number(val)) && Number(val) > 0);
+        return Math.max(0, Number(fallback ?? 0));
+      }
+
+      const guestKey = String(guestCount);
+      const savedPar = Number(r?.pars?.[venueName]?.[guestKey]);
+      if (Number.isFinite(savedPar) && savedPar > 0) {
+        return Math.max(0, savedPar);
+      }
+
+      const defaultPar = Number(r?.pars?.[venueName]?.default ?? 0);
+      if (Number.isFinite(defaultPar) && defaultPar > 0) {
+        return Math.max(0, defaultPar);
+      }
+
+      return 0;
+    })();
 
     // 4) User input: gross pounds typed on screen
     const sendQtyGross = Number(sendQtyInput);
