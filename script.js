@@ -944,6 +944,8 @@ const VENUE_CODE_TO_NAME = {
 
 // Display order requested
 const PREP_VENUE_ORDER = ["Gateway", "Aloha", "Ohana", "Concessions"];
+const COMBINED_VENUE_KEY = "__all__";
+const PREP_LEFTOVER_COLLECTION = "prepLeftovers";
 
 // Public entry points
 window.loadMainKitchenPrepPars   = loadMainKitchenPrepPars;
@@ -979,6 +981,7 @@ async function loadMainKitchenPrepPars() {
     const category = String(data.category || "").toUpperCase();
     const desc     = data.description || "";
     const recipeNo = data.recipeNo || "";
+    const recipeId = String(data.recipeId || data.recipeRef || d.id || "").trim();
     const venueCodes = Array.isArray(data.venueCodes) ? data.venueCodes : [];
     const parsObj    = data.pars || {};
 
@@ -992,6 +995,7 @@ async function loadMainKitchenPrepPars() {
 
       rows.push({
         prepId: d.id,
+        recipeId,
         venue,
         category,           // HOTFOODS | PANTRY | BAKERY | ...
         description: desc,
@@ -1001,31 +1005,133 @@ async function loadMainKitchenPrepPars() {
     }
   });
 
-  // 3) Apply filters (Venue + Area)
+  // 3) Group by prepId so we can aggregate actual par targets across venues
+  const byPrepId = new Map();
+  const recipeIdToPrepId = new Map();
+  const recipeNoToPrepId = new Map();
+
+  for (const row of rows) {
+    const key = row.prepId;
+    const venueUpper = row.venue.toUpperCase();
+
+    if (!byPrepId.has(key)) {
+      byPrepId.set(key, {
+        prepId: row.prepId,
+        category: row.category,
+        description: row.description,
+        recipeNo: row.recipeNo,
+        recipeId: row.recipeId || "",
+        perVenue: [],
+        totalPar: 0,
+      });
+    }
+
+    const entry = byPrepId.get(key);
+    entry.perVenue.push({
+      name: row.venue,
+      nameUpper: venueUpper,
+      prepPar: Number(row.prepPar) || 0,
+    });
+    entry.totalPar += Number(row.prepPar) || 0;
+
+    if (!entry.recipeId && row.recipeId) entry.recipeId = row.recipeId;
+    if (row.recipeId) recipeIdToPrepId.set(row.recipeId, key);
+    if (row.recipeNo) recipeNoToPrepId.set(String(row.recipeNo).toUpperCase(), key);
+  }
+
   const venueFilter = (document.getElementById("prepVenueFilter")?.value || "ALL").toUpperCase();
   const areaFilter  = (document.getElementById("prepAreaFilter")?.value  || "ALL").toUpperCase();
+  const serviceDate = getPrepServiceDate();
 
-  const filtered = rows.filter(r => {
-    if (venueFilter !== "ALL" && r.venue.toUpperCase() !== venueFilter) return false;
-    if (areaFilter  !== "ALL" && r.category !== areaFilter) return false;
-    return true;
+  // 4) Load supporting data in parallel
+  const [preppedTodayByItem, leftoversByPrepId, sentTotalsByPrepId] = await Promise.all([
+    fetchTodayPreppedTotals(today),
+    fetchCurrentLeftovers(serviceDate),
+    fetchSentTotalsForPrepPars(today, { recipeIdToPrepId, recipeNoToPrepId }),
+  ]);
+
+  // 5) Convert grouped map into renderable rows with aggregated values
+  const items = [];
+  byPrepId.forEach((entry, prepId) => {
+    if (areaFilter !== "ALL" && entry.category !== areaFilter) return;
+
+    const matchesVenueFilter = venueFilter === "ALL" || entry.perVenue.some(v => v.nameUpper === venueFilter);
+    if (!matchesVenueFilter) return;
+
+    const preppedMap = preppedTodayByItem.get(prepId) || {};
+    const combinedEntry = preppedMap[COMBINED_VENUE_KEY];
+    const hasCombinedLog = combinedEntry !== undefined;
+
+    let totalPrepped = 0;
+    const breakdown = {};
+
+    if (hasCombinedLog) {
+      totalPrepped = Number(combinedEntry?.pans || 0);
+      breakdown[COMBINED_VENUE_KEY] = totalPrepped;
+    } else {
+      for (const v of entry.perVenue) {
+        const perVenueEntry = preppedMap[v.name];
+        const val = Number(perVenueEntry?.pans || 0);
+        breakdown[v.name] = val;
+        totalPrepped += val;
+      }
+    }
+
+    const leftoverInfo = leftoversByPrepId.get(prepId) || {};
+    const leftover = Number(leftoverInfo.leftover ?? leftoverInfo.pans ?? leftoverInfo.qty ?? 0) || 0;
+
+    const sentInfo = sentTotalsByPrepId.get(prepId) || { total: 0, breakdown: {}, byVenue: {} };
+    const sentTotal = Number(sentInfo.total || 0);
+
+    const venueNames = Array.from(new Set(entry.perVenue.map(v => v.name)));
+    venueNames.sort((a, b) => {
+      const fallback = PREP_VENUE_ORDER.length + 1;
+      const ai = PREP_VENUE_ORDER.indexOf(a);
+      const bi = PREP_VENUE_ORDER.indexOf(b);
+      const aiResolved = ai === -1 ? fallback : ai;
+      const biResolved = bi === -1 ? fallback : bi;
+      return aiResolved - biResolved;
+    });
+
+    const primaryIndex = venueNames.reduce((acc, v) => {
+      const idx = PREP_VENUE_ORDER.indexOf(v);
+      if (idx === -1) return acc;
+      return Math.min(acc, idx);
+    }, PREP_VENUE_ORDER.length + 1);
+
+    const availableRaw = totalPrepped + leftover - sentTotal;
+    const available = Number.isFinite(availableRaw) ? availableRaw : 0;
+    const needToPrep = Math.max(0, Number(entry.totalPar || 0) - Number(leftover));
+
+    items.push({
+      prepId,
+      category: entry.category,
+      description: entry.description,
+      recipeNo: entry.recipeNo,
+      recipeId: entry.recipeId,
+      prepPar: entry.totalPar,
+      preppedToday: totalPrepped,
+      leftover,
+      available,
+      needToPrep,
+      sentTotal,
+      sentBreakdown: sentInfo.breakdown || {},
+      sentByVenue: sentInfo.byVenue || {},
+      venues: venueNames,
+      venueLabel: venueNames.join(", "),
+      preppedBreakdown: breakdown,
+      hasCombinedLog,
+      combinedVenues: Array.isArray(combinedEntry?.combinedVenues) ? combinedEntry.combinedVenues : [],
+      sortIndex: primaryIndex,
+    });
   });
 
-  // 4) Load today's prepped totals
-  const preppedTodayByItem = await fetchTodayPreppedTotals(today);
-
-  // 5) Merge “prepped today”
-  const items = filtered.map(r => ({
-    ...r,
-    preppedToday: Number(preppedTodayByItem.get(r.prepId)?.[r.venue] || 0),
-  }));
-
-  // 6) Sort: Gateway → Aloha → Ohana → Concessions, then by category, then recipeNo
+  // 6) Sort aggregated rows: Gateway → Aloha → Ohana → Concessions, then by category, then recipeNo
   items.sort((a, b) => {
-    const vi = PREP_VENUE_ORDER.indexOf(a.venue);
-    const vj = PREP_VENUE_ORDER.indexOf(b.venue);
+    const vi = a.sortIndex;
+    const vj = b.sortIndex;
     if (vi !== vj) return vi - vj;
-    const ca = a.category.localeCompare(b.category);
+    const ca = (a.category || "").localeCompare(b.category || "");
     if (ca !== 0) return ca;
     return String(a.recipeNo).localeCompare(String(b.recipeNo));
   });
@@ -1078,8 +1184,287 @@ async function fetchTodayPreppedTotals(todayStr) {
     if (!pid || !v) return;
 
     if (!totals.has(pid)) totals.set(pid, {});
-    totals.get(pid)[v] = n;
+    totals.get(pid)[v] = {
+      pans: n,
+      logScope: d.logScope || (v === COMBINED_VENUE_KEY ? "combined" : "single"),
+      combinedVenues: Array.isArray(d.combinedVenues) ? d.combinedVenues : [],
+    };
   });
+
+  return totals;
+}
+
+async function fetchCurrentLeftovers(serviceDate) {
+  const leftovers = new Map();
+  if (!serviceDate) return leftovers;
+
+  try {
+    const snap = await getDocs(query(
+      collection(db, PREP_LEFTOVER_COLLECTION),
+      where("serviceDate", "==", serviceDate)
+    ));
+
+    snap.forEach(docSnap => {
+      const data = docSnap.data() || {};
+      const prepId = data.prepId;
+      if (!prepId) return;
+      leftovers.set(prepId, {
+        leftover: Number(data.leftover ?? data.qty ?? 0) || 0,
+        combinedVenues: Array.isArray(data.combinedVenues) ? data.combinedVenues : [],
+        updatedAt: data.updatedAt || null,
+      });
+    });
+  } catch (err) {
+    console.warn("fetchCurrentLeftovers failed:", err);
+  }
+
+  return leftovers;
+}
+
+function extractOrderPans(order) {
+  const candidates = [
+    order.pansSent,
+    order.pans,
+    order.totalPans,
+    order.pansRequested,
+  ];
+
+  for (const value of candidates) {
+    const num = Number(value);
+    if (Number.isFinite(num) && num > 0) return num;
+  }
+
+  const qtyCandidate = Number(order.qty ?? order.sendQty ?? 0);
+  const uom = String(order.uom || order.unit || "").toLowerCase();
+  if (Number.isFinite(qtyCandidate) && qtyCandidate > 0) {
+    if (!uom || /(pan|pans|tray|ea|each|ct)/.test(uom)) {
+      return qtyCandidate;
+    }
+  }
+
+  return 0;
+}
+
+function chunkArray(arr, size) {
+  if (!Array.isArray(arr) || size <= 0) return [];
+  const out = [];
+  for (let i = 0; i < arr.length; i += size) {
+    out.push(arr.slice(i, i + size));
+  }
+  return out;
+}
+
+async function fetchSentTotalsForPrepPars(dateStr, recipeIndex = {}) {
+  const totals = new Map();
+  if (!dateStr) return totals;
+
+  const recipeIdMap = recipeIndex.recipeIdToPrepId instanceof Map ? recipeIndex.recipeIdToPrepId : new Map();
+  const recipeNoMap = recipeIndex.recipeNoToPrepId instanceof Map ? recipeIndex.recipeNoToPrepId : new Map();
+
+  const matchPrepId = (data) => {
+    const rid = (data.recipeId || "").toString().trim();
+    if (rid && recipeIdMap.has(rid)) return recipeIdMap.get(rid);
+    const rno = (data.recipeNo || "").toString().toUpperCase().trim();
+    if (rno && recipeNoMap.has(rno)) return recipeNoMap.get(rno);
+    return null;
+  };
+
+  const ensureEntry = (prepId) => {
+    if (!totals.has(prepId)) {
+      totals.set(prepId, { total: 0, byVenue: {}, breakdown: {} });
+    }
+    return totals.get(prepId);
+  };
+
+  const allowedVenues = ["Aloha", "Ohana", "Gateway", "Concessions"];
+  const venueChunks = chunkArray(allowedVenues, 10);
+  const ordersRef = collection(db, "orders");
+
+  for (const chunk of venueChunks) {
+    try {
+      const snap = await getDocs(query(
+        ordersRef,
+        where("type", "==", "starting-par"),
+        where("date", "==", dateStr),
+        where("venue", "in", chunk)
+      ));
+
+      snap.forEach(docSnap => {
+        const data = docSnap.data() || {};
+        const prepId = matchPrepId(data);
+        if (!prepId) return;
+        const qty = extractOrderPans(data);
+        if (!(qty > 0)) return;
+        const venue = canonicalizeVenueName(data.venue);
+        const entry = ensureEntry(prepId);
+        entry.total += qty;
+        if (venue) entry.byVenue[venue] = (entry.byVenue[venue] || 0) + qty;
+        entry.breakdown.starting = (entry.breakdown.starting || 0) + qty;
+      });
+    } catch (err) {
+      console.warn("fetchSentTotalsForPrepPars(starting) failed:", err);
+    }
+  }
+
+  const addonStatuses = ["sent", "received"];
+  for (const status of addonStatuses) {
+    for (const chunk of venueChunks) {
+      try {
+        const snap = await getDocs(query(
+          ordersRef,
+          where("type", "==", "addon"),
+          where("date", "==", dateStr),
+          where("status", "==", status),
+          where("venue", "in", chunk)
+        ));
+
+        snap.forEach(docSnap => {
+          const data = docSnap.data() || {};
+          const prepId = matchPrepId(data);
+          if (!prepId) return;
+          const qty = extractOrderPans(data);
+          if (!(qty > 0)) return;
+          const venue = canonicalizeVenueName(data.venue);
+          const entry = ensureEntry(prepId);
+          entry.total += qty;
+          if (venue) entry.byVenue[venue] = (entry.byVenue[venue] || 0) + qty;
+          entry.breakdown.addon = (entry.breakdown.addon || 0) + qty;
+        });
+      } catch (err) {
+        console.warn("fetchSentTotalsForPrepPars(addon) failed:", err);
+      }
+    }
+  }
+
+  return totals;
+}
+
+function parsePrepNumber(value) {
+  if (value === null || value === undefined) return 0;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  const num = Number(String(value).replace(/[^0-9.\-]/g, ''));
+  return Number.isFinite(num) ? num : 0;
+}
+
+function formatPrepNumber(n) {
+  const num = Number(n);
+  if (!Number.isFinite(num)) return "0";
+  return num % 1 ? num.toFixed(2) : String(num);
+}
+
+function decodePrepVenues(encoded = '') {
+  if (!encoded) return [];
+  try {
+    return decodeURIComponent(encoded)
+      .split('|')
+      .map(v => v.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+async function fetchPreppedTotalsForSinglePrep(dateStr, prepId) {
+  const result = { total: 0, breakdown: {}, combinedVenues: [], hasCombinedLog: false };
+  if (!dateStr || !prepId) return result;
+
+  try {
+    const snap = await getDocs(query(
+      collection(db, "prepLogs"),
+      where("date", "==", dateStr),
+      where("prepId", "==", prepId)
+    ));
+
+    snap.forEach(docSnap => {
+      const data = docSnap.data() || {};
+      const venue = data.venue;
+      const pans = Number(data.pans || 0);
+      if (!Number.isFinite(pans) || pans < 0) return;
+
+      result.total += pans;
+      if (venue === COMBINED_VENUE_KEY) {
+        result.hasCombinedLog = true;
+        result.breakdown[COMBINED_VENUE_KEY] = pans;
+        if (Array.isArray(data.combinedVenues) && data.combinedVenues.length) {
+          result.combinedVenues = data.combinedVenues;
+        }
+      } else if (venue) {
+        result.breakdown[venue] = (result.breakdown[venue] || 0) + pans;
+      }
+    });
+  } catch (err) {
+    console.warn("fetchPreppedTotalsForSinglePrep failed:", err);
+  }
+
+  return result;
+}
+
+async function fetchLeftoverForSinglePrep(serviceDate, prepId) {
+  const id = serviceDate && prepId ? `${serviceDate}|${prepId}` : null;
+  if (!id) return { leftover: 0, combinedVenues: [] };
+
+  try {
+    const ref = doc(db, PREP_LEFTOVER_COLLECTION, id);
+    const snap = await getDoc(ref);
+    if (!snap.exists()) return { leftover: 0, combinedVenues: [] };
+    const data = snap.data() || {};
+    return {
+      leftover: Number(data.leftover ?? data.qty ?? 0) || 0,
+      combinedVenues: Array.isArray(data.combinedVenues) ? data.combinedVenues : [],
+    };
+  } catch (err) {
+    console.warn("fetchLeftoverForSinglePrep failed:", err);
+    return { leftover: 0, combinedVenues: [] };
+  }
+}
+
+async function fetchSentTotalsForSinglePrep(dateStr, { recipeId, recipeNo } = {}) {
+  const totals = { total: 0, byVenue: {}, breakdown: {} };
+  if (!dateStr || (!recipeId && !recipeNo)) return totals;
+
+  const ordersRef = collection(db, "orders");
+  const addOrder = (data, key) => {
+    const qty = extractOrderPans(data);
+    if (!(qty > 0)) return;
+    const venue = canonicalizeVenueName(data.venue);
+    totals.total += qty;
+    if (venue) totals.byVenue[venue] = (totals.byVenue[venue] || 0) + qty;
+    if (key) totals.breakdown[key] = (totals.breakdown[key] || 0) + qty;
+  };
+
+  try {
+    const startFilters = [
+      where("type", "==", "starting-par"),
+      where("date", "==", dateStr),
+    ];
+    if (recipeId) {
+      startFilters.push(where("recipeId", "==", recipeId));
+    } else if (recipeNo) {
+      startFilters.push(where("recipeNo", "==", recipeNo));
+    }
+    const startSnap = await getDocs(query(ordersRef, ...startFilters));
+    startSnap.forEach(docSnap => addOrder(docSnap.data() || {}, "starting"));
+  } catch (err) {
+    console.warn("fetchSentTotalsForSinglePrep(starting) failed:", err);
+  }
+
+  if (recipeNo) {
+    const addonStatuses = ["sent", "received"];
+    for (const status of addonStatuses) {
+      try {
+        const addonSnap = await getDocs(query(
+          ordersRef,
+          where("type", "==", "addon"),
+          where("date", "==", dateStr),
+          where("status", "==", status),
+          where("recipeNo", "==", recipeNo)
+        ));
+        addonSnap.forEach(docSnap => addOrder(docSnap.data() || {}, "addon"));
+      } catch (err) {
+        console.warn("fetchSentTotalsForSinglePrep(addon) failed:", err);
+      }
+    }
+  }
 
   return totals;
 }
@@ -1093,25 +1478,49 @@ function renderPrepParsTable(items, tbody) {
   tbody.innerHTML = "";
   for (const it of items) {
     const tr = document.createElement("tr");
-    const remaining = Math.max(0, Number(it.prepPar) - Number(it.preppedToday));
+    const venuesForSave = it.hasCombinedLog && Array.isArray(it.combinedVenues) && it.combinedVenues.length
+      ? it.combinedVenues
+      : Array.isArray(it.venues) ? it.venues : [];
+    const leftoverValue = Number.isFinite(Number(it.leftover)) ? String(Number(it.leftover)) : "";
+    const needPlaceholder = Number.isFinite(Number(it.needToPrep)) ? formatPrepNumber(it.needToPrep) : "0";
 
     tr.innerHTML = `
-      <td data-label="Venue">${it.venue}</td>
+      <td data-label="Venue">${escapeHtml(it.venueLabel || "")}</td>
       <td data-label="Area">${titleCase(it.category)}</td>
       <td data-label="Item">${it.recipeNo || ""} — ${escapeHtml(it.description || "")}</td>
-      <td data-label="Prep Par" style="text-align:right;">${it.prepPar}</td>
-      <td data-label="Prepped Today" style="text-align:right;">${it.preppedToday}</td>
+      <td data-label="Prep Par" style="text-align:right;">${formatPrepNumber(it.prepPar)}</td>
+      <td data-label="Leftover">
+        <input
+          type="text"
+          inputmode="decimal"
+          class="leftover-input"
+          style="width:90px;text-align:right;"
+          placeholder="0"
+          value="${leftoverValue}"
+          data-prep-id="${it.prepId}"
+          data-venue="${COMBINED_VENUE_KEY}"
+          data-venues="${encodeURIComponent((venuesForSave || []).join("|"))}"
+          data-recipe-no="${it.recipeNo || ""}"
+          data-recipe-id="${it.recipeId || ""}"
+          data-category="${it.category || ""}"
+        />
+      </td>
+      <td data-label="Prepped Today" style="text-align:right;">${formatPrepNumber(it.preppedToday)}</td>
+      <td data-label="Available" style="text-align:right;">${formatPrepNumber(it.available)}</td>
+      <td data-label="Need to Prep" style="text-align:right;">${formatPrepNumber(it.needToPrep)}</td>
       <td data-label="Enter Pans Made">
         <input
           type="text"
           inputmode="decimal"
           class="prep-input"
           style="width:90px;text-align:right;"
-          placeholder="${remaining}"
+          placeholder="${needPlaceholder}"
           value=""
           data-prep-id="${it.prepId}"
-          data-venue="${it.venue}"
+          data-venue="${COMBINED_VENUE_KEY}"
+          data-venues="${encodeURIComponent((venuesForSave || []).join("|"))}"
           data-recipe-no="${it.recipeNo || ""}"
+          data-recipe-id="${it.recipeId || ""}"
           data-category="${it.category || ""}"
         />
       </td>
@@ -1119,50 +1528,314 @@ function renderPrepParsTable(items, tbody) {
         <button class="save-btn" onclick="savePrepPans(this)">Save</button>
       </td>
     `;
+    const venueList = Array.isArray(venuesForSave) ? venuesForSave : [];
+    applyPrepRowTooltip(tr, {
+      venuesList: venueList,
+      available: Number(it.available),
+      hasCombinedLog: Boolean(it.hasCombinedLog),
+      preppedBreakdown: it.preppedBreakdown,
+      preppedToday: Number(it.preppedToday),
+      leftover: Number(it.leftover),
+      sentTotal: Number(it.sentTotal),
+      sentByVenue: it.sentByVenue,
+    });
     tbody.appendChild(tr);
   }
 
   // math inputs like 2*3, 10/4, etc., same as other screens
   enableMathOnInputs(".prep-input", tbody);
+  enableMathOnInputs(".leftover-input", tbody);
 }
 
 
 
-async function savePrepPans(btn) {
-  const row  = btn.closest("tr");
-  const input = row?.querySelector(".prep-input");
-  if (!input) return;
 
-  const v = normalizeQtyInputValue(input);
-  if (!Number.isFinite(v) || v < 0) {
-    alert("Enter a valid pans number (0 or more).");
+function applyPrepRowTooltip(row, meta = {}) {
+  const {
+    venuesList = [],
+    available,
+    hasCombinedLog,
+    preppedBreakdown = {},
+    preppedToday = 0,
+    leftover = 0,
+    sentTotal = 0,
+    sentByVenue = {},
+  } = meta;
+
+  const tooltipChunks = [];
+  if (Array.isArray(venuesList) && venuesList.length) {
+    tooltipChunks.push(`Venues: ${venuesList.join(", ")}`);
+  }
+
+  if (Number.isFinite(available)) {
+    tooltipChunks.push(`Available: ${formatPrepNumber(available)}`);
+  }
+
+  if (hasCombinedLog) {
+    tooltipChunks.push(`Prepped: ${formatPrepNumber(preppedToday)}`);
+  } else if (Array.isArray(venuesList) && venuesList.length) {
+    const parts = venuesList
+      .map(name => {
+        const val = preppedBreakdown?.[name];
+        if (Number.isFinite(val)) {
+          return `${name} (${formatPrepNumber(val)})`;
+        }
+        return null;
+      })
+      .filter(Boolean);
+    if (parts.length) {
+      tooltipChunks.push(`Prepped: ${parts.join(", ")}`);
+    }
+  }
+
+  if (Number.isFinite(leftover) && leftover > 0) {
+    tooltipChunks.push(`Leftover: ${formatPrepNumber(leftover)}`);
+  }
+
+  if (Number.isFinite(sentTotal) && sentTotal > 0) {
+    const sentParts = Object.entries(sentByVenue || {})
+      .map(([venueName, qty]) => `${venueName}: ${formatPrepNumber(qty)}`)
+      .filter(Boolean);
+    if (sentParts.length) {
+      tooltipChunks.push(`Sent: ${sentParts.join(", ")}`);
+    } else {
+      tooltipChunks.push(`Sent: ${formatPrepNumber(sentTotal)}`);
+    }
+  }
+
+  const tooltip = tooltipChunks.filter(Boolean).join(" • ");
+  if (tooltip) {
+    row.title = tooltip;
+  } else {
+    row.removeAttribute("title");
+  }
+}
+
+async function refreshPrepParRow(row, context = {}) {
+  const prepInput = row?.querySelector(".prep-input");
+  const leftoverInput = row?.querySelector(".leftover-input");
+  const datasetSource = prepInput || leftoverInput;
+  const prepId = context.prepId || datasetSource?.dataset.prepId;
+  if (!prepId) return;
+
+  const recipeNo = context.recipeNo || datasetSource?.dataset.recipeNo || "";
+  const recipeId = context.recipeId || datasetSource?.dataset.recipeId || "";
+  const today = getTodayDate();
+  const serviceDate = getPrepServiceDate();
+
+  const prepParCell = row.querySelector('td[data-label=\"Prep Par\"]');
+  const preppedCell = row.querySelector('td[data-label=\"Prepped Today\"]');
+  const availableCell = row.querySelector('td[data-label=\"Available\"]');
+  const needCell = row.querySelector('td[data-label=\"Need to Prep\"]');
+
+  const prepParValue = parsePrepNumber(prepParCell?.textContent);
+  const previousPrepped = parsePrepNumber(preppedCell?.textContent);
+  const previousAvailable = parsePrepNumber(availableCell?.textContent);
+  const previousLeftover = parsePrepNumber(leftoverInput?.value);
+
+  const overridePrepped = context.overridePrepped;
+  const overrideLeftover = context.overrideLeftover;
+
+  let venuesForSave = decodePrepVenues(datasetSource?.dataset.venues || "");
+
+  let preppedTotals = {
+    total: Number.isFinite(overridePrepped) ? Number(overridePrepped) : previousPrepped,
+    breakdown: {},
+    combinedVenues: venuesForSave,
+    hasCombinedLog: Boolean(overridePrepped !== undefined),
+  };
+
+  let leftover = Number.isFinite(overrideLeftover) ? Number(overrideLeftover) : previousLeftover;
+
+  const derivedSent = preppedTotals.total + leftover - previousAvailable;
+  let sentTotals = {
+    total: Number.isFinite(derivedSent) ? derivedSent : 0,
+    byVenue: {},
+    breakdown: {},
+  };
+
+  try {
+    const fetched = await fetchPreppedTotalsForSinglePrep(today, prepId);
+    if (fetched) {
+      preppedTotals = fetched;
+    }
+  } catch (err) {
+    console.warn("fetchPreppedTotalsForSinglePrep failed:", err);
+  }
+
+  try {
+    const fetchedLeftover = await fetchLeftoverForSinglePrep(serviceDate, prepId);
+    if (fetchedLeftover) {
+      leftover = Number(fetchedLeftover.leftover || 0);
+      if (Array.isArray(fetchedLeftover.combinedVenues) && fetchedLeftover.combinedVenues.length) {
+        venuesForSave = fetchedLeftover.combinedVenues;
+      }
+    }
+  } catch (err) {
+    console.warn("fetchLeftoverForSinglePrep failed:", err);
+  }
+
+  try {
+    const fetchedSent = await fetchSentTotalsForSinglePrep(today, { recipeId, recipeNo });
+    if (fetchedSent) {
+      sentTotals = fetchedSent;
+    }
+  } catch (err) {
+    console.warn("fetchSentTotalsForSinglePrep failed:", err);
+  }
+
+  if (Array.isArray(preppedTotals.combinedVenues) && preppedTotals.combinedVenues.length) {
+    venuesForSave = preppedTotals.combinedVenues;
+  }
+
+  preppedTotals.breakdown = preppedTotals.breakdown || {};
+  sentTotals.byVenue = sentTotals.byVenue || {};
+  sentTotals.breakdown = sentTotals.breakdown || {};
+
+  venuesForSave = Array.from(new Set((venuesForSave || []).filter(Boolean)));
+
+  const preppedToday = Number(preppedTotals.total || 0);
+  const sentTotal = Number(sentTotals.total || 0);
+  const availableRaw = preppedToday + leftover - sentTotal;
+  const needToPrep = Math.max(0, prepParValue - leftover);
+
+  if (preppedCell) preppedCell.textContent = formatPrepNumber(preppedToday);
+  if (availableCell) availableCell.textContent = formatPrepNumber(availableRaw);
+  if (needCell) needCell.textContent = formatPrepNumber(needToPrep);
+
+  if (leftoverInput) {
+    leftoverInput.value = Number.isFinite(leftover) ? String(leftover) : "";
+    leftoverInput.dataset.venues = encodeURIComponent((venuesForSave || []).join("|"));
+  }
+
+  if (prepInput) {
+    prepInput.placeholder = formatPrepNumber(needToPrep);
+    prepInput.dataset.venues = encodeURIComponent((venuesForSave || []).join("|"));
+  }
+
+  applyPrepRowTooltip(row, {
+    venuesList: venuesForSave,
+    available: availableRaw,
+    hasCombinedLog: Boolean(preppedTotals.hasCombinedLog),
+    preppedBreakdown: preppedTotals.breakdown,
+    preppedToday,
+    leftover,
+    sentTotal,
+    sentByVenue: sentTotals.byVenue,
+  });
+}
+
+async function savePrepPans(btn) {
+  const row = btn.closest("tr");
+  if (!row) return;
+
+  const prepInput = row.querySelector(".prep-input");
+  const leftoverInput = row.querySelector(".leftover-input");
+
+  let hasPrepped = false;
+  let preppedValue = 0;
+
+  if (prepInput) {
+    const raw = (prepInput.value || "").trim();
+    if (raw.length > 0) {
+      const parsed = normalizeQtyInputValue(prepInput);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        alert("Enter a valid pans number (0 or more).");
+        return;
+      }
+      hasPrepped = true;
+      preppedValue = Number(parsed);
+    }
+  }
+
+  let hasLeftover = false;
+  let leftoverValue = 0;
+
+  if (leftoverInput) {
+    const raw = (leftoverInput.value || "").trim();
+    if (raw.length > 0) {
+      const parsed = normalizeQtyInputValue(leftoverInput);
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        alert("Enter a valid leftover number (0 or more).");
+        return;
+      }
+      hasLeftover = true;
+      leftoverValue = Number(parsed);
+    }
+  }
+
+  if (!hasPrepped && !hasLeftover) {
+    alert("Enter pans made and/or leftover amount to save.");
     return;
   }
 
-  const prepId   = input.dataset.prepId;
-  const recipeNo = input.dataset.recipeNo || "";
-  const venue    = input.dataset.venue;
-  const category = (input.dataset.category || "").toUpperCase();
-  const today    = getTodayDate();
+  const datasetSource = prepInput || leftoverInput;
+  if (!datasetSource) return;
 
-  const docId = `${today}|${prepId}|${venue}`;
-  const ref   = doc(db, "prepLogs", docId);
+  const prepId = datasetSource.dataset.prepId;
+  const recipeNo = datasetSource.dataset.recipeNo || "";
+  const recipeId = datasetSource.dataset.recipeId || "";
+  const venueKey = datasetSource.dataset.venue || COMBINED_VENUE_KEY;
+  const category = (datasetSource.dataset.category || "").toUpperCase();
+  const today = getTodayDate();
+  const serviceDate = getPrepServiceDate();
 
+  let combinedTargets = [];
   try {
-    await setDoc(ref, {
+    const raw = datasetSource.dataset.venues ? decodeURIComponent(datasetSource.dataset.venues) : "";
+    combinedTargets = raw ? raw.split("|").map(v => v.trim()).filter(Boolean) : [];
+  } catch {}
+
+  const docVenueKey = venueKey || COMBINED_VENUE_KEY;
+  const tasks = [];
+
+  if (hasPrepped) {
+    const docId = `${today}|${prepId}|${docVenueKey}`;
+    tasks.push(setDoc(doc(db, "prepLogs", docId), {
       date: today,
       prepId,
       recipeNo,
-      venue,
+      venue: docVenueKey,
       category,
-      pans: Number(v),
+      pans: Number(preppedValue),
+      combinedVenues: docVenueKey === COMBINED_VENUE_KEY ? combinedTargets : [],
+      logScope: docVenueKey === COMBINED_VENUE_KEY ? "combined" : "single",
       updatedAt: serverTimestamp(),
-    }, { merge: true });
+    }, { merge: true }));
+  }
+
+  if (hasLeftover) {
+    const leftoverId = `${serviceDate}|${prepId}`;
+    tasks.push(setDoc(doc(db, PREP_LEFTOVER_COLLECTION, leftoverId), {
+      serviceDate,
+      prepId,
+      recipeNo,
+      recipeId,
+      venue: docVenueKey,
+      leftover: Number(leftoverValue),
+      combinedVenues: docVenueKey === COMBINED_VENUE_KEY ? combinedTargets : [],
+      updatedAt: serverTimestamp(),
+    }, { merge: true }));
+  }
+
+  try {
+    await Promise.all(tasks);
 
     row.style.backgroundColor = "rgba(28, 150, 80, 0.12)";
     setTimeout(() => (row.style.backgroundColor = ""), 450);
 
-    loadMainKitchenPrepPars();
+    if (prepInput && hasPrepped) {
+      prepInput.value = "";
+    }
+
+    await refreshPrepParRow(row, {
+      prepId,
+      recipeNo,
+      recipeId,
+      category,
+      overridePrepped: hasPrepped ? Number(preppedValue) : undefined,
+      overrideLeftover: hasLeftover ? Number(leftoverValue) : undefined,
+    });
   } catch (e) {
     console.error("savePrepPans failed:", e);
     alert("Failed to save prep value.");
@@ -1203,6 +1876,21 @@ function getTodayDate() {
   return `${year}-${month}-${day}`;
 }
 
+
+function getPrepServiceDate() {
+  const now = new Date();
+  const hawaiiOffsetMs = -10 * 60 * 60 * 1000;
+  const hawaiiNow = new Date(now.getTime() + hawaiiOffsetMs);
+  const hour = hawaiiNow.getUTCHours();
+  const base = new Date(hawaiiNow);
+  if (hour >= 18) {
+    base.setUTCDate(base.getUTCDate() + 1);
+  }
+  const year = base.getUTCFullYear();
+  const month = String(base.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(base.getUTCDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
 
 // ========================= SCALE INTEGRATION (Web Serial + Keyboard Wedge) =========================
 // Usage:
@@ -4073,7 +4761,7 @@ window.renderMainKitchenPars = function () {
               data.sentPars?.[name]?.[recipe.id] ??
               0
             );
-            const qtyDisplay = fmt(qty);
+            const qtyDisplay = formatPrepNumber(qty);
             const safeName = escapeHtml(name);
             return name === venue
               ? `${safeName}: <strong>${qtyDisplay}</strong>`
