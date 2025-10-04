@@ -1993,14 +1993,16 @@ function escapeHtml(s) {
 
 
 
+const HAWAII_OFFSET_MS = -10 * 60 * 60 * 1000;
+
+function getHawaiiNow() {
+  const now = new Date();
+  return new Date(now.getTime() + HAWAII_OFFSET_MS);
+}
+
 // 🗓️ Utility: format date to YYYY-MM-DD
 function getTodayDate() {
-  // Get current UTC time
-  const now = new Date();
-
-  // Convert to Hawaii time (UTC-10)
-  const hawaiiOffsetMs = -10 * 60 * 60 * 1000;
-  const hawaiiNow = new Date(now.getTime() + hawaiiOffsetMs);
+  const hawaiiNow = getHawaiiNow();
 
   // Format as YYYY-MM-DD
   const year = hawaiiNow.getUTCFullYear();
@@ -2008,6 +2010,14 @@ function getTodayDate() {
   const day = String(hawaiiNow.getUTCDate()).padStart(2, '0');
 
   return `${year}-${month}-${day}`;
+}
+
+function isGuestCountLocked() {
+  const hawaiiNow = getHawaiiNow();
+  const hour = hawaiiNow.getUTCHours();
+  const minute = hawaiiNow.getUTCMinutes();
+
+  return hour > 15 || (hour === 15 && minute >= 0);
 }
 
 
@@ -2666,10 +2676,53 @@ window.serialProbe = async function(options = {}) {
 // 🔄 Save guest counts to Firestore
 const guestForm = document.getElementById("guest-count-form");
 const statusDiv = document.getElementById("guest-count-status");
+const guestCountLockMessage = document.getElementById("guest-count-lock-message");
+const guestCountSelects = [
+  document.getElementById("count-Aloha"),
+  document.getElementById("count-Ohana"),
+  document.getElementById("count-Gateway")
+].filter(Boolean);
+const guestCountSaveButton = guestForm ? guestForm.querySelector(".save-btn") : null;
+
+function applyGuestCountLockState() {
+  const locked = isGuestCountLocked();
+
+  guestCountSelects.forEach((select) => {
+    select.disabled = locked;
+    select.setAttribute("aria-disabled", locked ? "true" : "false");
+  });
+
+  if (guestCountSaveButton) {
+    guestCountSaveButton.disabled = locked;
+    guestCountSaveButton.setAttribute("aria-disabled", locked ? "true" : "false");
+  }
+
+  if (guestCountLockMessage) {
+    guestCountLockMessage.textContent = locked
+      ? "Guest counts lock after 3:00 pm HST. Inputs reopen after midnight."
+      : "Guest counts can be updated until 3:00 pm HST.";
+    guestCountLockMessage.setAttribute("aria-live", "polite");
+  }
+
+  return locked;
+}
+
+if (guestForm) {
+  applyGuestCountLockState();
+  setInterval(applyGuestCountLockState, 60 * 1000);
+}
 
 if (guestForm) {
   guestForm.addEventListener("submit", async (e) => {
     e.preventDefault();
+
+    if (applyGuestCountLockState()) {
+      if (statusDiv) {
+        statusDiv.textContent = "⚠️ Guest counts are locked after 3:00 pm HST.";
+        statusDiv.style.color = "tomato";
+      }
+      return;
+    }
 
     const counts = {
       Aloha: parseInt(document.getElementById("count-Aloha").value),
