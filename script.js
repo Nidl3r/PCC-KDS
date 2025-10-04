@@ -3671,13 +3671,12 @@ const order = {
 async function updateCostSummaryForVenue(venueName) {
   const today = getTodayDate();
 
-  // Pull only today's SENT add-ons & starting-par for this venue
+  // Pull today's sent/received add-ons & starting-par for this venue
   const q = query(
     collection(db, "orders"),
     where("venue", "==", venueName),
     where("date", "==", today),
-    where("status", "==", "sent"),
-    where("type", "in", ["addon", "starting-par"])
+    where("status", "in", ["sent", "received"])
   );
   const snapshot = await getDocs(q);
 
@@ -3715,6 +3714,12 @@ async function updateCostSummaryForVenue(venueName) {
   snapshot.forEach((s) => {
     const d = s.data();
     if (!d) return;
+
+    const status = String(d.status || "").toLowerCase();
+    if (status !== "sent" && status !== "received") return;
+
+    const type = String(d.type || "").toLowerCase();
+    if (type !== "addon" && type !== "starting-par") return;
 
     // 1) If totalCost is present, trust it (kitchen already calculated from the true send)
     const storedTotal = Number(d.totalCost || 0);
