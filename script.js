@@ -28,6 +28,9 @@ import {
 
 window.startingCache = {};
 
+window.mainKitchenPrepAvailability = window.mainKitchenPrepAvailability || {};
+const ADDON_ORDER_STATUSES_FOR_PREP = ["open", "fired", "Ready to Send", "sent", "received"];
+
 const VENUE_CLASS_MAP = {
   aloha: "venue-aloha",
   ohana: "venue-ohana",
@@ -952,11 +955,15 @@ window.loadMainKitchenPrepPars   = loadMainKitchenPrepPars;
 window.reloadMainKitchenPrepPars = loadMainKitchenPrepPars;
 window.savePrepPans              = savePrepPans;
 
-async function loadMainKitchenPrepPars() {
+async function loadMainKitchenPrepPars(options = {}) {
+  const { silent = false } = options || {};
   const tbody = document.getElementById("prepParsTbody");
-  if (!tbody) return;
+  const canRender = Boolean(tbody);
+  const shouldRender = canRender && !silent;
 
-  showTableLoading(tbody, "Loading Prep Pars…");
+  if (shouldRender) {
+    showTableLoading(tbody, "Loading Prep Pars…");
+  }
 
   const today = getTodayDate();
 
@@ -1126,6 +1133,18 @@ async function loadMainKitchenPrepPars() {
     });
   });
 
+  items.forEach((it) => {
+    const key = normalizeRecipeNo(it.recipeNo);
+    if (!key) return;
+    setPrepAvailabilityForRecipe(it.recipeNo, {
+      available: it.available,
+      leftover: it.leftover,
+      preppedToday: it.preppedToday,
+      needToPrep: it.needToPrep,
+    }, { silent: true });
+  });
+  refreshAllAddonOptionLabels();
+
   // 6) Sort aggregated rows: Gateway → Aloha → Ohana → Concessions, then by category, then recipeNo
   items.sort((a, b) => {
     const vi = a.sortIndex;
@@ -1137,7 +1156,9 @@ async function loadMainKitchenPrepPars() {
   });
 
   // 7) Render
-  renderPrepParsTable(items, tbody);
+  if (shouldRender) {
+    renderPrepParsTable(items, tbody);
+  }
 }
 
 // Pick a par from a map like { "250": 110, "300": 130, ... } based on today's guest count.
@@ -1306,7 +1327,7 @@ async function fetchSentTotalsForPrepPars(dateStr, recipeIndex = {}) {
     }
   }
 
-  const addonStatuses = ["sent", "received"];
+  const addonStatuses = ADDON_ORDER_STATUSES_FOR_PREP;
   for (const status of addonStatuses) {
     for (const chunk of venueChunks) {
       try {
@@ -1362,6 +1383,101 @@ function decodePrepVenues(encoded = '') {
   } catch {
     return [];
   }
+}
+
+function getPrepAvailabilityStore() {
+  window.mainKitchenPrepAvailability = window.mainKitchenPrepAvailability || {};
+  return window.mainKitchenPrepAvailability;
+}
+
+function normalizeRecipeNo(recipeNo) {
+  return typeof recipeNo === 'string' ? recipeNo.trim().toUpperCase() : '';
+}
+
+function setPrepAvailabilityForRecipe(recipeNo, info = {}, options = {}) {
+  const key = normalizeRecipeNo(recipeNo);
+  if (!key) return;
+  const store = getPrepAvailabilityStore();
+  const existing = store[key] || {};
+  const next = {
+    available: Math.max(0, Number(info.available ?? existing.available ?? 0) || 0),
+    leftover: Number(info.leftover ?? existing.leftover ?? 0) || 0,
+    preppedToday: Number(info.preppedToday ?? existing.preppedToday ?? 0) || 0,
+    needToPrep: Number(info.needToPrep ?? existing.needToPrep ?? 0) || 0,
+    updatedAt: Date.now(),
+  };
+  store[key] = next;
+  if (!options.silent) {
+    refreshAddonOptionLabels(recipeNo);
+  }
+}
+
+function adjustPrepAvailabilityForRecipe(recipeNo, delta) {
+  const key = normalizeRecipeNo(recipeNo);
+  if (!key) return;
+  const store = getPrepAvailabilityStore();
+  const entry = store[key] || { available: 0, leftover: 0, preppedToday: 0, needToPrep: 0 };
+  const nextAvailable = Math.max(0, Number(entry.available || 0) + Number(delta || 0));
+  store[key] = {
+    ...entry,
+    available: Number.isFinite(nextAvailable) ? nextAvailable : entry.available,
+    updatedAt: Date.now(),
+  };
+  refreshAddonOptionLabels(recipeNo);
+}
+
+function getPrepAvailabilityForRecipe(recipeNo) {
+  const key = normalizeRecipeNo(recipeNo);
+  if (!key) return null;
+  const store = getPrepAvailabilityStore();
+  return store[key] || null;
+}
+
+function buildAddonOptionLabel(recipeNo, description) {
+  const baseNo = recipeNo || '';
+  const baseDesc = description || baseNo;
+  const entry = getPrepAvailabilityForRecipe(baseNo);
+  const baseLabel = baseNo ? `${baseNo} - ${baseDesc}` : baseDesc;
+  if (!entry || !Number.isFinite(entry.available)) return baseLabel;
+  const qty = Number(entry.available);
+  const qtyLabel = qty % 1 ? qty.toFixed(2) : String(qty);
+  return `${baseLabel} — ${qtyLabel} available`;
+}
+
+function refreshAddonOptionLabels(recipeNo) {
+  if (typeof document === 'undefined') return;
+  const key = recipeNo ? normalizeRecipeNo(recipeNo) : null;
+  const selects = document.querySelectorAll('select[data-addon-item-list]');
+  selects.forEach(select => {
+    select.querySelectorAll('option[data-recipe-no]').forEach(opt => {
+      const optionKey = normalizeRecipeNo(opt.dataset.recipeNo);
+      if (key && optionKey !== key) return;
+      const baseNo = opt.dataset.recipeNo || '';
+      const baseDesc = opt.dataset.recipeDesc || opt.textContent || '';
+      opt.textContent = buildAddonOptionLabel(baseNo, baseDesc);
+    });
+  });
+}
+
+function refreshAllAddonOptionLabels() {
+  if (typeof document === 'undefined') return;
+  refreshAddonOptionLabels(null);
+}
+
+let _prepAvailabilityLoadPromise = null;
+async function ensurePrepAvailabilityLoaded() {
+  const store = getPrepAvailabilityStore();
+  if (Object.keys(store).length > 0) return store;
+  if (_prepAvailabilityLoadPromise) return _prepAvailabilityLoadPromise;
+  _prepAvailabilityLoadPromise = (async () => {
+    try {
+      await loadMainKitchenPrepPars({ silent: true });
+    } catch (err) {
+      console.warn("ensurePrepAvailabilityLoaded failed:", err);
+    }
+    return getPrepAvailabilityStore();
+  })();
+  return _prepAvailabilityLoadPromise;
 }
 
 async function fetchPreppedTotalsForSinglePrep(dateStr, prepId) {
@@ -1449,7 +1565,7 @@ async function fetchSentTotalsForSinglePrep(dateStr, { recipeId, recipeNo } = {}
   }
 
   if (recipeNo) {
-    const addonStatuses = ["sent", "received"];
+    const addonStatuses = ADDON_ORDER_STATUSES_FOR_PREP;
     for (const status of addonStatuses) {
       try {
         const addonSnap = await getDocs(query(
@@ -1612,117 +1728,135 @@ function applyPrepRowTooltip(row, meta = {}) {
 }
 
 async function refreshPrepParRow(row, context = {}) {
-  const prepInput = row?.querySelector(".prep-input");
-  const leftoverInput = row?.querySelector(".leftover-input");
-  const datasetSource = prepInput || leftoverInput;
-  const prepId = context.prepId || datasetSource?.dataset.prepId;
-  if (!prepId) return;
-
-  const recipeNo = context.recipeNo || datasetSource?.dataset.recipeNo || "";
-  const recipeId = context.recipeId || datasetSource?.dataset.recipeId || "";
-  const today = getTodayDate();
-  const serviceDate = getPrepServiceDate();
-
-  const prepParCell = row.querySelector('td[data-label=\"Prep Par\"]');
-  const preppedCell = row.querySelector('td[data-label=\"Prepped Today\"]');
-  const availableCell = row.querySelector('td[data-label=\"Available\"]');
-  const needCell = row.querySelector('td[data-label=\"Need to Prep\"]');
-
-  const prepParValue = parsePrepNumber(prepParCell?.textContent);
-  const previousPrepped = parsePrepNumber(preppedCell?.textContent);
-  const previousAvailable = parsePrepNumber(availableCell?.textContent);
-  const previousLeftover = parsePrepNumber(leftoverInput?.value);
-
-  const overridePrepped = context.overridePrepped;
-  const overrideLeftover = context.overrideLeftover;
-
-  let venuesForSave = decodePrepVenues(datasetSource?.dataset.venues || "");
-
-  let preppedTotals = {
-    total: Number.isFinite(overridePrepped) ? Number(overridePrepped) : previousPrepped,
-    breakdown: {},
-    combinedVenues: venuesForSave,
-    hasCombinedLog: Boolean(overridePrepped !== undefined),
-  };
-
-  let leftover = Number.isFinite(overrideLeftover) ? Number(overrideLeftover) : previousLeftover;
-
-  const derivedSent = preppedTotals.total + leftover - previousAvailable;
-  let sentTotals = {
-    total: Number.isFinite(derivedSent) ? derivedSent : 0,
-    byVenue: {},
-    breakdown: {},
-  };
-
   try {
-    const fetched = await fetchPreppedTotalsForSinglePrep(today, prepId);
-    if (fetched) {
-      preppedTotals = fetched;
-    }
-  } catch (err) {
-    console.warn("fetchPreppedTotalsForSinglePrep failed:", err);
-  }
+    const prepInput = row?.querySelector(".prep-input");
+    const leftoverInput = row?.querySelector(".leftover-input");
+    const datasetSource = prepInput || leftoverInput;
+    const prepId = context.prepId || datasetSource?.dataset.prepId;
+    if (!prepId) return;
 
-  try {
-    const fetchedLeftover = await fetchLeftoverForSinglePrep(serviceDate, prepId);
-    if (fetchedLeftover) {
-      leftover = Number(fetchedLeftover.leftover || 0);
-      if (Array.isArray(fetchedLeftover.combinedVenues) && fetchedLeftover.combinedVenues.length) {
-        venuesForSave = fetchedLeftover.combinedVenues;
+    const recipeNo = context.recipeNo || datasetSource?.dataset.recipeNo || "";
+    const recipeId = context.recipeId || datasetSource?.dataset.recipeId || "";
+    const today = getTodayDate();
+    const serviceDate = getPrepServiceDate();
+
+    const prepParCell = row.querySelector('td[data-label="Prep Par"]');
+    const preppedCell = row.querySelector('td[data-label="Prepped Today"]');
+    const availableCell = row.querySelector('td[data-label="Available"]');
+    const needCell = row.querySelector('td[data-label="Need to Prep"]');
+
+    const prepParValue = parsePrepNumber(prepParCell?.textContent);
+    const previousPrepped = parsePrepNumber(preppedCell?.textContent);
+    const previousAvailable = parsePrepNumber(availableCell?.textContent);
+    const previousLeftover = parsePrepNumber(leftoverInput?.value);
+
+    const overridePrepped = context.overridePrepped;
+    const overrideLeftover = context.overrideLeftover;
+
+    let venuesForSave = decodePrepVenues(datasetSource?.dataset.venues || "");
+
+    let preppedTotals = {
+      total: Number.isFinite(overridePrepped) ? Number(overridePrepped) : previousPrepped,
+      breakdown: {},
+      combinedVenues: venuesForSave,
+      hasCombinedLog: Boolean(overridePrepped !== undefined),
+    };
+
+    let leftover = Number.isFinite(overrideLeftover) ? Number(overrideLeftover) : previousLeftover;
+
+    const derivedSent = preppedTotals.total + leftover - previousAvailable;
+    let sentTotals = {
+      total: Number.isFinite(derivedSent) ? derivedSent : 0,
+      byVenue: {},
+      breakdown: {},
+    };
+
+    try {
+      const fetched = await fetchPreppedTotalsForSinglePrep(today, prepId);
+      if (fetched) {
+        preppedTotals = fetched;
       }
+    } catch (err) {
+      console.warn("fetchPreppedTotalsForSinglePrep failed:", err);
     }
-  } catch (err) {
-    console.warn("fetchLeftoverForSinglePrep failed:", err);
-  }
 
-  try {
-    const fetchedSent = await fetchSentTotalsForSinglePrep(today, { recipeId, recipeNo });
-    if (fetchedSent) {
-      sentTotals = fetchedSent;
+    try {
+      const fetchedLeftover = await fetchLeftoverForSinglePrep(serviceDate, prepId);
+      if (fetchedLeftover) {
+        leftover = Number(fetchedLeftover.leftover || 0);
+        if (Array.isArray(fetchedLeftover.combinedVenues) && fetchedLeftover.combinedVenues.length) {
+          venuesForSave = fetchedLeftover.combinedVenues;
+        }
+      }
+    } catch (err) {
+      console.warn("fetchLeftoverForSinglePrep failed:", err);
     }
+
+    try {
+      const fetchedSent = await fetchSentTotalsForSinglePrep(today, { recipeId, recipeNo });
+      if (fetchedSent) {
+        sentTotals = fetchedSent;
+      }
+    } catch (err) {
+      console.warn("fetchSentTotalsForSinglePrep failed:", err);
+    }
+
+    if (Array.isArray(preppedTotals.combinedVenues) && preppedTotals.combinedVenues.length) {
+      venuesForSave = preppedTotals.combinedVenues;
+    }
+
+    preppedTotals.breakdown = preppedTotals.breakdown || {};
+    sentTotals.byVenue = sentTotals.byVenue || {};
+    sentTotals.breakdown = sentTotals.breakdown || {};
+
+    venuesForSave = Array.from(new Set((venuesForSave || []).filter(Boolean)));
+
+    const preppedToday = Number(preppedTotals.total || 0);
+    const sentTotal = Number(sentTotals.total || 0);
+    const availableRaw = preppedToday + leftover - sentTotal;
+    const needToPrep = Math.max(0, prepParValue - leftover);
+
+    if (preppedCell) preppedCell.textContent = formatPrepNumber(preppedToday);
+    if (availableCell) availableCell.textContent = formatPrepNumber(availableRaw);
+    if (needCell) needCell.textContent = formatPrepNumber(needToPrep);
+
+    if (leftoverInput) {
+      leftoverInput.value = Number.isFinite(leftover) ? String(leftover) : "";
+      leftoverInput.dataset.venues = encodeURIComponent((venuesForSave || []).join("|"));
+    }
+
+    if (prepInput) {
+      prepInput.placeholder = formatPrepNumber(needToPrep);
+      prepInput.dataset.venues = encodeURIComponent((venuesForSave || []).join("|"));
+    }
+
+    if (recipeNo) {
+      setPrepAvailabilityForRecipe(recipeNo, {
+        available: availableRaw,
+        leftover,
+        preppedToday,
+        needToPrep,
+      });
+    }
+
+    applyPrepRowTooltip(row, {
+      venuesList: venuesForSave,
+      available: availableRaw,
+      hasCombinedLog: Boolean(preppedTotals.hasCombinedLog),
+      preppedBreakdown: preppedTotals.breakdown,
+      preppedToday,
+      leftover,
+      sentTotal,
+      sentByVenue: sentTotals.byVenue,
+    });
   } catch (err) {
-    console.warn("fetchSentTotalsForSinglePrep failed:", err);
+    console.warn("refreshPrepParRow failed, falling back to full reload:", err);
+    try {
+      loadMainKitchenPrepPars();
+    } catch (reloadErr) {
+      console.warn(reloadErr);
+    }
   }
-
-  if (Array.isArray(preppedTotals.combinedVenues) && preppedTotals.combinedVenues.length) {
-    venuesForSave = preppedTotals.combinedVenues;
-  }
-
-  preppedTotals.breakdown = preppedTotals.breakdown || {};
-  sentTotals.byVenue = sentTotals.byVenue || {};
-  sentTotals.breakdown = sentTotals.breakdown || {};
-
-  venuesForSave = Array.from(new Set((venuesForSave || []).filter(Boolean)));
-
-  const preppedToday = Number(preppedTotals.total || 0);
-  const sentTotal = Number(sentTotals.total || 0);
-  const availableRaw = preppedToday + leftover - sentTotal;
-  const needToPrep = Math.max(0, prepParValue - leftover);
-
-  if (preppedCell) preppedCell.textContent = formatPrepNumber(preppedToday);
-  if (availableCell) availableCell.textContent = formatPrepNumber(availableRaw);
-  if (needCell) needCell.textContent = formatPrepNumber(needToPrep);
-
-  if (leftoverInput) {
-    leftoverInput.value = Number.isFinite(leftover) ? String(leftover) : "";
-    leftoverInput.dataset.venues = encodeURIComponent((venuesForSave || []).join("|"));
-  }
-
-  if (prepInput) {
-    prepInput.placeholder = formatPrepNumber(needToPrep);
-    prepInput.dataset.venues = encodeURIComponent((venuesForSave || []).join("|"));
-  }
-
-  applyPrepRowTooltip(row, {
-    venuesList: venuesForSave,
-    available: availableRaw,
-    hasCombinedLog: Boolean(preppedTotals.hasCombinedLog),
-    preppedBreakdown: preppedTotals.breakdown,
-    preppedToday,
-    leftover,
-    sentTotal,
-    sentByVenue: sentTotals.byVenue,
-  });
 }
 
 async function savePrepPans(btn) {
@@ -3385,7 +3519,10 @@ async function applyCategoryFilter(area) {
   const select = document.getElementById(`${area.toLowerCase()}Item`);
   if (!select) return;
 
+  await ensurePrepAvailabilityLoaded();
+
   select.innerHTML = "<option value=''>-- Select Item --</option>";
+  select.dataset.addonItemList = "true";
 
   // Set venueCodes based on area
   const venueCodes = area.toLowerCase() === "aloha" ? ["b001"]
@@ -3418,13 +3555,19 @@ async function applyCategoryFilter(area) {
 
     filteredDocs.forEach(recipe => {
       const option = document.createElement("option");
-      option.value = recipe.recipeNo;
-      option.textContent = `${recipe.recipeNo} - ${recipe.description}`;
+      const recipeNo = recipe.recipeNo || "";
+      const description = recipe.description || recipeNo;
+      option.value = recipeNo;
+      option.dataset.recipeNo = recipeNo;
+      option.dataset.recipeDesc = description;
+      option.textContent = buildAddonOptionLabel(recipeNo, description);
       select.appendChild(option);
     });
 
     if (select.children.length === 1) {
       console.warn("⚠️ No recipes matched the filters.");
+    } else {
+      refreshAddonOptionLabels();
     }
 
   } catch (err) {
@@ -3503,6 +3646,8 @@ const order = {
 };
 
     await addDoc(collection(db, "orders"), order);
+
+    adjustPrepAvailabilityForRecipe(recipeNo, -qty);
 
     console.log("✅ Order sent:", order);
     qtyInput.value = 1;
@@ -6328,6 +6473,8 @@ const station = window.stationForOrder({ ...recipeData, recipeNo }, "Gateway");
 
     await addDoc(collection(db, "orders"), order);
 
+    adjustPrepAvailabilityForRecipe(recipeNo, -qty);
+
     console.log("✅ Gateway order sent:", order);
     qtyInput.value = 1;
     itemSelect.selectedIndex = 0;
@@ -7339,6 +7486,8 @@ const order = {
 
     await addDoc(collection(db, "orders"), order);
 
+    adjustPrepAvailabilityForRecipe(recipeNo, -qty);
+
     console.log("✅ Ohana order sent:", order);
     qtyInput.value = 1;
     itemSelect.selectedIndex = 0;
@@ -7656,6 +7805,8 @@ window.sendConcessionOrder = async function (button) {
     };
 
     await addDoc(collection(db, "orders"), order);
+
+    adjustPrepAvailabilityForRecipe(recipeNo, -qty);
 
     console.log("✅ Concession order sent:", order);
     qtyInput.value = 1;
