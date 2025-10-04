@@ -2036,3 +2036,28 @@ table button {
     padding-inline: clamp(10px, 2.5vw, 18px);
   }
 }
+
+
+/* Add-on item selects stay centered and within viewport */
+select[data-addon-item-list] {
+  width: clamp(180px, 32vw, 340px);
+  max-width: 90vw;
+  display: block;
+  margin: 0 auto;
+  text-align-last: center;
+}
+select[data-addon-item-list] option {
+  white-space: normal;
+}
+
+@media (max-width: 1024px) {
+  select[data-addon-item-list] {
+    width: min(320px, 90vw);
+  }
+}
+
+@media (max-width: 720px) {
+  select[data-addon-item-list] {
+    width: min(280px, 92vw);
+  }
+}
