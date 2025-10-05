@@ -4946,15 +4946,24 @@ window.renderMainKitchenPars = function () {
       const cacheKey  = `${getTodayDate()}|${venue}|${recipe.id}`;
       const cachedVal = window.mainStartingQtyCache[cacheKey] ?? "";
 
+      const description = recipe.description || recipe.recipeNo || recipe.id;
+      const uom = recipe.uom || "ea";
+
       const row = document.createElement("tr");
       row.dataset.recipeId = recipe.id;
       row.dataset.venue    = venue;
+      row.dataset.sentToday = String(Number.isFinite(sentSoFar) ? sentSoFar : 0);
+      row.dataset.displayVenue = venue;
+      if (description) {
+        row.dataset.itemName = description;
+      }
+      if (uom) {
+        row.dataset.uom = uom;
+      }
       decorateVenueRow(row, venue);
 
-      const uom = recipe.uom || "ea";
       const safeVenue = escapeHtml(venue);
       const safeUom = escapeHtml(uom);
-      const description = recipe.description || recipe.recipeNo || recipe.id;
       const safeDescription = escapeHtml(description);
       const showBreakdown = !venueFilter && recipeVenues.length > 1;
       const breakdownParts = showBreakdown
@@ -5083,6 +5092,12 @@ window.sendAllMainKitchenStartingPar = async function () {
     const qty = Number.isFinite(v) ? v : NaN;
     if (!recipeId || !venue || !Number.isFinite(qty) || qty <= 0) continue;
 
+    const canonicalVenue = canonicalizeVenueName?.(venue) || String(venue || "").trim();
+    const confirmed = await confirmStartingParRepeat(row, canonicalVenue, recipeId);
+    if (!confirmed) {
+      continue;
+    }
+
     await window.sendStartingPar(recipeId, venue, qty);
     const cacheKey = input?.getAttribute("data-cache-key");
     if (cacheKey && window.mainStartingQtyCache) delete window.mainStartingQtyCache[cacheKey];
@@ -5094,35 +5109,111 @@ window.sendAllMainKitchenStartingPar = async function () {
 };
 
 
-// 🚫 Do not remove the row; repaint table so the item drops to the bottom and shows totals
-window.sendSingleStartingPar = async function (recipeId, venue, button) {
-  const row = button.closest("tr");
-  const input = row.querySelector(".send-qty-input");
-  const cacheKey = input?.getAttribute("data-cache-key");
+function escapeRegexLiteral(str = "") {
+  return String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
-  // Evaluate/normalize (supports math expressions)
-  const v = normalizeQtyInputValue?.(input);
-  const qtyFromInput = Number.isFinite(v) ? v : NaN;
-  const qtyFromCache = cacheKey != null ? Number(window.mainStartingQtyCache?.[cacheKey]) : NaN;
-  const sendQty = Number.isFinite(qtyFromInput) ? qtyFromInput : qtyFromCache;
+async function confirmStartingParRepeat(row, canonicalVenue, recipeId) {
+  const numbers = [];
+  const pushCandidate = (val) => {
+    if (val === undefined || val === null) return;
+    const num = typeof parsePrepNumber === "function" ? parsePrepNumber(val) : Number(val);
+    if (Number.isFinite(num) && num > 0) {
+      numbers.push(num);
+    }
+  };
 
-  if (!Number.isFinite(sendQty) || sendQty <= 0) {
-    alert("Please enter a valid quantity > 0.");
-    return;
+  pushCandidate(row?.dataset?.sentToday);
+
+  const venueKey = canonicalVenue || row?.dataset?.venue || "";
+  const cacheData = window.startingCache?.MainKitchenAll;
+
+  if (cacheData && venueKey) {
+    pushCandidate(cacheData.sentQtyTotals?.[venueKey]?.[recipeId]);
+    pushCandidate(cacheData.sentPars?.[venueKey]?.[recipeId]);
   }
 
-  await window.sendStartingPar(recipeId, venue, sendQty); // cumulative writer already in your file
+  const sentMetaText = row?.querySelector?.('.sent-meta')?.textContent || '';
+  if (sentMetaText) {
+    let matched = false;
+    if (venueKey) {
+      const venueRegex = new RegExp(`${escapeRegexLiteral(venueKey)}\\s*: *([0-9.,]+)`, 'i');
+      const exactMatch = sentMetaText.match(venueRegex);
+      if (exactMatch?.[1]) {
+        pushCandidate(exactMatch[1]);
+        matched = true;
+      }
+    }
+    if (!matched) {
+      const fallback = sentMetaText.match(/([0-9.,]+(?:\.[0-9]+)?)/);
+      if (fallback?.[1]) pushCandidate(fallback[1]);
+    }
+  }
 
-  // Clear any cached value but DO NOT remove the row; re-render so it turns green & moves down
-  if (cacheKey && window.mainStartingQtyCache) delete window.mainStartingQtyCache[cacheKey];
-  if (window.mainStartingInputCache) delete window.mainStartingInputCache[cacheKey];
+  let priorQty = numbers.length ? Math.max(...numbers) : null;
 
-  // Reload the Main Kitchen Starting Pars to reflect updated totals/status
-  try { typeof loadMainKitchenStartingPars === "function" && loadMainKitchenStartingPars(); } catch {}
-};
+  if (priorQty == null) {
+    try {
+      const today = (typeof getTodayDate === "function") ? getTodayDate() : new Date().toISOString().slice(0, 10);
+      const safeVenue = venueKey || canonicalVenue || row?.dataset?.displayVenue || "";
+      const orderId = `startingPar_${today}_${safeVenue}_${recipeId}`;
+      const orderRef = doc(db, "orders", orderId);
+      const snap = await getDoc(orderRef);
+      if (snap?.exists?.()) {
+        const data = snap.data() || {};
+        const candidates = [
+          data.sendQty,
+          data.sentQty,
+          data.qty,
+          data.netWeight,
+          data.totalQty,
+          data.totalSendQty,
+          data.grossQty,
+          data.totalNetWeight,
+        ];
+        candidates.forEach(pushCandidate);
+        priorQty = numbers.length ? Math.max(...numbers) : null;
+      }
+    } catch (err) {
+      console.warn("⚠️ Failed to read existing Main Kitchen starting-par doc", { recipeId, canonicalVenue, err });
+    }
+  }
+
+  console.debug("[StartingPar] repeat-send guard", {
+    recipeId,
+    venue: venueKey,
+    canonicalVenue,
+    datasetValue: row?.dataset?.sentToday,
+    totals: numbers,
+    priorQty,
+    sentMetaText
+  });
+
+  if (!Number.isFinite(priorQty) || priorQty <= 0) {
+    return true;
+  }
+
+  const formatQty = (raw) => {
+    const rounded = Math.round(raw * 100) / 100;
+    if (Number.isInteger(rounded)) return String(rounded);
+    return rounded.toFixed(2).replace(/\.00$/, "").replace(/0$/, "");
+  };
+
+  const itemName = row?.dataset?.itemName || recipeId;
+  const uom = row?.dataset?.uom || "";
+  const venueLabel = row?.dataset?.displayVenue || venueKey || canonicalVenue || "";
+  const friendlyQty = formatQty(priorQty);
+  const baseMessage = uom
+    ? `${friendlyQty} ${uom} of ${itemName}`
+    : `${friendlyQty} ${itemName}`;
+  const venueMessage = venueLabel ? ` to ${venueLabel}` : "";
+  const messageBody = `${baseMessage} already sent${venueMessage} today. Send more?`;
+  const confirmMessage = `${messageBody}\n\nPress OK to send more or Cancel to stop.`;
+  return window.confirm(confirmMessage);
+}
 
 
-
+// 🚫 Do not remove the row; repaint table so the item drops to the bottom and shows totals
 window.sendSingleStartingPar = async function (recipeId, venue, button) {
   const row = button.closest("tr");
   const input = row.querySelector(".send-qty-input");
@@ -5140,6 +5231,12 @@ window.sendSingleStartingPar = async function (recipeId, venue, button) {
 
   if (!Number.isFinite(sendQty) || sendQty <= 0) {
     alert("Please enter a valid quantity > 0.");
+    return;
+  }
+
+  const canonicalVenue = canonicalizeVenueName?.(venue) || String(venue || "").trim();
+  const confirmed = await confirmStartingParRepeat(row, canonicalVenue, recipeId);
+  if (!confirmed) {
     return;
   }
 
@@ -5222,6 +5319,7 @@ window.sendStartingPar = async function (recipeId, venue, sendQtyInput) {
     if (!rSnap.exists()) { console.warn(`❌ Recipe ${recipeId} not found`); return; }
     const r = rSnap.data() || {};
     const recipeNo  = (r.recipeNo || recipeId).toString().toUpperCase();
+    const recipeName = String(r.description || r.item || recipeNo || "item").trim();
     const costPerLb = Number(r.cost ?? r.costPerLb ?? 0);
     const panWeight = Number(r.panWeight ?? 0);
 
@@ -5266,6 +5364,7 @@ window.sendStartingPar = async function (recipeId, venue, sendQtyInput) {
     // 6) Deterministic per-day doc (cumulative across multiple sends that day)
     const orderId  = `startingPar_${today}_${venueName}_${recipeId}`;
     const orderRef = doc(db, "orders", orderId);
+
     const actionId = newActionId();
 
     // 7) Transaction w/ idempotency + atomic increments
