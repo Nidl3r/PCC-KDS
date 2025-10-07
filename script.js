@@ -105,6 +105,70 @@ const recipeDoc = (id) => doc(db, RECIPES_COLL, id);
 const legacyRecipeDoc = (id) => doc(db, LEGACY_RECIPES_COLL, id);
 const appVersionDoc = () => doc(db, APP_VERSION_COLLECTION, APP_VERSION_DOC_ID);
 
+const WEIGHT_UOMS = new Set(["lb", "lbs", "pound", "pounds", "kg", "kilogram", "kilograms", "g", "gram", "grams"]);
+
+const recipeDocFallbackOrder = [recipeDoc, legacyRecipeDoc];
+const recipeCollectionFallbackOrder = [recipesCollection, legacyRecipesCollection];
+
+function isWeightBasedUom(uom) {
+  const key = String(uom || "").trim().toLowerCase();
+  return key.length > 0 ? WEIGHT_UOMS.has(key) : false;
+}
+
+async function getRecipeDocWithFallback(id) {
+  for (const makeDoc of recipeDocFallbackOrder) {
+    try {
+      const snap = await getDoc(makeDoc(id));
+      if (snap?.exists?.()) return snap;
+    } catch (err) {
+      console.debug("getRecipeDocWithFallback error", id, err);
+    }
+  }
+  return null;
+}
+
+async function queryRecipesWithFallback(field, operator, value) {
+  for (const makeColl of recipeCollectionFallbackOrder) {
+    try {
+      const collRef = makeColl();
+      const snap = await getDocs(query(collRef, where(field, operator, value)));
+      if (!snap.empty) return snap;
+    } catch (err) {
+      console.debug("queryRecipesWithFallback error", field, operator, value, err);
+    }
+  }
+  return null;
+}
+
+async function fetchRecipeNosBatchWithFallback(batch) {
+  const normalized = batch
+    .map(val => String(val || "").toUpperCase().trim())
+    .filter(val => val.length > 0);
+  const results = new Map();
+  const remaining = new Set(normalized);
+  if (remaining.size === 0) return results;
+
+  for (const makeColl of recipeCollectionFallbackOrder) {
+    if (remaining.size === 0) break;
+    const values = Array.from(remaining);
+    if (values.length === 0) break;
+    try {
+      const collRef = makeColl();
+      const snap = await getDocs(query(collRef, where("recipeNo", "in", values)));
+      snap.forEach(docSnap => {
+        const data = docSnap.data() || {};
+        const key = String(data.recipeNo || docSnap.id || "").toUpperCase();
+        results.set(key, { data, docSnap });
+        remaining.delete(key);
+      });
+    } catch (err) {
+      console.debug("fetchRecipeNosBatchWithFallback error", values, err);
+    }
+  }
+
+  return results;
+}
+
 window._appVersionUnsub = null;
 
 function startAppVersionWatcher() {
@@ -5423,6 +5487,8 @@ window.sendStartingPar = async function (recipeId, venue, sendQtyInput) {
     const recipeName = String(r.description || r.item || recipeNo || "item").trim();
     const costPerLb = Number(r.cost ?? r.costPerLb ?? 0);
     const panWeight = Number(r.panWeight ?? 0);
+    const recipeUom = String(r.uom || "").trim().toLowerCase();
+    const weightBased = isWeightBasedUom(recipeUom);
 
     // 3) Determine today's needed pans (PAR snapshot)
     const pans = (() => {
@@ -5458,8 +5524,18 @@ window.sendStartingPar = async function (recipeId, venue, sendQtyInput) {
       return;
     }
 
-    // 5) Compute net (subtract pan weight × pans), and total cost
-    const netWeightAdd = r2(Math.max(0, sendQtyGross - (panWeight * pans)));
+    // 5) Compute net (subtract pan weight × pans for weight-based recipes), and total cost
+    const panDeduction = weightBased ? (panWeight * Math.max(0, pans)) : 0;
+    const netWeightAdd = r2(
+      weightBased
+        ? Math.max(0, sendQtyGross - panDeduction)
+        : sendQtyGross
+    );
+
+    if (!(netWeightAdd > 0)) {
+      alert("❌ Net weight must be greater than 0. Increase the send quantity or adjust pans.");
+      return;
+    }
     const totalCostAdd = r2(netWeightAdd * costPerLb);
 
     // 6) Deterministic per-day doc (cumulative across multiple sends that day)
@@ -8527,9 +8603,9 @@ async function _getRecipeCore(recipeKey) {
     }
 
     // ---- 2) Firestore by doc id ----
-    if (typeof getDoc === "function" && typeof doc === "function") {
-      const byIdSnap = await getDoc(doc(db, "recipes", normId));
-      if (byIdSnap.exists()) {
+    if (typeof getRecipeDocWithFallback === "function") {
+      const byIdSnap = await getRecipeDocWithFallback(normId);
+      if (byIdSnap?.exists?.()) {
         const out = _mkFromData(byIdSnap.data(), byIdSnap.id, "docId");
         window.__recipeCoreCache.set(keyStr, out);
         return out;
@@ -8537,21 +8613,18 @@ async function _getRecipeCore(recipeKey) {
     }
 
     // ---- 3) Firestore by recipeNo (and legacy recipe_no) ----
-    if (looksLikeRecipeNo && typeof getDocs === "function" && typeof query === "function" && typeof where === "function" && typeof collection === "function") {
+    if (looksLikeRecipeNo && typeof queryRecipesWithFallback === "function") {
       // Try recipeNo == normNo
       let got = null;
 
-      // Primary field
-      const q1 = query(collection(db, "recipes"), where("recipeNo", "==", normNo));
-      const s1 = await getDocs(q1);
-      if (!s1.empty) {
+      const s1 = await queryRecipesWithFallback("recipeNo", "==", normNo);
+      if (s1?.empty === false) {
         const d = s1.docs[0];
         got = _mkFromData(d.data(), d.id, "recipeNo");
       } else {
         // Legacy field name
-        const q2 = query(collection(db, "recipes"), where("recipe_no", "==", normNo));
-        const s2 = await getDocs(q2);
-        if (!s2.empty) {
+        const s2 = await queryRecipesWithFallback("recipe_no", "==", normNo);
+        if (s2?.empty === false) {
           const d = s2.docs[0];
           got = _mkFromData(d.data(), d.id, "recipe_no");
         }
@@ -9502,8 +9575,9 @@ window.loadProductionSummary = async function () {
   };
   const chooseQty = (...vals) => {
     for (const val of vals) {
-      if (val === null || val === undefined) continue;
-      return Math.max(0, val);
+      const num = Number(val);
+      if (!Number.isFinite(num)) continue;
+      if (num > 0) return num;
     }
     return 0;
   };
@@ -9627,8 +9701,8 @@ window.loadProductionSummary = async function () {
     }
 
     try {
-      const snap = await getDocs(query(collection(db, "recipes"), where("description", "==", desc)));
-      if (!snap.empty) {
+      const snap = await queryRecipesWithFallback("description", "==", desc);
+      if (snap && snap.empty === false) {
         const docSnap = snap.docs[0];
         const data = docSnap.data() || {};
         const recipeNo = String(data.recipeNo || docSnap.id || "").toUpperCase();
@@ -9690,10 +9764,10 @@ window.loadProductionSummary = async function () {
   // Resolve ids in parallel
   if (recipeIdsToResolve.size > 0) {
     const idArr = Array.from(recipeIdsToResolve);
-    const idDocs = await Promise.all(idArr.map(id => getDoc(doc(db, "recipes", id))));
+    const idDocs = await Promise.all(idArr.map(id => getRecipeDocWithFallback(id)));
     idDocs.forEach((snap, idx) => {
       const id = idArr[idx];
-      if (snap.exists()) {
+      if (snap?.exists?.()) {
         const data = snap.data();
         const rno = (data.recipeNo || "").toString().toUpperCase().trim();
         if (rno) {
@@ -9874,11 +9948,10 @@ window.loadProductionSummary = async function () {
   const recipeDescMap = new Map();
   for (let i = 0; i < recipeKeyList.length; i += 10) {
     const batch = recipeKeyList.slice(i, i + 10);
-    const snap = await getDocs(query(collection(db, "recipes"), where("recipeNo", "in", batch)));
-    snap.forEach(docSnap => {
-      const data = docSnap.data();
-      const key = (data.recipeNo || docSnap.id).toString().toUpperCase();
-      recipeDescMap.set(key, data.description || "No Description");
+    const docsMap = await fetchRecipeNosBatchWithFallback(batch);
+    docsMap.forEach(({ data }, key) => {
+      const desc = data?.description || "No Description";
+      recipeDescMap.set(key, desc);
     });
   }
 
@@ -10287,9 +10360,9 @@ window.loadProductionShipments = async function () {
   };
   const pickQuantity = (...values) => {
     for (const val of values) {
-      if (val === null || val === undefined) continue;
-      if (!Number.isFinite(val)) continue;
-      return Math.max(0, val);
+      const num = Number(val);
+      if (!Number.isFinite(num)) continue;
+      if (num > 0) return num;
     }
     return 0;
   };
@@ -10407,10 +10480,10 @@ window.loadProductionShipments = async function () {
   // 2) Resolve recipeId -> recipeNo (batch by individual getDoc)
   if (recipeIdsToResolve.size > 0) {
     const ids = Array.from(recipeIdsToResolve);
-    const idDocs = await Promise.all(ids.map(id => getDoc(doc(db, "recipes", id))));
+    const idDocs = await Promise.all(ids.map(id => getRecipeDocWithFallback(id)));
     idDocs.forEach((snap, idx) => {
       const id = ids[idx];
-      if (snap.exists()) {
+      if (snap?.exists?.()) {
         const data = snap.data();
         const rno = String(data.recipeNo || "").toUpperCase().trim();
         if (rno) {
@@ -10427,11 +10500,11 @@ window.loadProductionShipments = async function () {
   const list = Array.from(recipeNos);
   for (let i = 0; i < list.length; i += 10) {
     const batch = list.slice(i, i + 10);
-    const rsnap = await getDocs(query(collection(db, "recipes"), where("recipeNo", "in", batch)));
-    rsnap.forEach(rdoc => {
-      const r = rdoc.data();
+    const docsMap = await fetchRecipeNosBatchWithFallback(batch);
+    docsMap.forEach(({ data }, key) => {
+      const r = data || {};
       recipeMeta.set(
-        String(r.recipeNo || "").toUpperCase(),
+        key,
         {
           description: r.description || "No Description",
           venueCodes: Array.isArray(r.venueCodes) ? r.venueCodes.map(v => String(v).toLowerCase()) : []
@@ -10472,8 +10545,8 @@ window.loadProductionShipments = async function () {
     if (!key.includes("__id:")) continue;
     const [vc, idKey] = key.split("__");
     const rid = idKey.slice(3);
-    const snap = await getDoc(doc(db, "recipes", rid));
-    if (snap.exists()) {
+    const snap = await getRecipeDocWithFallback(rid);
+    if (snap?.exists?.()) {
       const data = snap.data();
       const rno = String(data.recipeNo || "").toUpperCase();
       recipeMap.delete(key);
@@ -10500,8 +10573,8 @@ window.loadProductionShipments = async function () {
 async function syncProdOverrideIntoOrders(venueCode, recipeNo, newQty) {
   try {
     const today = getTodayDate();
-    const sendQtyGross = Number(newQty);
-    if (!Number.isFinite(sendQtyGross) || sendQtyGross <= 0) return;
+    const netQtyTarget = round2(Math.max(0, Number(newQty)));
+    if (!Number.isFinite(netQtyTarget)) return;
 
     // 1) Map code → venue name (b001→Aloha, etc.)
     function codeToVenueName(code) {
@@ -10517,12 +10590,8 @@ async function syncProdOverrideIntoOrders(venueCode, recipeNo, newQty) {
     const guestCount  = Number(guestCounts?.[venueName] || 0);
 
     // 3) Lookup recipe by recipeNo (we need recipeId, pars, costPerLb, panWeight)
-    const qR = query(
-      collection(db, "recipes"),
-      where("recipeNo", "==", String(recipeNo).toUpperCase())
-    );
-    const sR = await getDocs(qR);
-    if (sR.empty) {
+    const sR = await queryRecipesWithFallback("recipeNo", "==", String(recipeNo).toUpperCase());
+    if (!sR || sR.empty) {
       console.warn("❌ Recipe not found for override:", recipeNo);
       return;
     }
@@ -10532,13 +10601,9 @@ async function syncProdOverrideIntoOrders(venueCode, recipeNo, newQty) {
     const rNo        = (r.recipeNo || recipeNo).toString().toUpperCase();
     const costPerLb  = Number(r.cost ?? r.costPerLb ?? 0);
     const panWeight  = Number(r.panWeight ?? 0);
-    const currentPar = Number(r?.pars?.[venueName]?.[String(guestCount)] || 0);
-    const pans       = Math.max(0, currentPar);
-
-    // 4) Compute net + total to match sendStartingPar
-    const round2         = (n) => Number((Math.round((Number(n)||0)*100)/100).toFixed(2));
-    const netWeightAdd   = round2(Math.max(0, sendQtyGross - (panWeight * pans)));
-    const totalCostAdd   = round2(netWeightAdd * costPerLb);
+    const recipeUom  = String(r.uom || "").trim().toLowerCase();
+    const weightBased = isWeightBasedUom(recipeUom);
+    const currentPar = Number(r?.pars?.[venueName]?.[String(guestCount)] || r?.pars?.[venueName]?.default || 0);
 
     // 5) Upsert deterministic per-day doc (same ID as sender)
     const orderId  = `startingPar_${today}_${venueName}_${recipeId}`;
@@ -10546,8 +10611,18 @@ async function syncProdOverrideIntoOrders(venueCode, recipeNo, newQty) {
     const existing = await getDoc(orderRef);
     const nowTs    = Timestamp.now();
 
+    const prevData = existing.exists() ? (existing.data() || {}) : null;
+    const pansFromDoc = Number(prevData?.pans);
+    const pans = Number.isFinite(pansFromDoc) && pansFromDoc >= 0
+      ? pansFromDoc
+      : Math.max(0, currentPar);
+
+    const panWeightTotal = weightBased ? round2(Math.max(0, panWeight * pans)) : 0;
+    const sendQtyTarget  = weightBased ? round2(netQtyTarget + panWeightTotal) : netQtyTarget;
+    const totalCostTarget = round2(netQtyTarget * costPerLb);
+
     if (existing.exists()) {
-      const prev = existing.data() || {};
+      const prev = prevData || {};
       await updateDoc(orderRef, {
         // required shape (keep exactly in sync with sendStartingPar)
         type: "starting-par",
@@ -10559,15 +10634,14 @@ async function syncProdOverrideIntoOrders(venueCode, recipeNo, newQty) {
         panWeight: Number(panWeight),
         pans: Number(pans), // snapshot of today’s needed pans
 
-        // cumulative adds
-        sendQty:     round2((Number(prev.sendQty   || 0)) + sendQtyGross),
-        netWeight:   round2((Number(prev.netWeight || 0)) + netWeightAdd),
-        totalCost:   round2((Number(prev.totalCost || 0)) + totalCostAdd),
-
         // lifecycle (don’t clobber a received doc)
         status:   prev.status === "received" ? "received" : "sent",
         received: Boolean(prev.received || false),
         receivedAt: prev.receivedAt || null,
+
+        sendQty:     sendQtyTarget,
+        netWeight:   netQtyTarget,
+        totalCost:   totalCostTarget,
 
         // timestamps (preserve first sentAt/timestamp)
         sentAt:     prev.sentAt     || nowTs,
@@ -10587,9 +10661,9 @@ async function syncProdOverrideIntoOrders(venueCode, recipeNo, newQty) {
         pans: Number(pans),
 
         // first write = exact values for this override push
-        sendQty:   round2(sendQtyGross),
-        netWeight: netWeightAdd,
-        totalCost: totalCostAdd,
+        sendQty:   sendQtyTarget,
+        netWeight: netQtyTarget,
+        totalCost: totalCostTarget,
 
         // lifecycle at SEND time
         status: "sent",
@@ -10604,7 +10678,7 @@ async function syncProdOverrideIntoOrders(venueCode, recipeNo, newQty) {
     }
 
     console.log("✅ Override synced as starting-par:", {
-      orderId, venueName, recipeNo: rNo, recipeId, sendQtyGross, pans, panWeight, netWeightAdd, totalCostAdd
+      orderId, venueName, recipeNo: rNo, recipeId, netQtyTarget, pans, panWeight, sendQtyTarget, totalCostTarget
     });
   } catch (err) {
     console.error("❌ syncProdOverrideIntoOrders failed:", err);
