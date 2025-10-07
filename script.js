@@ -4313,13 +4313,23 @@ window.renderStartingStatus = async function (venue, data) {
   const totalQtyByRecipe    = new Map();
   const pendingPansByRecipe = new Map();
 
+  const deriveQtyForOrder = (order) => {
+    const candidates = [order.qtyNet, order.netWeight, order.sendQty, order.qty];
+    for (const candidate of candidates) {
+      if (candidate === null || candidate === undefined) continue;
+      const num = Number(candidate);
+      if (Number.isFinite(num)) return Math.max(0, num);
+    }
+    return 0;
+  };
+
   ordersSnapshot.forEach((docSnap) => {
     const o = docSnap.data();
     const recipeId = o.recipeId;
     if (!recipeId) return;
 
     const pans = Number(o.pans || 0);
-    const qty  = Number((o.sendQty ?? o.qty) || 0);
+    const qty  = deriveQtyForOrder(o);
     const isReceived = (o.received === true) || (o.status === "received");
 
     if (pans > 0) {
@@ -8578,7 +8588,7 @@ async function applyReceivedReturnToOrders(returnDoc) {
     const newReturned = alreadyReturned + take;
     const qtyNet = Math.max(0, originalQty - newReturned);
 
-    const unitCost = Number(o.cost || 0);
+    const unitCost = Number(o.cost ?? o.costPerLb ?? 0);
     const updates = {
       // track cumulative return and a stable “net” field
       returnedNet: newReturned,
@@ -9354,6 +9364,7 @@ window.loadProductionSummary = async function () {
   // Reset per-load contribution caches so detail views can pull matching waste/lunch rows.
   window._productionWasteByRecipe = new Map();
   window._productionLunchByRecipe = new Map();
+  window._productionReturnsByRecipe = new Map();
 
   // 🌀 Loading UI
   tbody.innerHTML = `
@@ -9391,9 +9402,33 @@ window.loadProductionSummary = async function () {
   const recipeIdsToResolve = new Set(); // ids we must map to recipeNo
   const seenSubmenuCode = new Map(); // finalRecipeNo -> submenuCode (first seen)
   const descriptionRecipeCache = new Map(); // description(lower) -> { recipeNo, description }
+  const recipeNoById = new Map();
+  const returnDetailRaw = [];
+
+  const valueOrNull = (val) => {
+    const num = Number(val);
+    return Number.isFinite(num) ? num : null;
+  };
+  const chooseQty = (...vals) => {
+    for (const val of vals) {
+      if (val === null || val === undefined) continue;
+      return Math.max(0, val);
+    }
+    return 0;
+  };
+  const resolveQty = (order, prefersStartingPar) => {
+    const netQty    = valueOrNull(order.qtyNet);
+    const netWeight = valueOrNull(order.netWeight);
+    const sendQty   = valueOrNull(order.sendQty);
+    const qty       = valueOrNull(order.qty);
+
+    return prefersStartingPar
+      ? chooseQty(netQty, netWeight, sendQty, qty)
+      : chooseQty(netQty, sendQty, qty, netWeight);
+  };
 
   const addToTemp = (key, qty, submenuCode) => {
-    if (!Number.isFinite(qty) || qty <= 0) return;
+    if (!Number.isFinite(qty) || qty === 0) return;
     const obj = tempMap.get(key) || { total: 0, submenuCode: "" };
     obj.total += qty;
     if (submenuCode && !obj.submenuCode) obj.submenuCode = submenuCode;
@@ -9405,12 +9440,9 @@ window.loadProductionSummary = async function () {
     const d = docSnap.data();
     const type = (d.type || "").toLowerCase();
 
-    // Quantity logic: starting-par prefers netWeight; add-ons prefer sendQty/qty
-    const qtySP  = parseFloat(d.netWeight ?? d.sendQty ?? d.qty ?? 0);
-    const qtyAO  = parseFloat(d.sendQty ?? d.qty ?? d.netWeight ?? 0);
-    const qty    = type === "starting-par" ? qtySP : qtyAO;
+    const qty = resolveQty(d, type === "starting-par");
 
-    if (!Number.isFinite(qty) || qty <= 0) return;
+    if (!(qty > 0)) return;
 
     let key = (d.recipeNo || "").toString().toUpperCase().trim();
     const submenuCode = d.submenuCode || "";
@@ -9423,6 +9455,40 @@ window.loadProductionSummary = async function () {
     }
 
     addToTemp(key, qty, submenuCode);
+  });
+
+  // --- 1b) Subtract pending returns (status not yet received) ---
+  const returnsSnapshot = await getDocs(query(
+    collection(db, "returns"),
+    where("date", "==", todayStr)
+  ));
+
+  returnsSnapshot.forEach(docSnap => {
+    const data = docSnap.data() || {};
+    const status = String(data.status || "").toLowerCase();
+    if (status === "received") return; // received returns already reflected in orders
+
+    const netQty = Number(data.qty ?? data.netQty ?? data.quantity ?? 0);
+    if (!Number.isFinite(netQty) || netQty <= 0) return;
+
+    const recipeNo = String(data.recipeNo || "").toUpperCase().trim();
+    const recipeId = String(data.recipeId || "").trim();
+    const key = recipeNo || (recipeId ? `id:${recipeId}` : "");
+    if (!key) return;
+
+    const deduction = -Math.abs(netQty);
+    addToTemp(key, deduction, "");
+    if (!recipeNo && recipeId) recipeIdsToResolve.add(recipeId);
+
+    returnDetailRaw.push({
+      docId: docSnap.id,
+      recipeNo,
+      recipeId,
+      venue: canonicalizeVenueName(data.venue || ""),
+      qty: deduction,
+      item: data.item || data.description || "",
+      uom: data.uom || data.unit || ""
+    });
   });
 
   // --- 2) Resolve any recipeId -> recipeNo and merge into final map keyed by recipeNo ---
@@ -9534,13 +9600,15 @@ window.loadProductionSummary = async function () {
   if (recipeIdsToResolve.size > 0) {
     const idArr = Array.from(recipeIdsToResolve);
     const idDocs = await Promise.all(idArr.map(id => getDoc(doc(db, "recipes", id))));
-    const idToNo = new Map();
     idDocs.forEach((snap, idx) => {
       const id = idArr[idx];
       if (snap.exists()) {
         const data = snap.data();
         const rno = (data.recipeNo || "").toString().toUpperCase().trim();
-        if (rno) idToNo.set(id, rno);
+        if (rno) {
+          recipeNoById.set(id, rno);
+          recipeNosSet.add(rno);
+        }
       }
     });
 
@@ -9548,7 +9616,7 @@ window.loadProductionSummary = async function () {
     for (const [key, val] of tempMap.entries()) {
       if (!key.startsWith("id:")) continue;
       const id = key.slice(3);
-      const rno = idToNo.get(id);
+      const rno = recipeNoById.get(id);
       if (rno) {
         addFinal(rno, val.total, val.submenuCode);
         tempMap.delete(key);
@@ -9561,6 +9629,24 @@ window.loadProductionSummary = async function () {
     if (key.startsWith("id:")) continue; // unresolved id without recipeNo—skip silently
     addFinal(key, val.total, val.submenuCode);
   }
+
+  // --- 2b) Publish return details for detail drawer ---
+  const returnsMap = window._productionReturnsByRecipe;
+  returnDetailRaw.forEach(entry => {
+    const resolvedNo = entry.recipeNo || recipeNoById.get(entry.recipeId || "");
+    if (!resolvedNo) return;
+    const key = resolvedNo.toUpperCase();
+    const bucket = returnsMap.get(key) || [];
+    const description = summaryMap.get(key)?.description || entry.item || key;
+    bucket.push({
+      id: entry.docId,
+      venue: entry.venue || "",
+      item: entry.item || description,
+      qty: entry.qty,
+      uom: entry.uom || ""
+    });
+    returnsMap.set(key, bucket);
+  });
 
   // --- 3) Add Main Kitchen waste to totals (still keyed by recipeNo; look up by description when needed) ---
   const wasteSnapshot = await getDocs(query(
@@ -9904,18 +9990,20 @@ async function toggleProductionDetailRow(anchorTr, recipeNo, descriptionFromButt
   const ensureMap = (maybeMap) => (maybeMap instanceof Map ? maybeMap : new Map());
   const wasteExtras = Array.from(ensureMap(window._productionWasteByRecipe).get(normalizedRecipeNo) || []);
   const lunchExtras = Array.from(ensureMap(window._productionLunchByRecipe).get(normalizedRecipeNo) || []);
+  const returnExtras = Array.from(ensureMap(window._productionReturnsByRecipe).get(normalizedRecipeNo) || []);
   const sumExtras = (entries) => entries.reduce((acc, entry) => {
     const v = Number(entry?.qty ?? 0);
     return Number.isFinite(v) ? acc + v : acc;
   }, 0);
   const wasteTotal = sumExtras(wasteExtras);
   const lunchTotal = sumExtras(lunchExtras);
-  let currentExtrasTotal = wasteTotal + lunchTotal;
+  const returnTotal = sumExtras(returnExtras);
+  let currentExtrasTotal = wasteTotal + lunchTotal + returnTotal;
 
   const appendExtras = (entries, typeLabel) => {
     for (const entry of entries) {
       const qtyVal = Number(entry?.qty ?? 0);
-      if (!Number.isFinite(qtyVal) || qtyVal <= 0) continue;
+      if (!Number.isFinite(qtyVal) || qtyVal === 0) continue;
 
       running += qtyVal;
       rowsAdded += 1;
@@ -9940,10 +10028,11 @@ async function toggleProductionDetailRow(anchorTr, recipeNo, descriptionFromButt
 
   appendExtras(wasteExtras, "Waste");
   appendExtras(lunchExtras, "Lunch");
+  appendExtras(returnExtras, "Returns");
 
   if (rowsAdded === 0) {
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td colspan="5" style="padding:8px; font-style:italic; color:gray;">No production, lunch, or waste records for today.</td>`;
+    tr.innerHTML = `<td colspan="5" style="padding:8px; font-style:italic; color:gray;">No production, lunch, waste, or return records for today.</td>`;
     bodyEl.appendChild(tr);
     sumEl.textContent = "0.00";
   } else {
@@ -9981,7 +10070,8 @@ const update =
       });
 
       currentExtrasTotal = sumExtras(ensureMap(window._productionWasteByRecipe).get(normalizedRecipeNo) || [])
-        + sumExtras(ensureMap(window._productionLunchByRecipe).get(normalizedRecipeNo) || []);
+        + sumExtras(ensureMap(window._productionLunchByRecipe).get(normalizedRecipeNo) || [])
+        + sumExtras(ensureMap(window._productionReturnsByRecipe).get(normalizedRecipeNo) || []);
 
       const totalSum = ordersSum + currentExtrasTotal;
       sumEl.textContent = totalSum.toFixed(2);
@@ -10100,23 +10190,29 @@ window.loadProductionShipments = async function () {
     concession: "concessions"
   });
 
+  const coerceNumber = (val) => {
+    const num = Number(val);
+    return Number.isFinite(num) ? num : null;
+  };
+  const pickQuantity = (...values) => {
+    for (const val of values) {
+      if (val === null || val === undefined) continue;
+      if (!Number.isFinite(val)) continue;
+      return Math.max(0, val);
+    }
+    return 0;
+  };
   const qtyFromOrder = (d) => {
     const type = String(d.type || "").toLowerCase();
-    const net   = parseFloat(d.netWeight ?? 0);
-    const send  = parseFloat(d.sendQty   ?? 0);
-    const qty   = parseFloat(d.qty       ?? 0);
+    const netQty    = coerceNumber(d.qtyNet);
+    const netWeight = coerceNumber(d.netWeight);
+    const sendQty   = coerceNumber(d.sendQty);
+    const qty       = coerceNumber(d.qty);
+
     if (type === "starting-par") {
-      // prefer netWeight for SP, fallback to others
-      if (Number.isFinite(net) && net > 0) return net;
-      return Math.max(0, Number.isFinite(send) ? send : 0, Number.isFinite(qty) ? qty : 0);
+      return pickQuantity(netQty, netWeight, sendQty, qty);
     }
-    // add-ons (and anything else) → take the largest available
-    return Math.max(
-      0,
-      Number.isFinite(send) ? send : 0,
-      Number.isFinite(qty)  ? qty  : 0,
-      Number.isFinite(net)  ? net  : 0
-    );
+    return pickQuantity(netQty, sendQty, qty, netWeight);
   };
 
   const isCancelled = (d) => {
@@ -10128,11 +10224,12 @@ window.loadProductionShipments = async function () {
   const pending = [];         // rows we still must place into a concessions code
   const recipeNos = new Set();
   const recipeIdsToResolve = new Set();
+  const recipeNoById = new Map();
   const recipeMap = new Map();  // key: `${venueCode}__${recipeNo}` -> { venueCode, recipeNo, description, quantity }
 
   const addQty = (venueCode, recipeNo, quantity) => {
     if (!venueCode || !recipeNo) return;
-    if (!Number.isFinite(quantity) || quantity <= 0) return;
+    if (!Number.isFinite(quantity) || quantity === 0) return;
     const key = `${venueCode.toLowerCase()}__${recipeNo}`;
     if (!recipeMap.has(key)) {
       recipeMap.set(key, { venueCode: venueCode.toLowerCase(), recipeNo, description: "No Description", quantity: 0 });
@@ -10177,6 +10274,45 @@ window.loadProductionShipments = async function () {
     if (!recipeNo && recipeId) recipeIdsToResolve.add(recipeId);
   });
 
+  // Subtract pending returns prior to Main Kitchen receipt
+  const returnsSnapshot = await getDocs(query(
+    collection(db, "returns"),
+    where("date", "==", todayStr)
+  ));
+
+  returnsSnapshot.forEach(docSnap => {
+    const data = docSnap.data() || {};
+    const status = String(data.status || "").toLowerCase();
+    if (status === "received") return; // already reflected in orders
+
+    const grossQty = Number(data.qty ?? data.netQty ?? data.quantity ?? 0);
+    if (!Number.isFinite(grossQty) || grossQty <= 0) return;
+    const deduction = -Math.abs(grossQty);
+
+    const recipeNo = String(data.recipeNo || "").toUpperCase().trim();
+    const recipeId = String(data.recipeId || "").trim();
+
+    if (!recipeNo && !recipeId) return;
+
+    const venueRaw = String(data.venue || "").trim();
+    let venueCode = null;
+    if (/^[bc]\d{3}$/i.test(venueRaw)) {
+      venueCode = venueRaw.toLowerCase();
+    } else {
+      venueCode = venueCodesByName[venueRaw.toLowerCase()] || null;
+    }
+
+    if (venueCode && /^b\d{3}$/i.test(venueCode)) {
+      if (!recipeNo && recipeId) recipeIdsToResolve.add(recipeId);
+      addQty(venueCode, recipeNo || `id:${recipeId}`, deduction);
+    } else {
+      pending.push({ venueRaw, venueCode, recipeNo: (recipeNo || ""), recipeId, qty: deduction });
+    }
+
+    if (recipeNo) recipeNos.add(recipeNo);
+    if (!recipeNo && recipeId) recipeIdsToResolve.add(recipeId);
+  });
+
   // 2) Resolve recipeId -> recipeNo (batch by individual getDoc)
   if (recipeIdsToResolve.size > 0) {
     const ids = Array.from(recipeIdsToResolve);
@@ -10186,7 +10322,10 @@ window.loadProductionShipments = async function () {
       if (snap.exists()) {
         const data = snap.data();
         const rno = String(data.recipeNo || "").toUpperCase().trim();
-        if (rno) recipeNos.add(rno);
+        if (rno) {
+          recipeNos.add(rno);
+          recipeNoById.set(id, rno);
+        }
         // merge any existing "id:<id>" lines later after we know recipeNos
       }
     });
@@ -10212,14 +10351,8 @@ window.loadProductionShipments = async function () {
 
   // 4) Merge pending rows
   pending.forEach(({ venueRaw, venueCode, recipeNo, recipeId, qty }) => {
-    // If we have only id, try to resolve to recipeNo via cached meta (from step 2)
-    if (!recipeNo && recipeId) {
-      // We don't have a reverse map here; best-effort try: fetch directly
-      // (light extra fetch only when needed)
-      // NOTE: In practice most IDs were resolved above when they came from non-pending rows too.
-    }
-
-    const rno = recipeNo || ""; // if still empty, skip
+    const rno = recipeNo || (recipeId ? recipeNoById.get(recipeId) : "") || "";
+    if (!rno) return;
     const meta = recipeMeta.get(rno) || { venueCodes: [] };
 
     // If explicit concessions code present (c002/c003), use it directly
