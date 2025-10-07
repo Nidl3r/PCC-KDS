@@ -4889,6 +4889,8 @@ window.renderMainKitchenPars = function () {
 
   const venueFilter   = document.getElementById("starting-filter-venue").value;
   const stationFilter = document.getElementById("starting-filter-station").value;
+  const itemFilterInput = document.getElementById("starting-filter-item");
+  const itemFilter = itemFilterInput ? itemFilterInput.value.trim().toLowerCase() : "";
   const table = document.querySelector("#startingParsTable");
   const tbody = table.querySelector("tbody");
   tbody.innerHTML = "";
@@ -4902,6 +4904,19 @@ window.renderMainKitchenPars = function () {
   (data.recipes || []).forEach(recipe => {
     const station = recipe.category || "";
     if (stationFilter && station.toLowerCase() !== stationFilter.toLowerCase()) return;
+
+    if (itemFilter) {
+      const name = String(recipe.description || "").toLowerCase();
+      const recipeNo = String(recipe.recipeNo || "").toLowerCase();
+      const itemField = String(recipe.item || "").toLowerCase();
+      if (
+        !name.includes(itemFilter) &&
+        !recipeNo.includes(itemFilter) &&
+        !itemField.includes(itemFilter)
+      ) {
+        return;
+      }
+    }
 
     const recipeVenues = Array.from(new Set(
       (recipe.venueCodes || [])
@@ -5002,7 +5017,12 @@ window.renderMainKitchenPars = function () {
       }
 
       const controls = (status === "na")
-        ? `<span class="status-pill status-pill--na">Marked NA</span>`
+        ? `
+            <div class="starting-actions">
+              <span class="status-pill status-pill--na">Marked NA</span>
+              <button class="starting-reopen" onclick="reopenStartingPar && reopenStartingPar('${recipe.id}', '${venue}', this)">Reopen</button>
+            </div>
+          `
         : `
             <div class="starting-actions">
               <input class="send-qty-input" type="text" inputmode="decimal"
@@ -5080,6 +5100,12 @@ document.getElementById("starting-filter-venue").addEventListener("change", () =
 document.getElementById("starting-filter-station").addEventListener("change", () => {
   renderMainKitchenPars();
 });
+const startingItemFilter = document.getElementById("starting-filter-item");
+if (startingItemFilter) {
+  startingItemFilter.addEventListener("input", () => {
+    renderMainKitchenPars();
+  });
+}
 
 
 // 🌋 Send-all for Main Kitchen Starting Par (repaint instead of removing rows)
@@ -5244,18 +5270,42 @@ window.sendSingleStartingPar = async function (recipeId, venue, button) {
     return;
   }
 
+  const originalLabel = button?.textContent;
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Sending…";
+  }
+
   const canonicalVenue = canonicalizeVenueName?.(venue) || String(venue || "").trim();
   const confirmed = await confirmStartingParRepeat(row, canonicalVenue, recipeId);
   if (!confirmed) {
+    if (button) {
+      button.disabled = false;
+      button.textContent = originalLabel ?? "Send";
+    }
     return;
   }
 
-  await sendStartingPar(recipeId, venue, sendQty);
+  try {
+    await sendStartingPar(recipeId, venue, sendQty);
 
-  // ✅ Clear from cache and UI
-  if (cacheKey && window.mainStartingQtyCache) delete window.mainStartingQtyCache[cacheKey];
-  if (window.mainStartingInputCache) delete window.mainStartingInputCache[cacheKey]; // legacy cleanup
-  row.remove();
+    // ✅ Clear from cache/input so fresh render starts empty
+    if (cacheKey && window.mainStartingQtyCache) delete window.mainStartingQtyCache[cacheKey];
+    if (window.mainStartingInputCache) delete window.mainStartingInputCache[cacheKey]; // legacy cleanup
+    if (input) input.value = "";
+
+    try { typeof loadMainKitchenStartingPars === "function" && loadMainKitchenStartingPars(); } catch (err) {
+      console.warn("Failed to refresh starting pars after send", err);
+    }
+  } catch (err) {
+    console.error("sendSingleStartingPar failed:", err);
+    alert("Failed to send starting par. Please try again.");
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = originalLabel ?? "Send";
+    }
+  }
 };
 
 
@@ -5282,6 +5332,47 @@ window.markStartingParNA = async function (recipeId, venue, button) {
   } catch (e) {
     console.error("markStartingParNA failed:", e);
     alert("Failed to mark item as NA.");
+  }
+};
+
+window.reopenStartingPar = async function (recipeId, venue, button) {
+  const today = getTodayDate();
+  const venueName = canonicalizeVenueName(venue) || String(venue || "").trim();
+  if (!recipeId || !venueName) {
+    console.warn("reopenStartingPar called with missing identifiers", { recipeId, venue });
+    return;
+  }
+
+  const orderId = `startingPar_${today}_${venueName}_${recipeId}`;
+  const orderRef = doc(db, "orders", orderId);
+
+  const originalText = button?.textContent;
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Reopening…";
+  }
+
+  try {
+    const now = serverTimestamp();
+    await setDoc(orderRef, {
+      type: "starting-par",
+      date: today,
+      venue: venueName,
+      recipeId,
+      status: "open",
+      reopenedAt: now,
+      updatedAt: now,
+    }, { merge: true });
+
+    try { typeof loadMainKitchenStartingPars === "function" && loadMainKitchenStartingPars(); } catch {}
+  } catch (e) {
+    console.error("reopenStartingPar failed:", e);
+    alert("Failed to reopen item.");
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = originalText ?? "Reopen";
+    }
   }
 };
 
