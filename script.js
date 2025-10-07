@@ -9351,6 +9351,10 @@ window.sendChatMessage = async function () {
 window.loadProductionSummary = async function () {
   const tbody = document.querySelector("#productionTable tbody");
 
+  // Reset per-load contribution caches so detail views can pull matching waste/lunch rows.
+  window._productionWasteByRecipe = new Map();
+  window._productionLunchByRecipe = new Map();
+
   // 🌀 Loading UI
   tbody.innerHTML = `
     <tr>
@@ -9361,12 +9365,20 @@ window.loadProductionSummary = async function () {
     </tr>
   `;
 
-  // Today (YYYY-MM-DD)
-  const today = new Date(); today.setHours(0,0,0,0);
-  const yyyy = today.getFullYear();
-  const mm = String(today.getMonth() + 1).padStart(2, '0');
-  const dd = String(today.getDate()).padStart(2, '0');
-  const todayStr = `${yyyy}-${mm}-${dd}`;
+  // Today (YYYY-MM-DD) respecting the Hawaii offset used elsewhere
+  const todayStr = typeof getTodayDate === "function"
+    ? getTodayDate()
+    : (() => {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const yyyy = today.getFullYear();
+        const mm = String(today.getMonth() + 1).padStart(2, "0");
+        const dd = String(today.getDate()).padStart(2, "0");
+        return `${yyyy}-${mm}-${dd}`;
+      })();
+  const [hawY, hawM, hawD] = todayStr.split("-").map(Number);
+  const hawaiiStart = new Date(Date.UTC(hawY, hawM - 1, hawD, 0, 0, 0));
+  const hawaiiEnd = new Date(Date.UTC(hawY, hawM - 1, hawD + 1, 0, 0, 0));
 
   // --- 1) Pull ALL orders for today (any venue). We'll merge starting-par + add-ons. ---
   const orderSnapshot = await getDocs(query(
@@ -9378,6 +9390,7 @@ window.loadProductionSummary = async function () {
   const tempMap = new Map(); // key -> { total, submenuCode }
   const recipeIdsToResolve = new Set(); // ids we must map to recipeNo
   const seenSubmenuCode = new Map(); // finalRecipeNo -> submenuCode (first seen)
+  const descriptionRecipeCache = new Map(); // description(lower) -> { recipeNo, description }
 
   const addToTemp = (key, qty, submenuCode) => {
     if (!Number.isFinite(qty) || qty <= 0) return;
@@ -9433,6 +9446,90 @@ window.loadProductionSummary = async function () {
     recipeNosSet.add(key);
   };
 
+  const matchExistingByDescription = (desc) => {
+    if (!desc) return null;
+    const needle = desc.trim().toLowerCase();
+    for (const [rno, obj] of summaryMap.entries()) {
+      const current = (obj.description || "").trim().toLowerCase();
+      if (current && current === needle) {
+        return { recipeNo: rno, description: obj.description || desc };
+      }
+    }
+    return null;
+  };
+
+  const resolveRecipeByDescription = async (desc) => {
+    if (!desc) return null;
+    const key = desc.trim().toLowerCase();
+    if (descriptionRecipeCache.has(key)) return descriptionRecipeCache.get(key);
+
+    const existing = matchExistingByDescription(desc);
+    if (existing) {
+      descriptionRecipeCache.set(key, existing);
+      return existing;
+    }
+
+    try {
+      const snap = await getDocs(query(collection(db, "recipes"), where("description", "==", desc)));
+      if (!snap.empty) {
+        const docSnap = snap.docs[0];
+        const data = docSnap.data() || {};
+        const recipeNo = String(data.recipeNo || docSnap.id || "").toUpperCase();
+        const result = {
+          recipeNo,
+          description: data.description || desc
+        };
+        descriptionRecipeCache.set(key, result);
+        return result;
+      }
+    } catch (err) {
+      console.warn("resolveRecipeByDescription failed:", err);
+    }
+
+    descriptionRecipeCache.set(key, null);
+    return null;
+  };
+
+  async function resolveRecipeInfo(entry, fallbackName = "") {
+    if (!entry) return null;
+
+    const toCandidates = (...vals) => vals
+      .map(val => (typeof val === "string" ? val.trim() : val))
+      .filter(val => typeof val === "string" && val.length > 0);
+
+    const directNos = toCandidates(entry.recipeNo, entry.recipe_no, entry.itemNo, entry.item_no);
+    for (const candidate of directNos) {
+      const core = await _getRecipeCore(candidate);
+      if (core?.recipeNo) {
+        return {
+          recipeNo: String(core.recipeNo).toUpperCase(),
+          description: core.description || fallbackName || candidate
+        };
+      }
+    }
+
+    const recipeId = toCandidates(entry.recipeId, entry.recipe_id)[0];
+    if (recipeId) {
+      const core = await _getRecipeCore(recipeId);
+      if (core?.recipeNo) {
+        return {
+          recipeNo: String(core.recipeNo).toUpperCase(),
+          description: core.description || fallbackName || ""
+        };
+      }
+    }
+
+    const desc = toCandidates(entry.description, entry.item, entry.itemName, fallbackName)[0];
+    if (desc) {
+      const fromExisting = matchExistingByDescription(desc);
+      if (fromExisting) return fromExisting;
+      const byDescription = await resolveRecipeByDescription(desc);
+      if (byDescription) return byDescription;
+    }
+
+    return null;
+  }
+
   // Resolve ids in parallel
   if (recipeIdsToResolve.size > 0) {
     const idArr = Array.from(recipeIdsToResolve);
@@ -9473,41 +9570,125 @@ window.loadProductionSummary = async function () {
   ));
 
   for (const wdoc of wasteSnapshot.docs) {
-    const w = wdoc.data();
-    const itemName = (w.item || "").trim();
-    const qty = Number(w.qty || 0);
-    if (!itemName || qty <= 0) continue;
+    const w = wdoc.data() || {};
+    const itemName = String(w.item || w.description || "").trim();
+    const qty = Number(w.qty ?? w.quantity ?? 0);
+    if (!Number.isFinite(qty) || qty <= 0) continue;
 
-    // If any existing summary item already has this description, add directly
-    let matchedRno = null;
-    for (const [rno, obj] of summaryMap.entries()) {
-      if ((obj.description || "").trim() === itemName) { matchedRno = rno; break; }
+    const resolved = await resolveRecipeInfo(w, itemName);
+    if (!resolved?.recipeNo) continue;
+
+    const matchedRno = String(resolved.recipeNo).toUpperCase();
+    if (!summaryMap.has(matchedRno)) {
+      summaryMap.set(matchedRno, {
+        submenuCode: "",
+        dishCode: "",
+        recipeNo: matchedRno,
+        description: resolved.description || itemName || "No Description",
+        total: 0
+      });
     }
 
-    // Else, try to find recipeNo by description
-    if (!matchedRno) {
-      const recipesQuery = query(collection(db, "recipes"), where("description", "==", itemName));
-      const recipesSnap = await getDocs(recipesQuery);
-      if (!recipesSnap.empty) {
-        const r = recipesSnap.docs[0].data();
-        matchedRno = (r.recipeNo || recipesSnap.docs[0].id).toString().toUpperCase();
-        if (!summaryMap.has(matchedRno)) {
-          summaryMap.set(matchedRno, {
-            submenuCode: "",
-            dishCode: "",
-            recipeNo: matchedRno,
-            description: itemName,
-            total: 0
-          });
-          recipeNosSet.add(matchedRno);
+    const obj = summaryMap.get(matchedRno);
+    obj.total += qty;
+    if (!obj.submenuCode && w.submenuCode) obj.submenuCode = w.submenuCode;
+    if (!obj.description || obj.description === "No Description") {
+      obj.description = resolved.description || itemName || obj.description;
+    }
+    summaryMap.set(matchedRno, obj);
+    recipeNosSet.add(matchedRno);
+
+    const wasteMap = window._productionWasteByRecipe;
+    const bucket = wasteMap.get(matchedRno) || [];
+    bucket.push({
+      id: wdoc.id,
+      venue: w.venue || w.location || "",
+      station: w.station || "",
+      item: itemName,
+      qty,
+      uom: w.uom || ""
+    });
+    wasteMap.set(matchedRno, bucket);
+  }
+
+  // --- 3b) Add lunch quantities for today ---
+  const lunchMap = window._productionLunchByRecipe;
+  const processedLunchIds = new Set();
+  const inHstWindow = (val) => {
+    if (!val) return false;
+    const ms = val instanceof Date
+      ? val.getTime()
+      : (typeof val.toDate === "function" ? val.toDate().getTime() : NaN);
+    return Number.isFinite(ms) && ms >= hawaiiStart.getTime() && ms < hawaiiEnd.getTime();
+  };
+
+  const lunchRef = collection(db, "lunch");
+  const lunchSnaps = [];
+  try { lunchSnaps.push(await getDocs(query(lunchRef, where("date", "==", todayStr)))); } catch (err) { console.debug("Lunch string-date query failed", err); }
+  try { lunchSnaps.push(await getDocs(query(lunchRef, where("timestamp", ">=", hawaiiStart), where("timestamp", "<", hawaiiEnd)))); } catch (err) { console.debug("Lunch timestamp query failed", err); }
+  try { lunchSnaps.push(await getDocs(query(lunchRef, where("date", ">=", hawaiiStart), where("date", "<", hawaiiEnd)))); } catch (err) { console.debug("Lunch date range query failed", err); }
+  try { lunchSnaps.push(await getDocs(query(lunchRef, where("sentAt", ">=", hawaiiStart), where("sentAt", "<", hawaiiEnd)))); } catch (err) { console.debug("Lunch sentAt query failed", err); }
+
+  for (const snap of lunchSnaps) {
+    if (!snap) continue;
+    for (const docSnap of snap.docs) {
+      if (!docSnap) continue;
+      if (processedLunchIds.has(docSnap.id)) continue;
+      processedLunchIds.add(docSnap.id);
+
+      const data = docSnap.data() || {};
+
+      let isToday = false;
+      if (typeof data.date === "string" && data.date === todayStr) {
+        isToday = true;
+      }
+      const tsCandidates = [data.date, data.timestamp, data.sentAt];
+      if (!isToday) {
+        for (const candidate of tsCandidates) {
+          if (inHstWindow(candidate)) {
+            isToday = true;
+            break;
+          }
         }
       }
-    }
+      if (!isToday) continue;
 
-    if (matchedRno) {
-      const obj = summaryMap.get(matchedRno);
+      const qty = Number(data.qty ?? data.quantity ?? data.amount ?? data.sendQty ?? 0);
+      if (!Number.isFinite(qty) || qty <= 0) continue;
+
+      const itemName = String(data.item || data.description || data.itemName || "").trim();
+      const resolved = await resolveRecipeInfo(data, itemName);
+      if (!resolved?.recipeNo) continue;
+
+      const recipeKey = String(resolved.recipeNo).toUpperCase();
+      if (!summaryMap.has(recipeKey)) {
+        summaryMap.set(recipeKey, {
+          submenuCode: "",
+          dishCode: "",
+          recipeNo: recipeKey,
+          description: resolved.description || itemName || "No Description",
+          total: 0
+        });
+      }
+
+      const obj = summaryMap.get(recipeKey);
       obj.total += qty;
-      summaryMap.set(matchedRno, obj);
+      if (!obj.description || obj.description === "No Description") {
+        obj.description = resolved.description || itemName || obj.description;
+      }
+      summaryMap.set(recipeKey, obj);
+      recipeNosSet.add(recipeKey);
+
+      const bucket = lunchMap.get(recipeKey) || [];
+      bucket.push({
+        id: docSnap.id,
+        venue: data.venue || data.location || "",
+        station: data.station || "",
+        item: itemName,
+        qty,
+        uom: data.uom || ""
+      });
+      lunchMap.set(recipeKey, bucket);
     }
   }
 
@@ -9567,7 +9748,8 @@ window.loadProductionSummary = async function () {
       if (!btn) return;
       const row = btn.closest("tr");
       const recipeNo = btn.dataset.recipeNo;
-      await toggleProductionDetailRow(row, recipeNo);
+      const description = btn.dataset.description || btn.textContent || "";
+      await toggleProductionDetailRow(row, recipeNo, description);
     };
     tbody.addEventListener("click", tbody._onProdToggle);
   }
@@ -9580,14 +9762,15 @@ window.loadProductionSummary = async function () {
 
     const prodKey = item.recipeNo; // key for storing edits
     const prodQty = getAcctQty("production", prodKey, Number(item.total) || 0);
+    const descHtml = escapeHtml(item.description || "");
 
    tr.innerHTML = `
   <td>${item.submenuCode || ""}</td>
   <td>${item.dishCode}</td>
   <td>${item.recipeNo}</td>
   <td>
-    <button class="prod-desc-toggle" data-recipe-no="${item.recipeNo}" style="all:unset; color:#3b82f6; cursor:pointer; text-decoration:underline;">
-      ${item.description}
+    <button class="prod-desc-toggle" data-recipe-no="${item.recipeNo}" data-description="${descHtml}" style="all:unset; color:#3b82f6; cursor:pointer; text-decoration:underline;">
+      ${descHtml}
     </button>
   </td>
   <td>
@@ -9613,7 +9796,7 @@ window.loadProductionSummary = async function () {
 };
 
 
-async function toggleProductionDetailRow(anchorTr, recipeNo) {
+async function toggleProductionDetailRow(anchorTr, recipeNo, descriptionFromButton = "") {
   const tbody = anchorTr.parentElement;
   // If an expanded row for this anchor already exists, remove it (collapse)
   const next = anchorTr.nextElementSibling;
@@ -9673,22 +9856,27 @@ async function toggleProductionDetailRow(anchorTr, recipeNo) {
 
   bodyEl.innerHTML = ""; // clear loading row
 
-  // Build rows
+  const normalizedRecipeNo = String(recipeNo || "").toUpperCase();
+  const buttonEl = anchorTr.querySelector(".prod-desc-toggle");
+  const detailDescription = descriptionFromButton || buttonEl?.dataset?.description || buttonEl?.textContent || "";
+
   let running = 0;
-  snap.forEach(docSnap => {
+  let rowsAdded = 0;
+
+  for (const docSnap of snap.docs) {
     const d = docSnap.data() || {};
     const id = docSnap.id;
     const type = String(d.type || "").toLowerCase();
     const venue = d.venue || "";
     const station = d.station || "";
-    // Same quantity rules as your Production Summary
     const qtySP = Number(d.netWeight ?? d.sendQty ?? d.qty ?? 0);
     const qtyAO = Number(d.sendQty ?? d.qty ?? d.netWeight ?? 0);
     const qty   = (type === "starting-par") ? qtySP : qtyAO;
 
-    if (!Number.isFinite(qty) || qty <= 0) return;
+    if (!Number.isFinite(qty) || qty <= 0) continue;
 
     running += qty;
+    rowsAdded += 1;
 
     const tr = document.createElement("tr");
     tr.innerHTML = `
@@ -9711,14 +9899,56 @@ async function toggleProductionDetailRow(anchorTr, recipeNo) {
       </td>
     `;
     bodyEl.appendChild(tr);
-  });
-
-  if (!bodyEl.children.length) {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `<td colspan="5" style="padding:8px; font-style:italic; color:gray;">No orders found for this recipe today.</td>`;
-    bodyEl.appendChild(tr);
   }
-  sumEl.textContent = running.toFixed(2);
+
+  const ensureMap = (maybeMap) => (maybeMap instanceof Map ? maybeMap : new Map());
+  const wasteExtras = Array.from(ensureMap(window._productionWasteByRecipe).get(normalizedRecipeNo) || []);
+  const lunchExtras = Array.from(ensureMap(window._productionLunchByRecipe).get(normalizedRecipeNo) || []);
+  const sumExtras = (entries) => entries.reduce((acc, entry) => {
+    const v = Number(entry?.qty ?? 0);
+    return Number.isFinite(v) ? acc + v : acc;
+  }, 0);
+  const wasteTotal = sumExtras(wasteExtras);
+  const lunchTotal = sumExtras(lunchExtras);
+  let currentExtrasTotal = wasteTotal + lunchTotal;
+
+  const appendExtras = (entries, typeLabel) => {
+    for (const entry of entries) {
+      const qtyVal = Number(entry?.qty ?? 0);
+      if (!Number.isFinite(qtyVal) || qtyVal <= 0) continue;
+
+      running += qtyVal;
+      rowsAdded += 1;
+
+      const venueLabel = escapeHtml(entry.venue || "");
+      const itemLabel = escapeHtml(entry.item || entry.station || detailDescription || "");
+      const uomHtml = entry.uom ? ` <span style="opacity:.7;">(${escapeHtml(entry.uom)})</span>` : "";
+      const idLabel = escapeHtml(entry.id || "");
+      const qtyText = qtyVal.toFixed(2);
+
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td style="padding:6px 4px;">${typeLabel}</td>
+        <td style="padding:6px 4px;">${venueLabel}</td>
+        <td style="padding:6px 4px;">${itemLabel}${uomHtml}</td>
+        <td style="padding:6px 4px; font-family:monospace;">${idLabel}</td>
+        <td style="padding:6px 4px; text-align:right;">${qtyText}</td>
+      `;
+      bodyEl.appendChild(tr);
+    }
+  };
+
+  appendExtras(wasteExtras, "Waste");
+  appendExtras(lunchExtras, "Lunch");
+
+  if (rowsAdded === 0) {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td colspan="5" style="padding:8px; font-style:italic; color:gray;">No production, lunch, or waste records for today.</td>`;
+    bodyEl.appendChild(tr);
+    sumEl.textContent = "0.00";
+  } else {
+    sumEl.textContent = running.toFixed(2);
+  }
 
   // Handle inline saves: Enter to persist, then refresh sum + parent total
   const onKeydown = async (e) => {
@@ -9744,20 +9974,27 @@ const update =
     try {
       await updateDoc(doc(db, "orders", orderId), update);
       // Recompute the detail sum
-      let sum = 0;
+      let ordersSum = 0;
       bodyEl.querySelectorAll(".prod-order-edit").forEach(input => {
         const v = Number(input.value);
-        if (Number.isFinite(v)) sum += v;
+        if (Number.isFinite(v)) ordersSum += v;
       });
-      sumEl.textContent = sum.toFixed(2);
+
+      currentExtrasTotal = sumExtras(ensureMap(window._productionWasteByRecipe).get(normalizedRecipeNo) || [])
+        + sumExtras(ensureMap(window._productionLunchByRecipe).get(normalizedRecipeNo) || []);
+
+      const totalSum = ordersSum + currentExtrasTotal;
+      sumEl.textContent = totalSum.toFixed(2);
 
       // Update the parent row's Production Summary qty input (to keep UI consistent)
       const parentQtyInput = anchorTr.querySelector('input.acct-qty-input[data-tab="production"]');
       if (parentQtyInput) {
-        parentQtyInput.value = sum.toFixed(2);
+        parentQtyInput.value = totalSum.toFixed(2);
         // also keep overrides map in sync if you use it elsewhere
-        setAcctQty("production", recipeNo, sum);
+        setAcctQty("production", recipeNo, totalSum);
       }
+
+      running = totalSum;
 
       // Optional: subtle flash to confirm save
       el.style.outline = "2px solid #22c55e";
