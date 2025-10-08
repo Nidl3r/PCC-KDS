@@ -1273,6 +1273,7 @@ Step 3: …"></textarea>
         <button class="an-tab active" data-analytics="cogs">Food Item COGS</button>
         <button class="an-tab" data-analytics="timing">Food Timing</button>
         <button class="an-tab" data-analytics="qty-per-guest">Qty per Guest</button>
+        <button class="an-tab" data-analytics="pan-weight">Pan Weight</button>
       </div>
     </div>
 
@@ -1362,6 +1363,27 @@ Step 3: …"></textarea>
                 <th>Recipe #</th>
                 <th>Avg Qty / Guest</th>
                 <th>Samples</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+
+        <!-- PAN WEIGHT TAB -->
+        <div class="analytics-section" data-analytics="pan-weight" style="display:none;">
+          <h3 style="margin:0 0 8px;">Pan Weight &amp; Price</h3>
+          <table id="panWeightTable" style="width:100%; border-collapse:collapse;">
+            <thead>
+              <tr style="text-align:left; border-bottom:1px solid #444;">
+                <th>Recipe</th>
+                <th>Recipe #</th>
+                <th>Venues</th>
+                <th>Total Pans</th>
+                <th>Total Net Wt (lb)</th>
+                <th>Avg Wt / Pan (lb)</th>
+                <th>Cost / lb</th>
+                <th>Price / Pan</th>
+                <th>Records</th>
               </tr>
             </thead>
             <tbody></tbody>
@@ -1460,6 +1482,8 @@ Step 3: …"></textarea>
         await loadFoodTiming(startStr, endStr, startTs, endTs);
       } else if (active === 'qty-per-guest' && typeof loadQtyPerGuest === 'function') {
         await loadQtyPerGuest(startStr, endStr, startTs, endTs);
+      } else if (active === 'pan-weight' && typeof loadPanWeightAnalytics === 'function') {
+        await loadPanWeightAnalytics(startStr, endStr, startTs, endTs);
       }
     } finally {
       document.getElementById('analyticsLoading').style.display = 'none';

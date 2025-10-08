@@ -12135,6 +12135,8 @@ window.sendAllMainLunch = async function () {
         await runTiming(startStr, endStr, startTs, endTs, venue, section);
       } else if (tab === "qty-per-guest") {
         await runQtyPerGuest(startStr, endStr, startTs, endTs, venue, section);
+      } else if (tab === "pan-weight") {
+        await runPanWeightAnalytics(startStr, endStr, startTs, endTs, venue, section);
       }
     } finally {
       loading && (loading.style.display="none");
@@ -12280,6 +12282,12 @@ window.sendAllMainLunch = async function () {
     const filters = resolveAnalyticsFilters(venue, section);
     return runLoaderWithState(runQtyPerGuest, range, filters);
   };
+  window.loadPanWeightAnalytics = async function loadPanWeightAnalytics(startStr, endStr, startTs, endTs, venue, section){
+    const range = resolveAnalyticsRange(startStr, endStr, startTs, endTs);
+    if (!range) return;
+    const filters = resolveAnalyticsFilters(venue, section);
+    return runLoaderWithState(runPanWeightAnalytics, range, filters);
+  };
 
 function itemKeyFrom(recipeNo, description){
   return `${(recipeNo || "").toUpperCase()}__${(description || "").trim()}`;
@@ -12348,7 +12356,9 @@ function passesSidebarFilters(row){
       const description = r.description || d.description || d.item || "";
       const category    = normalizeCategory(r.category || d.category, d.station);
       const uom         = d.uom || r.uom || "ea";
-      const qty         = Number(d.netWeight ?? d.qty ?? d.sentQty ?? d.requestQty ?? 0);
+      const netWeight   = Number(d.netWeight ?? d.qty ?? d.sentQty ?? d.requestQty ?? 0);
+      const grossWeight = Number(d.sendQty ?? d.qty ?? d.requestQty ?? d.sentQty ?? 0);
+      const qty         = netWeight;
       // prefer order.totalCost; else unit * qty (unit can be on order or recipe)
       const storedTotal = Number(d.totalCost || 0);
       let cost = 0;
@@ -12357,6 +12367,9 @@ function passesSidebarFilters(row){
         const unit = Number(d.cost ?? d.unitCost ?? r.cost ?? 0);
         cost = unit > 0 ? unit * qty : 0;
       }
+      const costPerLb = Number(d.costPerLb ?? d.cost ?? r.cost ?? 0);
+      const pans = Number(d.pans ?? 0);
+      const panWeight = Number(d.panWeight ?? r.panWeight ?? 0);
       const date = d.date || (d.timestamp?.toDate?.() ? isoDateHST(d.timestamp.toDate()) : "");
 
       const row = {
@@ -12366,9 +12379,11 @@ function passesSidebarFilters(row){
         day: Number((date||"").slice(8,10)),
         venue: d.venue || "",
         recipeNo, description, category, qty, uom, cost,
+        netWeight, grossWeight, pans, costPerLb, panWeight,
         type: d.type || "",
         status: d.status || "",
-        itemKey: `${(recipeNo || "").toUpperCase()}__${(description||"").trim()}`
+        itemKey: `${(recipeNo || "").toUpperCase()}__${(description||"").trim()}`,
+        raw: d
       };
       out.push(row);
       cats.add(row.category);
@@ -12679,6 +12694,86 @@ async function runTiming(startStr, endStr, startTs, endTs, venue, section){
   }
   avgRows.sort((a,b)=> Number(b[2]) - Number(a[2]));
   fillTable("qtyPerGuestAverages", avgRows);
+}
+
+  // -------------------- Tab 4: Pan Weight & Price --------------------
+ async function runPanWeightAnalytics(startStr, endStr, startTs, endTs, venue, section){
+  const { rows } = await fetchOrdersAndRecipesByDateRange({ startStr, endStr, venue, section });
+
+  const baseRows = rows
+    .filter(r => (r.status === "sent" || r.status === "received"))
+    .filter(r => Number(r.pans || 0) > 0)
+    .filter(passesSidebarFilters);
+
+  const cats = [...new Set(baseRows.map(r => r.category))].sort();
+  const items = [...new Set(baseRows.map(r => r.itemKey))].sort((a,b)=>a.localeCompare(b));
+  rebuildFilterLists(cats, items);
+
+  const aggregated = new Map();
+  baseRows.forEach(row => {
+    const pans = Number(row.pans || 0);
+    const net = Number(row.netWeight ?? row.qty ?? 0);
+    if (!(pans > 0) || !(net > 0)) return;
+
+    const key = row.itemKey || itemKeyFrom(row.recipeNo, row.description);
+    if (!aggregated.has(key)) {
+      aggregated.set(key, {
+        item: row.description,
+        recipe: row.recipeNo,
+        category: row.category,
+        venues: new Set(),
+        totalPans: 0,
+        totalNet: 0,
+        costWeightSum: 0,
+        costWeightTotal: 0,
+        samples: 0
+      });
+    }
+
+    const entry = aggregated.get(key);
+    entry.totalPans += pans;
+    entry.totalNet += net;
+    entry.samples += 1;
+    if (row.venue) entry.venues.add(row.venue);
+
+    const costPerLb = Number(row.costPerLb ?? 0);
+    if (costPerLb > 0) {
+      entry.costWeightSum += costPerLb * net;
+      entry.costWeightTotal += net;
+    }
+  });
+
+  const tableRows = [...aggregated.values()]
+    .filter(entry => entry.totalPans > 0 && entry.totalNet > 0)
+    .sort((a,b) => a.item.localeCompare(b.item))
+    .map(entry => {
+      const avgPerPan = entry.totalNet / entry.totalPans;
+      const avgCostPerLb = entry.costWeightTotal > 0
+        ? entry.costWeightSum / entry.costWeightTotal
+        : 0;
+      const pricePerPan = avgPerPan * avgCostPerLb;
+      const venueLabel = entry.venues.size ? [...entry.venues].sort().join(", ") : "—";
+
+      const avgWeightLabel = toFixedOrEmpty(avgPerPan, 2);
+      const totalPansLabel = toFixedOrEmpty(entry.totalPans, 2);
+      const totalNetLabel = toFixedOrEmpty(entry.totalNet, 2);
+      const costLabel = avgCostPerLb > 0 ? fmtMoney(avgCostPerLb) : "—";
+      const priceLabel = (avgCostPerLb > 0 && avgPerPan > 0) ? fmtMoney(pricePerPan) : "—";
+
+      return [
+        entry.item || "",
+        entry.recipe || "",
+        venueLabel,
+        totalPansLabel,
+        totalNetLabel,
+        avgWeightLabel,
+        costLabel,
+        priceLabel,
+        String(entry.samples)
+      ];
+    });
+
+  fillTable("panWeightTable", tableRows);
 }
 
 
