@@ -4448,17 +4448,27 @@ window.renderStartingStatus = async function (venue, data) {
   if (!tbody) return;
 
   const categoryFilter = document.getElementById(`${venue.toLowerCase()}-starting-category`)?.value || "";
+  const canonicalVenue = typeof canonicalizeVenueName === "function"
+    ? canonicalizeVenueName(venue)
+    : venue;
+  const firestoreVenue = canonicalVenue === "Concession" ? "Concessions" : canonicalVenue;
+  const isConcessions = firestoreVenue === "Concessions";
 
   // Base guestCount comes from cache (saved Firestore number)
   const guestCount = Number(data?.guestCount || 0);
   // For R0425 on Aloha/Ohana, prefer Showware live total if present
-  const liveShowware = (typeof window.swHasTotal === "function") ? window.swHasTotal(venue) : null;
+  const liveShowware = (typeof window.swHasTotal === "function") ? window.swHasTotal(canonicalVenue) : null;
 
   tbody.innerHTML = "";
   let matchedCount = 0;
 
+  const formatNumber = (val) => {
+    const num = Number(val);
+    if (!Number.isFinite(num)) return "0";
+    return num % 1 ? num.toFixed(2) : num;
+  };
+
   const today = getTodayDate();
-  const firestoreVenue = venue === "Concession" ? "Concessions" : venue;
 
   // Load today's starting-par orders for this venue/day
   const ordersSnapshot = await getDocs(query(
@@ -4472,6 +4482,7 @@ window.renderStartingStatus = async function (venue, data) {
   const totalPansByRecipe   = new Map();
   const totalQtyByRecipe    = new Map();
   const pendingPansByRecipe = new Map();
+  const statusByRecipe      = new Map();
 
   const deriveQtyForOrder = (order) => {
     const candidates = [order.qtyNet, order.netWeight, order.sendQty, order.qty];
@@ -4488,17 +4499,21 @@ window.renderStartingStatus = async function (venue, data) {
     const recipeId = o.recipeId;
     if (!recipeId) return;
 
+    const statusRaw = typeof o.status === "string" ? o.status.toLowerCase() : "";
+    if (statusRaw) statusByRecipe.set(recipeId, statusRaw);
+    const isNA = statusRaw === "na";
+
     const pans = Number(o.pans || 0);
     const qty  = deriveQtyForOrder(o);
-    const isReceived = (o.received === true) || (o.status === "received");
+    const isReceived = (o.received === true) || (statusRaw === "received");
 
-    if (pans > 0) {
+    if (!isNA && pans > 0) {
       totalPansByRecipe.set(recipeId, (totalPansByRecipe.get(recipeId) || 0) + pans);
       if (!isReceived) {
         pendingPansByRecipe.set(recipeId, (pendingPansByRecipe.get(recipeId) || 0) + pans);
       }
     }
-    if (qty > 0) {
+    if (!isNA && qty > 0) {
       totalQtyByRecipe.set(recipeId, (totalQtyByRecipe.get(recipeId) || 0) + qty);
     }
   });
@@ -4513,15 +4528,19 @@ window.renderStartingStatus = async function (venue, data) {
 
     // Target PAR (pans) for this venue
     let targetPans = 0;
-    if (venue === "Concessions") {
-      targetPans = Number(recipe.pars?.Concession?.default || 0);
+    if (isConcessions) {
+      const concessionsPars = recipe.pars?.Concessions ?? recipe.pars?.Concession ?? {};
+      const defaultPar = Number(concessionsPars?.default || 0);
+      const keyedPar = Number(concessionsPars?.[String(guestCount)] ?? 0);
+      targetPans = defaultPar > 0 ? defaultPar : keyedPar;
     } else {
       // For Pineapple Shells on Aloha/Ohana, use LIVE Showware total if present
-      if ((venue === "Aloha" || venue === "Ohana") && isR0425 && Number.isFinite(liveShowware)) {
+      if ((canonicalVenue === "Aloha" || canonicalVenue === "Ohana") && isR0425 && Number.isFinite(liveShowware)) {
         targetPans = Number(liveShowware || 0);
       } else {
         // Everyone else keeps the saved-count keyed PAR table
-        targetPans = Number(recipe.pars?.[venue]?.[String(guestCount)] || 0);
+        const venuePars = recipe.pars?.[canonicalVenue] ?? recipe.pars?.[venue] ?? {};
+        targetPans = Number(venuePars?.[String(guestCount)] || 0);
       }
     }
     if (targetPans <= 0) return;
@@ -4530,25 +4549,35 @@ window.renderStartingStatus = async function (venue, data) {
     const sentPans    = Number(totalPansByRecipe.get(recipeId) || 0);
     const sentQty     = Number(totalQtyByRecipe.get(recipeId)  || data?.sentPars?.[recipeId] || 0);
     const pendingPans = Number(pendingPansByRecipe.get(recipeId) || 0);
+    const recipeStatus = statusByRecipe.get(recipeId) || "";
+    const isNA = recipeStatus === "na";
 
-    // Hide if fully satisfied and nothing pending
-    if (sentPans >= targetPans && pendingPans <= 0) return;
+    // Hide if fully satisfied and nothing pending (unless explicitly marked NA)
+    if (!isNA && sentPans >= targetPans && pendingPans <= 0) return;
+
+    const sentDisplay = isNA
+      ? `<span class="status-pill status-pill--na">Marked NA by Main Kitchen</span>`
+      : `${formatNumber(sentPans)} pans / ${formatNumber(sentQty)} qty`;
+
+    const receiveDisplay = (() => {
+      if (isNA) return `<span class="status-pill status-pill--na">NA</span>`;
+      if (pendingPans > 0) return `<button class="receive-btn" data-recipe-id="${recipeId}">Receive</button>`;
+      return ``;
+    })();
 
     const row = document.createElement("tr");
+    if (isNA) {
+      row.classList.add("row-na");
+      row.dataset.status = "na";
+    }
     row.innerHTML = `
       <td>${recipe.description || recipe.recipeNo || recipeId}</td>
-      <td>${targetPans % 1 ? targetPans.toFixed(2) : targetPans}</td>
-      <td>
-        ${(sentPans % 1 ? sentPans.toFixed(2) : sentPans)} pans
-        /
-        ${(sentQty  % 1 ? sentQty.toFixed(2)  : sentQty)} qty
-      </td>
-      <td>
-        ${pendingPans > 0 ? `<button class="receive-btn" data-recipe-id="${recipeId}">Receive</button>` : ``}
-      </td>
+      <td>${formatNumber(targetPans)}</td>
+      <td>${sentDisplay}</td>
+      <td>${receiveDisplay}</td>
     `;
 
-    if (pendingPans > 0) {
+    if (!isNA && pendingPans > 0) {
       row.querySelector(".receive-btn")?.addEventListener("click", async (e) => {
         const btn = e.currentTarget;
         await receiveStartingPar(venue, recipeId, btn);
@@ -5469,6 +5498,24 @@ window.sendSingleStartingPar = async function (recipeId, venue, button) {
 };
 
 
+function refreshStartingParForVenue(venueName) {
+  const loaders = {
+    Aloha: window.loadAlohaStartingPar,
+    Ohana: window.loadOhanaStartingPar,
+    Gateway: window.loadGatewayStartingPar,
+    Concessions: window.loadConcessionStartingPar,
+  };
+  const loader = loaders?.[venueName];
+  if (typeof loader === "function") {
+    try {
+      loader();
+    } catch (err) {
+      console.warn(`Failed to refresh ${venueName} starting pars`, err);
+    }
+  }
+}
+
+
 // 📌 Mark Starting Par item as NA for today (drops to bottom, turns green)
 window.markStartingParNA = async function (recipeId, venue, button) {
   const today = getTodayDate();
@@ -5489,6 +5536,7 @@ window.markStartingParNA = async function (recipeId, venue, button) {
 
     // Repaint the table so it moves to bottom and turns green
     try { typeof loadMainKitchenStartingPars === "function" && loadMainKitchenStartingPars(); } catch {}
+    refreshStartingParForVenue(venueName);
   } catch (e) {
     console.error("markStartingParNA failed:", e);
     alert("Failed to mark item as NA.");
@@ -5525,6 +5573,7 @@ window.reopenStartingPar = async function (recipeId, venue, button) {
     }, { merge: true });
 
     try { typeof loadMainKitchenStartingPars === "function" && loadMainKitchenStartingPars(); } catch {}
+    refreshStartingParForVenue(venueName);
   } catch (e) {
     console.error("reopenStartingPar failed:", e);
     alert("Failed to reopen item.");
@@ -8341,18 +8390,44 @@ window.loadConcessionStartingPar = async function () {
   console.log("🚀 Starting Concession par load...");
 
   const today = getTodayDate();
-  const guestRef = doc(db, "guestCounts", today);
-  const guestSnap = await getDoc(guestRef);
+  const infoEl = document.getElementById("concessionGuestInfo");
 
-  if (!guestSnap.exists()) {
-    console.warn("❌ No guestCounts document found for today:", today);
-    document.getElementById("concessionGuestInfo").textContent = "⚠️ No guest count for today.";
-    return;
+  let guestCount = 0;
+  let infoMessage = "ℹ️ Using default Concessions pars.";
+
+  try {
+    const guestRef = doc(db, "guestCounts", today);
+    const guestSnap = await getDoc(guestRef);
+
+    if (guestSnap.exists()) {
+      const guestData = guestSnap.data() || {};
+      const concessionRaw = Number(guestData?.Concession);
+      const recordedVenues = ["Aloha", "Ohana", "Gateway"].filter((name) => {
+        const val = Number(guestData?.[name]);
+        return Number.isFinite(val) && val > 0;
+      });
+
+      if (Number.isFinite(concessionRaw) && concessionRaw > 0) {
+        guestCount = concessionRaw;
+        infoMessage = `👥 Guest Count: ${concessionRaw}`;
+      } else if (recordedVenues.length > 0) {
+        const summary = recordedVenues
+          .map((name) => `${name} ${guestData?.[name] ?? "—"}`)
+          .join(", ");
+        infoMessage = `ℹ️ No Concessions count yet. Other counts recorded: ${summary}`;
+      } else {
+        infoMessage = "⚠️ No guest counts recorded today. Using default pars.";
+      }
+    } else {
+      console.warn("❌ No guestCounts document found for today:", today);
+      infoMessage = "ℹ️ Guest counts not saved yet. Using default pars.";
+    }
+  } catch (err) {
+    console.error("❌ Failed to load guest counts for Concessions:", err);
+    infoMessage = "⚠️ Unable to load guest counts. Using default pars.";
   }
 
-  const guestData = guestSnap.data();
-  const guestCount = guestData?.Concession || 0;
-  document.getElementById("concessionGuestInfo").textContent = `👥 Guest Count: ${guestCount}`;
+  if (infoEl) infoEl.textContent = infoMessage;
 
   // 🔍 Load recipes with Concession venueCodes
   const recipesRef = collection(db, "recipes");
