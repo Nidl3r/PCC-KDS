@@ -1018,15 +1018,20 @@ const PREP_LEFTOVER_COLLECTION = "prepLeftovers";
 window.loadMainKitchenPrepPars   = loadMainKitchenPrepPars;
 window.reloadMainKitchenPrepPars = loadMainKitchenPrepPars;
 window.savePrepPans              = savePrepPans;
+window.resetPrepLeftovers        = resetPrepLeftovers;
 
 async function loadMainKitchenPrepPars(options = {}) {
   const { silent = false } = options || {};
   const tbody = document.getElementById("prepParsTbody");
+  const resetButton = document.getElementById("resetLeftoversBtn");
   const canRender = Boolean(tbody);
   const shouldRender = canRender && !silent;
 
   if (shouldRender) {
     showTableLoading(tbody, "Loading Prep Pars…");
+    if (resetButton) {
+      resetButton.disabled = true;
+    }
   }
 
   const today = getTodayDate();
@@ -1218,6 +1223,10 @@ async function loadMainKitchenPrepPars(options = {}) {
     if (ca !== 0) return ca;
     return String(a.recipeNo).localeCompare(String(b.recipeNo));
   });
+
+  if (resetButton) {
+    resetButton.disabled = items.length === 0;
+  }
 
   // 7) Render
   if (shouldRender) {
@@ -1674,7 +1683,6 @@ function renderPrepParsTable(items, tbody) {
           type="text"
           inputmode="decimal"
           class="leftover-input"
-          style="width:90px;text-align:right;"
           placeholder="0"
           value="${leftoverValue}"
           data-prep-id="${it.prepId}"
@@ -1693,7 +1701,6 @@ function renderPrepParsTable(items, tbody) {
           type="text"
           inputmode="decimal"
           class="prep-input"
-          style="width:90px;text-align:right;"
           placeholder="${needPlaceholder}"
           value=""
           data-prep-id="${it.prepId}"
@@ -1728,6 +1735,105 @@ function renderPrepParsTable(items, tbody) {
 }
 
 
+
+
+async function resetPrepLeftovers() {
+  const tbody = document.getElementById("prepParsTbody");
+  const rows = Array.from(tbody?.querySelectorAll("tr") || []).filter(row =>
+    row.querySelector(".leftover-input")
+  );
+
+  if (!rows.length) {
+    alert("No prep rows are available to reset.");
+    return;
+  }
+
+  const confirmed = window.confirm("Reset all leftover values to 0?");
+  if (!confirmed) {
+    return;
+  }
+
+  const resetButton = document.getElementById("resetLeftoversBtn");
+  if (resetButton) {
+    resetButton.disabled = true;
+  }
+
+  const serviceDate = getPrepServiceDate();
+  const tasks = [];
+  const refreshQueue = [];
+
+  for (const row of rows) {
+    const leftoverInput = row.querySelector(".leftover-input");
+    if (!leftoverInput) continue;
+
+    const dataset = leftoverInput.dataset || {};
+    const prepId = dataset.prepId;
+    if (!prepId) continue;
+
+    const recipeNo = dataset.recipeNo || "";
+    const recipeId = dataset.recipeId || "";
+    const category = (dataset.category || "").toUpperCase();
+    const docVenueKey = dataset.venue || COMBINED_VENUE_KEY;
+
+    let combinedTargets = [];
+    try {
+      const raw = dataset.venues ? decodeURIComponent(dataset.venues) : "";
+      combinedTargets = raw ? raw.split("|").map(v => v.trim()).filter(Boolean) : [];
+    } catch {}
+
+    leftoverInput.value = "0";
+
+    tasks.push(setDoc(doc(db, PREP_LEFTOVER_COLLECTION, `${serviceDate}|${prepId}`), {
+      serviceDate,
+      prepId,
+      recipeNo,
+      recipeId,
+      venue: docVenueKey,
+      leftover: 0,
+      combinedVenues: docVenueKey === COMBINED_VENUE_KEY ? combinedTargets : [],
+      updatedAt: serverTimestamp(),
+    }, { merge: true }));
+
+    refreshQueue.push({
+      row,
+      prepId,
+      recipeNo,
+      recipeId,
+      category,
+    });
+  }
+
+  if (!tasks.length) {
+    if (resetButton) {
+      resetButton.disabled = false;
+    }
+    return;
+  }
+
+  try {
+    await Promise.all(tasks);
+
+    await Promise.all(refreshQueue.map(meta => refreshPrepParRow(meta.row, {
+      prepId: meta.prepId,
+      recipeNo: meta.recipeNo,
+      recipeId: meta.recipeId,
+      category: meta.category,
+      overrideLeftover: 0,
+    })));
+
+    for (const meta of refreshQueue) {
+      meta.row.style.backgroundColor = "rgba(28, 150, 80, 0.12)";
+      setTimeout(() => (meta.row.style.backgroundColor = ""), 450);
+    }
+  } catch (err) {
+    console.error("resetPrepLeftovers failed:", err);
+    alert("Failed to reset leftovers.");
+  } finally {
+    if (resetButton) {
+      resetButton.disabled = false;
+    }
+  }
+}
 
 
 function applyPrepRowTooltip(row, meta = {}) {
@@ -2086,18 +2192,8 @@ function isGuestCountLocked() {
 
 
 function getPrepServiceDate() {
-  const now = new Date();
-  const hawaiiOffsetMs = -10 * 60 * 60 * 1000;
-  const hawaiiNow = new Date(now.getTime() + hawaiiOffsetMs);
-  const hour = hawaiiNow.getUTCHours();
-  const base = new Date(hawaiiNow);
-  if (hour >= 18) {
-    base.setUTCDate(base.getUTCDate() + 1);
-  }
-  const year = base.getUTCFullYear();
-  const month = String(base.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(base.getUTCDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  // Leftover resets are controlled manually; always use today's Hawaii-local date.
+  return getTodayDate();
 }
 
 // ========================= SCALE INTEGRATION (Web Serial + Keyboard Wedge) =========================

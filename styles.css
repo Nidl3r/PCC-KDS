@@ -731,6 +731,40 @@ table {
   }
 }
 
+.prep-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+  margin: 0 0 12px;
+}
+
+.ghost-btn {
+  padding: 8px 16px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  background: rgba(148, 163, 184, 0.08);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 1rem;
+  font-weight: 500;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+  box-shadow: var(--shadow-sm);
+}
+.ghost-btn:hover {
+  background: rgba(59, 130, 246, 0.18);
+  border-color: rgba(59, 130, 246, 0.45);
+  color: #dbeafe;
+}
+.ghost-btn:active {
+  transform: translateY(1px);
+}
+.ghost-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
 #kitchenTable {
   table-layout: fixed;
   width: 100%;
@@ -764,6 +798,73 @@ table button {
   color: var(--text);
   border: none;
   border-radius: 4px;
+}
+
+#prepParsTable {
+  table-layout: auto;
+}
+
+#prepParsTable th {
+  white-space: nowrap;
+  font-size: 0.76rem;
+}
+
+#prepParsTable td {
+  white-space: nowrap;
+}
+
+#prepParsTable td[data-label="Venue"] {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+#prepParsTable td[data-label="Leftover"],
+#prepParsTable td[data-label="Enter Pans Made"] {
+  min-width: 120px;
+}
+
+#prepParsTable td[data-label="Save"] {
+  min-width: 88px;
+  text-align: center;
+}
+
+#prepParsTable td[data-label="Item"] {
+  white-space: normal;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+.prep-input,
+.leftover-input {
+  width: 100%;
+  max-width: 7rem;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: var(--surface-strong);
+  color: var(--text);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  box-sizing: border-box;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.prep-input:focus,
+.leftover-input:focus {
+  outline: none;
+  border-color: rgba(96, 165, 250, 0.65);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.16);
+  background: rgba(24, 26, 35, 0.98);
+}
+
+@media (max-width: 600px) {
+  .prep-toolbar {
+    justify-content: stretch;
+  }
+  .prep-toolbar .ghost-btn {
+    width: 100%;
+  }
 }
 
 #mainKitchenNotif {
@@ -1494,6 +1595,7 @@ table button {
   align-self: flex-start;
   transition: background-color 0.2s ease;
   box-shadow: var(--shadow-sm);
+  white-space: nowrap;
 }
 .save-btn:hover { background-color: var(--border); }
 .save-btn:active { transform: translateY(1px); }
