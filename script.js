@@ -9522,6 +9522,224 @@ window.sendChatMessage = async function () {
 
 
 //**accounting */
+const GUEST_SIMILARITY_TOLERANCE = { Aloha: 30, Ohana: 30, Gateway: 60 };
+
+function subtractDaysIso(dateStr, daysBack) {
+  if (!dateStr) return "";
+  const [y, m, d] = dateStr.split("-").map(Number);
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return "";
+  const base = new Date(Date.UTC(y, m - 1, d));
+  base.setUTCDate(base.getUTCDate() - daysBack);
+  const yy = base.getUTCFullYear();
+  const mm = String(base.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(base.getUTCDate()).padStart(2, "0");
+  return `${yy}-${mm}-${dd}`;
+}
+
+function normalizeGuestCounts(raw = {}) {
+  return {
+    Aloha: Number(raw.Aloha ?? raw.aloha ?? 0) || 0,
+    Ohana: Number(raw.Ohana ?? raw.ohana ?? 0) || 0,
+    Gateway: Number(raw.Gateway ?? raw.gateway ?? 0) || 0,
+  };
+}
+
+function areGuestCountsSimilar(todayGuests, pastGuests) {
+  const venues = ["Aloha", "Ohana", "Gateway"];
+  return venues.every((venue) => {
+    const current = Number(todayGuests?.[venue] || 0);
+    const historical = Number(pastGuests?.[venue] || 0);
+    if (!current || !historical) return false;
+    const allowance = Math.max(
+      GUEST_SIMILARITY_TOLERANCE[venue],
+      Math.round(current * 0.1)
+    );
+    return Math.abs(current - historical) <= allowance;
+  });
+}
+
+function computeStdStats(values = []) {
+  const filtered = values.filter((val) => Number.isFinite(val));
+  if (filtered.length < 2) {
+    return { mean: 0, std: 0, count: filtered.length };
+  }
+  const mean = filtered.reduce((sum, val) => sum + val, 0) / filtered.length;
+  const variance =
+    filtered.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) /
+    filtered.length;
+  return { mean, std: Math.sqrt(variance), count: filtered.length };
+}
+
+async function fetchHistoricalProductionStats(
+  recipeNos,
+  todayGuestsRaw,
+  todayStr,
+  lookbackDays = 45
+) {
+  const result = new Map();
+  if (!Array.isArray(recipeNos) || recipeNos.length === 0) return result;
+  if (!todayStr) return result;
+
+  const todayGuests = normalizeGuestCounts(todayGuestsRaw);
+  const hasTodayGuests = Object.values(todayGuests).some(
+    (val) => Number.isFinite(val) && val > 0
+  );
+
+  const startStr = subtractDaysIso(todayStr, lookbackDays);
+  if (!startStr || startStr >= todayStr) return result;
+
+  const allowedRecipeNos = new Set(
+    recipeNos.map((val) => String(val || "").toUpperCase().trim())
+  );
+
+  const ordersSnap = await getDocs(
+    query(
+      collection(db, "orders"),
+      where("date", ">=", startStr),
+      where("date", "<", todayStr)
+    )
+  );
+
+  const perDateTotals = new Map();
+  const recipeIdsToResolve = new Set();
+
+  const valueOrNull = (val) => {
+    const num = Number(val);
+    return Number.isFinite(num) ? num : null;
+  };
+  const chooseQty = (...vals) => {
+    for (const val of vals) {
+      const num = Number(val);
+      if (!Number.isFinite(num)) continue;
+      if (num > 0) return num;
+    }
+    return 0;
+  };
+  const resolveQty = (order, prefersStartingPar) => {
+    const netQty = valueOrNull(order.qtyNet);
+    const netWeight = valueOrNull(order.netWeight);
+    const sendQty = valueOrNull(order.sendQty);
+    const qty = valueOrNull(order.qty);
+    return prefersStartingPar
+      ? chooseQty(netQty, netWeight, sendQty, qty)
+      : chooseQty(netQty, sendQty, qty, netWeight);
+  };
+
+  ordersSnap.forEach((docSnap) => {
+    const data = docSnap.data() || {};
+    const date = String(data.date || "");
+    if (!date || date === todayStr) return;
+
+    const qty = resolveQty(
+      data,
+      String(data.type || "").toLowerCase() === "starting-par"
+    );
+    if (!(qty > 0)) return;
+
+    let key = String(data.recipeNo || "").toUpperCase().trim();
+    if (!key) {
+      const rid = String(data.recipeId || "").trim();
+      if (!rid) return;
+      key = `id:${rid}`;
+      recipeIdsToResolve.add(rid);
+    }
+
+    if (!perDateTotals.has(date)) perDateTotals.set(date, new Map());
+    const map = perDateTotals.get(date);
+    map.set(key, (map.get(key) || 0) + qty);
+  });
+
+  if (perDateTotals.size === 0) return result;
+
+  const guestCountsByDatePairs = await Promise.all(
+    Array.from(perDateTotals.keys()).map(async (date) => {
+      const snap = await getDoc(doc(db, "guestCounts", date));
+      return [date, normalizeGuestCounts(snap.exists() ? snap.data() : {})];
+    })
+  );
+  const guestCountsByDate = new Map(guestCountsByDatePairs);
+
+  if (recipeIdsToResolve.size) {
+    const ids = Array.from(recipeIdsToResolve);
+    const snapshots = await Promise.all(
+      ids.map((id) => getRecipeDocWithFallback(id))
+    );
+    snapshots.forEach((snap, idx) => {
+      if (!snap?.exists?.()) return;
+      const data = snap.data() || {};
+      const recipeNo = String(data.recipeNo || "").toUpperCase().trim();
+      if (!recipeNo) return;
+
+      const targetKey = `id:${ids[idx]}`;
+      perDateTotals.forEach((map) => {
+        if (!map.has(targetKey)) return;
+        const qty = map.get(targetKey);
+        map.delete(targetKey);
+        map.set(recipeNo, (map.get(recipeNo) || 0) + qty);
+      });
+    });
+  }
+
+  const similarAccumulator = new Map();
+  const allAccumulator = new Map();
+
+  perDateTotals.forEach((map, date) => {
+    const pastGuests = guestCountsByDate.get(date);
+    const similar = hasTodayGuests
+      ? areGuestCountsSimilar(todayGuests, pastGuests)
+      : true;
+
+    map.forEach((qty, recipeNo) => {
+      const key = String(recipeNo || "").toUpperCase().trim();
+      if (!allowedRecipeNos.has(key)) return;
+
+      if (!allAccumulator.has(key)) allAccumulator.set(key, []);
+      allAccumulator.get(key).push(qty);
+
+      if (!similar) return;
+      if (!similarAccumulator.has(key)) similarAccumulator.set(key, []);
+      similarAccumulator.get(key).push(qty);
+    });
+  });
+
+  const MIN_SAMPLES = 2;
+
+  allowedRecipeNos.forEach((recipeNo) => {
+    const similarValues = similarAccumulator.get(recipeNo) || [];
+    const allValues = allAccumulator.get(recipeNo) || [];
+
+    let dataset = similarValues;
+    let basis = hasTodayGuests ? "similar guest counts" : "all recorded days";
+
+    if (dataset.length < MIN_SAMPLES && allValues.length >= MIN_SAMPLES) {
+      dataset = allValues;
+      basis = "all recorded days";
+    }
+
+    if (dataset.length < MIN_SAMPLES) return;
+
+    const stats = computeStdStats(dataset);
+    if (!Number.isFinite(stats.mean)) return;
+
+    const rawStd = Number.isFinite(stats.std) ? stats.std : 0;
+    const effectiveStd = rawStd > 0
+      ? rawStd
+      : Math.max(Math.abs(stats.mean) * 0.15, 1);
+
+    if (!(effectiveStd > 0)) return;
+
+    result.set(recipeNo, {
+      mean: stats.mean,
+      std: rawStd,
+      count: dataset.length,
+      basis,
+      effectiveStd
+    });
+  });
+
+  return result;
+}
+
 window.loadProductionSummary = async function () {
   const tbody = document.querySelector("#productionTable tbody");
 
@@ -9554,6 +9772,11 @@ window.loadProductionSummary = async function () {
   const [hawY, hawM, hawD] = todayStr.split("-").map(Number);
   const hawaiiStart = new Date(Date.UTC(hawY, hawM - 1, hawD, 0, 0, 0));
   const hawaiiEnd = new Date(Date.UTC(hawY, hawM - 1, hawD + 1, 0, 0, 0));
+
+  const todayGuestSnap = await getDoc(doc(db, "guestCounts", todayStr));
+  const todaysGuests = normalizeGuestCounts(
+    todayGuestSnap.exists() ? todayGuestSnap.data() : {}
+  );
 
   // --- 1) Pull ALL orders for today (any venue). We'll merge starting-par + add-ons. ---
   const orderSnapshot = await getDocs(query(
@@ -9972,6 +10195,13 @@ window.loadProductionSummary = async function () {
     }
   });
 
+  const anomalyStats = await fetchHistoricalProductionStats(
+    recipeKeyList,
+    todaysGuests,
+    todayStr
+  );
+  window._productionAnomalyStats = anomalyStats;
+
   // --- 6) Render table ---
   tbody.innerHTML = "";
 
@@ -10041,6 +10271,22 @@ window.loadProductionSummary = async function () {
   </td>
 `;
 
+    const stats = anomalyStats.get(item.recipeNo);
+    if (stats) {
+      const diff = Math.abs(prodQty - stats.mean);
+      const threshold = Number.isFinite(stats.effectiveStd)
+        ? stats.effectiveStd
+        : Math.max(Math.abs(stats.mean) * 0.15, 1);
+
+      if (diff > threshold) {
+        tr.classList.add("prod-row--anomaly");
+        const stdDisplay = stats.std > 0
+          ? `${stats.std.toFixed(2)}`
+          : `${stats.effectiveStd.toFixed(2)}*`;
+        tr.title = `Average ${stats.mean.toFixed(2)} • σ ${stdDisplay} • n=${stats.count} (${stats.basis})`;
+      }
+    }
+
     tbody.appendChild(tr);
   }
 };
@@ -10059,6 +10305,38 @@ async function toggleProductionDetailRow(anchorTr, recipeNo, descriptionFromButt
   Array.from(tbody.querySelectorAll(".prod-detail-row")).forEach(r => r.remove());
 
   // Build the detail row shell
+  const anomalyStatsMap = window._productionAnomalyStats;
+  const stats = anomalyStatsMap && typeof anomalyStatsMap.get === "function"
+    ? anomalyStatsMap.get(recipeNo)
+    : anomalyStatsMap?.[recipeNo];
+
+  let statsSectionHtml = `
+    <div class="prod-detail-stats" data-recipe-no="${escapeHtml(recipeNo)}" style="margin-bottom:10px; font-size:12px; opacity:.7;">
+      No historical baseline yet for this recipe.
+    </div>
+  `;
+
+  if (stats) {
+    const basisText = escapeHtml(stats.basis || "all recorded days");
+    const stdLabel = stats.std > 0 && Number.isFinite(stats.std)
+      ? `${stats.std.toFixed(2)}`
+      : `— (threshold ${stats.effectiveStd.toFixed(2)})`;
+
+    const fallbackNote = stats.std > 0 && Number.isFinite(stats.std)
+      ? ""
+      : `<div style="width:100%; font-size:11px; opacity:.6;">σ* uses fallback threshold because historical variance was unavailable.</div>`;
+
+    statsSectionHtml = `
+      <div class="prod-detail-stats" data-recipe-no="${escapeHtml(recipeNo)}" style="margin-bottom:10px; display:flex; flex-wrap:wrap; gap:16px; font-size:12px;">
+        <div><strong>Avg (${basisText}):</strong> <span class="prod-detail-mean">${stats.mean.toFixed(2)}</span></div>
+        <div><strong>Std Dev:</strong> <span class="prod-detail-std">${stdLabel}</span></div>
+        <div><strong>Samples:</strong> ${stats.count}</div>
+        <div><strong>Today's Δ:</strong> <span class="prod-detail-delta">pending…</span></div>
+        ${fallbackNote}
+      </div>
+    `;
+  }
+
   const detailTr = document.createElement("tr");
   detailTr.className = "prod-detail-row";
   const detailTd = document.createElement("td");
@@ -10066,6 +10344,7 @@ async function toggleProductionDetailRow(anchorTr, recipeNo, descriptionFromButt
   detailTd.innerHTML = `
     <div style="padding:10px; background: hsl(0 0% 100% / 0.03); border:1px solid hsl(0 0% 100% / 0.08); border-radius:8px;">
       <div style="font-weight:600; margin-bottom:8px;">Orders for ${recipeNo}</div>
+      ${statsSectionHtml}
       <div style="margin-bottom:10px; font-size:12px; opacity:.7">Edit a quantity and press <strong>Enter</strong> to save to Firestore.</div>
       <table style="width:100%; border-collapse:collapse;">
         <thead>
@@ -10094,6 +10373,32 @@ async function toggleProductionDetailRow(anchorTr, recipeNo, descriptionFromButt
 
   const bodyEl = detailTd.querySelector(".prod-detail-body");
   const sumEl  = detailTd.querySelector(".prod-detail-sum");
+
+  const refreshStatsDelta = (total) => {
+    if (!stats) return;
+    const deltaEl = detailTd.querySelector(".prod-detail-delta");
+    if (!deltaEl) return;
+    const totalNum = Number(total);
+    if (!Number.isFinite(totalNum)) {
+      deltaEl.textContent = "—";
+      return;
+    }
+    const diff = totalNum - stats.mean;
+    const threshold = (Number.isFinite(stats.std) && stats.std > 0)
+      ? stats.std
+      : (Number.isFinite(stats.effectiveStd) && stats.effectiveStd > 0 ? stats.effectiveStd : NaN);
+    const sigma = Number.isFinite(threshold) && threshold > 0 ? diff / threshold : NaN;
+    const sigmaText = Number.isFinite(sigma)
+      ? `${sigma >= 0 ? "+" : ""}${sigma.toFixed(2)}${(threshold !== stats.std) ? "σ*" : "σ"}`
+      : "—";
+    const diffText = `${diff >= 0 ? "+" : ""}${diff.toFixed(2)}`;
+    deltaEl.textContent = `${diffText} (${sigmaText})`;
+    if (Number.isFinite(sigma) && threshold !== stats.std && Number.isFinite(stats.effectiveStd)) {
+      deltaEl.title = `Effective threshold ${stats.effectiveStd.toFixed(2)} used because historical variance was zero or insufficient.`;
+    } else {
+      deltaEl.title = "";
+    }
+  };
 
   // Pull today's orders for this recipe
   const todayStr = (typeof getTodayDate === "function") ? getTodayDate() : new Date().toISOString().slice(0,10);
@@ -10203,6 +10508,8 @@ async function toggleProductionDetailRow(anchorTr, recipeNo, descriptionFromButt
     sumEl.textContent = running.toFixed(2);
   }
 
+  refreshStatsDelta(running);
+
   // Handle inline saves: Enter to persist, then refresh sum + parent total
   const onKeydown = async (e) => {
     const el = e.target;
@@ -10249,6 +10556,7 @@ const update =
       }
 
       running = totalSum;
+      refreshStatsDelta(totalSum);
 
       // Optional: subtle flash to confirm save
       el.style.outline = "2px solid #22c55e";

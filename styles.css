@@ -2061,3 +2061,12 @@ select[data-addon-item-list] option {
     width: min(280px, 92vw);
   }
 }
+
+/* Production anomalies */
+.prod-row--anomaly {
+  background: rgba(239, 68, 68, 0.16);
+}
+
+.prod-row--anomaly td {
+  border-bottom: 1px solid rgba(239, 68, 68, 0.35);
+}
