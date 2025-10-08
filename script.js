@@ -9523,6 +9523,7 @@ window.sendChatMessage = async function () {
 
 //**accounting */
 const GUEST_SIMILARITY_TOLERANCE = { Aloha: 30, Ohana: 30, Gateway: 60 };
+const PRODUCTION_ANOMALY_STD_MULTIPLIER = 2;
 
 function subtractDaysIso(dateStr, daysBack) {
   if (!dateStr) return "";
@@ -9568,6 +9569,22 @@ function computeStdStats(values = []) {
     filtered.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) /
     filtered.length;
   return { mean, std: Math.sqrt(variance), count: filtered.length };
+}
+
+function resolveAnomalyBaseStd(stats) {
+  if (!stats) return { base: NaN, usedFallback: false };
+  if (Number.isFinite(stats.std) && stats.std > 0) {
+    return { base: stats.std, usedFallback: false };
+  }
+  if (Number.isFinite(stats.effectiveStd) && stats.effectiveStd > 0) {
+    return { base: stats.effectiveStd, usedFallback: true };
+  }
+  const meanVal = Number(stats?.mean);
+  const fallback = Math.max(
+    (Number.isFinite(meanVal) ? Math.abs(meanVal) : 0) * 0.15,
+    1
+  );
+  return { base: fallback, usedFallback: true };
 }
 
 async function fetchHistoricalProductionStats(
@@ -10241,7 +10258,10 @@ window.loadProductionSummary = async function () {
     tr.dataset.recipeNo = item.recipeNo; // stable key for the detail row
 
     const prodKey = item.recipeNo; // key for storing edits
-    const prodQty = getAcctQty("production", prodKey, Number(item.total) || 0);
+    const rawQty = getAcctQty("production", prodKey, Number(item.total) || 0);
+    const qtyNumber = Number(rawQty);
+    const prodQty = Number.isFinite(qtyNumber) ? qtyNumber : 0;
+    const displayQty = prodQty.toFixed(2);
     const descHtml = escapeHtml(item.description || "");
 
    tr.innerHTML = `
@@ -10261,7 +10281,7 @@ window.loadProductionSummary = async function () {
       class="acct-qty-input"
       data-tab="production"
       data-key="${prodKey}"
-      value="${prodQty}"
+      value="${displayQty}"
       readonly
       aria-readonly="true"
       tabindex="-1"
@@ -10273,17 +10293,20 @@ window.loadProductionSummary = async function () {
 
     const stats = anomalyStats.get(item.recipeNo);
     if (stats) {
-      const diff = Math.abs(prodQty - stats.mean);
-      const threshold = Number.isFinite(stats.effectiveStd)
-        ? stats.effectiveStd
-        : Math.max(Math.abs(stats.mean) * 0.15, 1);
-
-      if (diff > threshold) {
-        tr.classList.add("prod-row--anomaly");
-        const stdDisplay = stats.std > 0
-          ? `${stats.std.toFixed(2)}`
-          : `${stats.effectiveStd.toFixed(2)}*`;
-        tr.title = `Average ${stats.mean.toFixed(2)} • σ ${stdDisplay} • n=${stats.count} (${stats.basis})`;
+      const meanVal = Number(stats.mean);
+      const { base: baseStd, usedFallback } = resolveAnomalyBaseStd(stats);
+      if (
+        Number.isFinite(meanVal) &&
+        Number.isFinite(baseStd) &&
+        baseStd > 0
+      ) {
+        const threshold = baseStd * PRODUCTION_ANOMALY_STD_MULTIPLIER;
+        const diff = Math.abs(prodQty - meanVal);
+        if (Number.isFinite(diff) && diff > threshold) {
+          tr.classList.add("prod-row--anomaly");
+          const stdDisplay = `${baseStd.toFixed(2)}${usedFallback ? "*" : ""}`;
+          tr.title = `Average ${meanVal.toFixed(2)} • σ ${stdDisplay} • n=${stats.count} (${stats.basis}) • Flag @ ±${threshold.toFixed(2)} (2σ)`;
+        }
       }
     }
 
@@ -10318,18 +10341,27 @@ async function toggleProductionDetailRow(anchorTr, recipeNo, descriptionFromButt
 
   if (stats) {
     const basisText = escapeHtml(stats.basis || "all recorded days");
-    const stdLabel = stats.std > 0 && Number.isFinite(stats.std)
-      ? `${stats.std.toFixed(2)}`
-      : `— (threshold ${stats.effectiveStd.toFixed(2)})`;
-
-    const fallbackNote = stats.std > 0 && Number.isFinite(stats.std)
-      ? ""
-      : `<div style="width:100%; font-size:11px; opacity:.6;">σ* uses fallback threshold because historical variance was unavailable.</div>`;
+    const meanVal = Number(stats.mean);
+    const meanLabel = Number.isFinite(meanVal) ? meanVal.toFixed(2) : "—";
+    const { base: baseStd, usedFallback } = resolveAnomalyBaseStd(stats);
+    const stdLabel = Number.isFinite(baseStd) && baseStd > 0
+      ? `${baseStd.toFixed(2)}${usedFallback ? "*" : ""}`
+      : "—";
+    const flagThreshold = Number.isFinite(baseStd) && baseStd > 0
+      ? baseStd * PRODUCTION_ANOMALY_STD_MULTIPLIER
+      : NaN;
+    const flagLabel = Number.isFinite(flagThreshold)
+      ? `±${flagThreshold.toFixed(2)}`
+      : "—";
+    const fallbackNote = usedFallback
+      ? `<div style="width:100%; font-size:11px; opacity:.6;">σ* uses fallback threshold because historical variance was unavailable.</div>`
+      : "";
 
     statsSectionHtml = `
       <div class="prod-detail-stats" data-recipe-no="${escapeHtml(recipeNo)}" style="margin-bottom:10px; display:flex; flex-wrap:wrap; gap:16px; font-size:12px;">
-        <div><strong>Avg (${basisText}):</strong> <span class="prod-detail-mean">${stats.mean.toFixed(2)}</span></div>
+        <div><strong>Avg (${basisText}):</strong> <span class="prod-detail-mean">${meanLabel}</span></div>
         <div><strong>Std Dev:</strong> <span class="prod-detail-std">${stdLabel}</span></div>
+        <div><strong>2σ Flag:</strong> ${flagLabel}</div>
         <div><strong>Samples:</strong> ${stats.count}</div>
         <div><strong>Today's Δ:</strong> <span class="prod-detail-delta">pending…</span></div>
         ${fallbackNote}
@@ -10379,25 +10411,32 @@ async function toggleProductionDetailRow(anchorTr, recipeNo, descriptionFromButt
     const deltaEl = detailTd.querySelector(".prod-detail-delta");
     if (!deltaEl) return;
     const totalNum = Number(total);
-    if (!Number.isFinite(totalNum)) {
+    const meanVal = Number(stats.mean);
+    if (!Number.isFinite(totalNum) || !Number.isFinite(meanVal)) {
       deltaEl.textContent = "—";
+      deltaEl.title = "";
       return;
     }
-    const diff = totalNum - stats.mean;
-    const threshold = (Number.isFinite(stats.std) && stats.std > 0)
-      ? stats.std
-      : (Number.isFinite(stats.effectiveStd) && stats.effectiveStd > 0 ? stats.effectiveStd : NaN);
-    const sigma = Number.isFinite(threshold) && threshold > 0 ? diff / threshold : NaN;
+
+    const { base: baseStd, usedFallback } = resolveAnomalyBaseStd(stats);
+    if (!Number.isFinite(baseStd) || baseStd <= 0) {
+      deltaEl.textContent = "—";
+      deltaEl.title = "";
+      return;
+    }
+
+    const diff = totalNum - meanVal;
+    const threshold = baseStd * PRODUCTION_ANOMALY_STD_MULTIPLIER;
+    const sigma = diff / baseStd;
+    const sigmaSuffix = usedFallback ? "σ*" : "σ";
     const sigmaText = Number.isFinite(sigma)
-      ? `${sigma >= 0 ? "+" : ""}${sigma.toFixed(2)}${(threshold !== stats.std) ? "σ*" : "σ"}`
+      ? `${sigma >= 0 ? "+" : ""}${sigma.toFixed(2)}${sigmaSuffix}`
       : "—";
     const diffText = `${diff >= 0 ? "+" : ""}${diff.toFixed(2)}`;
-    deltaEl.textContent = `${diffText} (${sigmaText})`;
-    if (Number.isFinite(sigma) && threshold !== stats.std && Number.isFinite(stats.effectiveStd)) {
-      deltaEl.title = `Effective threshold ${stats.effectiveStd.toFixed(2)} used because historical variance was zero or insufficient.`;
-    } else {
-      deltaEl.title = "";
-    }
+    deltaEl.textContent = `${diffText} (${sigmaText}, flag ±${threshold.toFixed(2)})`;
+    deltaEl.title = usedFallback
+      ? `Fallback σ* ${baseStd.toFixed(2)}; flag threshold ±${threshold.toFixed(2)} (2σ).`
+      : `Baseline σ ${baseStd.toFixed(2)}; flag threshold ±${threshold.toFixed(2)} (2σ).`;
   };
 
   // Pull today's orders for this recipe
