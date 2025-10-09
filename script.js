@@ -22,6 +22,8 @@ import {
   arrayRemove,
   increment,
   runTransaction,   // ⬅️ add this line
+  enableNetwork,
+  waitForPendingWrites,
 } from "./firebaseConfig.js";
 
 
@@ -78,6 +80,18 @@ window.applyCategoryFilter = applyCategoryFilter; // ✅ expose it to window
 
 // Set currentVenue on load
 const viewSelect = document.getElementById("viewSelect");
+const offlineBannerEl = document.getElementById("offlineBanner");
+const offlineBannerText = document.getElementById("offlineBannerText");
+const offlineStatusPanel = document.getElementById("offlineStatusPanel");
+const offlineStatusMessage = document.getElementById("offlineStatusMessage");
+const offlineRetryButton = document.getElementById("offlineRetryButton");
+const connectionQualityBadge = document.getElementById("connectionQualityBadge");
+const connectionIndicatorChip = document.getElementById("connectionIndicatorChip");
+const connectionIndicatorText = document.getElementById("connectionIndicatorText");
+const networkInformation =
+  (typeof navigator !== "undefined" &&
+    (navigator.connection || navigator.mozConnection || navigator.webkitConnection)) ||
+  null;
 
 // === Collection config ===
 const RECIPES_COLL = "cookingrecipes";   // new home
@@ -556,6 +570,21 @@ document.addEventListener("DOMContentLoaded", () => {
   const fullscreenToggle  = document.getElementById("fullscreenToggle");
   const mobileQuery       = window.matchMedia("(max-width: 900px)");
 
+  hydrateGuestCountsFromLocalCache();
+
+  [
+    ".save-btn",
+    ".order-controls button",
+    "button[data-queueable]",
+    ".handoff-actions button",
+  ].forEach((selector) => {
+    document.querySelectorAll(selector).forEach((btn) => {
+      if (btn instanceof HTMLButtonElement) {
+        btn.dataset.offlineAware = "1";
+      }
+    });
+  });
+
   let isSidebarCollapsed = sidebar ? sidebar.classList.contains("collapsed") : false;
 
   function updateSidebarActive(id) {
@@ -938,19 +967,156 @@ function listenToVenueOrdersAndUpdateCost(venueName) {
 
 
 
-//offline banner
-function updateOfflineBanner() {
-  const banner = document.getElementById("offlineBanner");
-  if (navigator.onLine) {
-    banner.style.display = "none";
-  } else {
-    banner.style.display = "block";
+const CONNECTION_LABELS = {
+  slow2g: { label: "Extremely weak connection", tone: "critical" },
+  "2g": { label: "Weak connection", tone: "poor" },
+  "3g": { label: "Moderate connection", tone: "fair" },
+  "4g": { label: "Good connection", tone: "good" },
+};
+
+let offlineBannerHideTimer = null;
+
+function describeConnectionQuality() {
+  if (typeof navigator === "undefined" || !navigator.onLine) {
+    return { label: "Offline", tone: "offline" };
   }
+
+  const info = networkInformation;
+  if (!info) return { label: "Online", tone: "good" };
+
+  const type = String(info.effectiveType || "").toLowerCase();
+  if (CONNECTION_LABELS[type]) return CONNECTION_LABELS[type];
+
+  const downlink = Number(info.downlink || 0);
+  if (downlink === 0) return { label: "Online (no throughput data)", tone: "fair" };
+  if (downlink < 1) return { label: "Very weak connection", tone: "critical" };
+  if (downlink < 3) return { label: "Weak connection", tone: "poor" };
+  if (downlink < 6) return { label: "Moderate connection", tone: "fair" };
+  return { label: "Strong connection", tone: "good" };
 }
 
-window.addEventListener("online", updateOfflineBanner);
-window.addEventListener("offline", updateOfflineBanner);
-window.addEventListener("load", updateOfflineBanner); // show correct state on first load
+function updateConnectionQualityBadge(source = "manual") {
+  const descriptor = describeConnectionQuality();
+
+  if (connectionQualityBadge) {
+    connectionQualityBadge.textContent = descriptor.label;
+    connectionQualityBadge.dataset.tone = descriptor.tone;
+    connectionQualityBadge.dataset.source = source;
+  }
+
+  if (connectionIndicatorChip) {
+    connectionIndicatorChip.dataset.tone = descriptor.tone;
+    connectionIndicatorChip.dataset.source = source;
+  }
+
+  if (connectionIndicatorText) {
+    connectionIndicatorText.textContent = descriptor.label;
+  }
+
+  if (document.body) {
+    const limited = descriptor.tone === "critical" || descriptor.tone === "poor";
+    document.body.classList.toggle("is-network-limited", limited && descriptor.tone !== "offline");
+  }
+
+  return descriptor;
+}
+
+function setOfflineBannerVisible(show, message) {
+  if (!offlineBannerEl) return;
+  if (offlineBannerHideTimer) {
+    clearTimeout(offlineBannerHideTimer);
+    offlineBannerHideTimer = null;
+  }
+
+  if (typeof message === "string" && offlineBannerText) {
+    offlineBannerText.textContent = message;
+  }
+
+  offlineBannerEl.style.display = show ? "block" : "none";
+}
+
+function updateOfflineBanner(forceOffline = null) {
+  const offline = forceOffline !== null ? Boolean(forceOffline) : !navigator.onLine;
+  const body = document.body;
+
+  if (body) body.classList.toggle("is-offline", offline);
+
+  if (offlineStatusPanel) {
+    offlineStatusPanel.hidden = !offline;
+    offlineStatusPanel.setAttribute("aria-hidden", offline ? "false" : "true");
+  }
+
+  if (offlineStatusMessage) {
+    offlineStatusMessage.textContent = offline
+      ? "You're working without a connection. Updates will sync when we reconnect."
+      : "Back online—syncing changes now.";
+  }
+
+  if (offlineRetryButton) {
+    offlineRetryButton.disabled = !offline;
+  }
+
+  if (offline) {
+    setOfflineBannerVisible(true, "Offline Mode — changes are saved locally and will sync once you're reconnected.");
+  } else {
+    setOfflineBannerVisible(true, "✅ Back online — syncing in the background.");
+    offlineBannerHideTimer = setTimeout(() => setOfflineBannerVisible(false), 3200);
+    waitForPendingWrites(db)
+      .then(() => {
+        if (offlineStatusMessage) {
+          offlineStatusMessage.textContent = "Connected — all changes synced.";
+        }
+      })
+      .catch(() => {});
+  }
+
+  updateConnectionQualityBadge(offline ? "offline" : "online");
+}
+
+window.addEventListener("online", () => updateOfflineBanner(false));
+window.addEventListener("offline", () => updateOfflineBanner(true));
+window.addEventListener("load", () => {
+  updateOfflineBanner();
+  updateConnectionQualityBadge("load");
+});
+
+if (networkInformation?.addEventListener) {
+  networkInformation.addEventListener("change", () => updateConnectionQualityBadge("network-change"));
+} else if (networkInformation) {
+  networkInformation.onchange = () => updateConnectionQualityBadge("network-change");
+}
+
+if (offlineRetryButton) {
+  offlineRetryButton.addEventListener("click", async () => {
+    const wasOnline = typeof navigator !== "undefined" ? navigator.onLine : false;
+    if (wasOnline) {
+      updateOfflineBanner(false);
+      return;
+    }
+
+    offlineRetryButton.disabled = true;
+    if (offlineStatusMessage) {
+      offlineStatusMessage.textContent = "Trying to reconnect…";
+    }
+
+    try {
+      await enableNetwork(db);
+      await waitForPendingWrites(db);
+    } catch (error) {
+      console.debug("Retry connection failed (expected if still offline):", error?.message || error);
+    } finally {
+      setTimeout(() => {
+        offlineRetryButton.disabled = typeof navigator !== "undefined" ? navigator.onLine : false;
+        updateOfflineBanner();
+      }, 250);
+    }
+  });
+}
+
+try {
+  updateOfflineBanner();
+  updateConnectionQualityBadge("init");
+} catch {}
 
 
 //**accounting */
@@ -2844,6 +3010,10 @@ const guestCountSelects = [
 ].filter(Boolean);
 const guestCountSaveButton = guestForm ? guestForm.querySelector(".save-btn") : null;
 
+if (guestCountSaveButton) {
+  guestCountSaveButton.dataset.offlineAware = "1";
+}
+
 function applyGuestCountLockState() {
   const locked = isGuestCountLocked();
 
@@ -2888,18 +3058,20 @@ if (guestForm) {
       Aloha: parseInt(document.getElementById("count-Aloha").value),
       Ohana: parseInt(document.getElementById("count-Ohana").value),
       Gateway: parseInt(document.getElementById("count-Gateway").value),
-      timestamp: serverTimestamp()
     };
+    const payload = { ...counts, timestamp: serverTimestamp() };
+    const offlineNow = typeof navigator !== "undefined" ? !navigator.onLine : false;
 
     try {
-      const ref = doc(db, "guestCounts", getTodayDate());
-      const existingDoc = await getDoc(ref);
+      try {
+        localStorage.setItem(
+          "guestCounts:lastSubmission",
+          JSON.stringify({ counts, savedAt: Date.now() })
+        );
+      } catch {}
 
-      if (existingDoc.exists()) {
-        await setDoc(ref, { ...existingDoc.data(), ...counts }, { merge: true });
-      } else {
-        await setDoc(ref, counts);
-      }
+      const ref = doc(db, "guestCounts", getTodayDate());
+      await setDoc(ref, payload, { merge: true });
 
       // ✅ Update notes and summaries immediately
       ["Aloha", "Ohana", "Gateway"].forEach(name => {
@@ -2913,7 +3085,9 @@ if (guestForm) {
         if (inline) inline.textContent = txt;
       });
 
-      statusDiv.textContent = "✅ Guest counts saved!";
+      statusDiv.textContent = offlineNow
+        ? "✅ Saved offline — will sync when the connection returns."
+        : "✅ Guest counts saved!";
       statusDiv.style.color = "lightgreen";
     } catch (error) {
       console.error("❌ Error saving guest counts:", error);
@@ -4948,6 +5122,20 @@ function mirrorGuestCountsToUI(data = {}) {
     }
     setGuestNote(name, v);
   });
+}
+
+function hydrateGuestCountsFromLocalCache() {
+  try {
+    const raw = localStorage.getItem("guestCounts:lastSubmission");
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return;
+    const { counts } = parsed;
+    if (!counts) return;
+    mirrorGuestCountsToUI(counts);
+  } catch (error) {
+    console.debug("Unable to hydrate guest counts from local cache:", error);
+  }
 }
 
 

@@ -8,18 +8,24 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <div id="offlineBanner" style="
+  <div id="offlineBanner" role="status" aria-live="assertive" style="
     display: none;
     position: fixed;
     top: 0;
+    left: 0;
     width: 100%;
-    background: #ff9800;
+    background: linear-gradient(120deg, #b91c1c, #f97316);
     color: white;
     text-align: center;
-    padding: 10px;
+    padding: 12px 16px;
     z-index: 1000;
-    font-weight: bold;">
-    ⚠️ Offline Mode: Some features may not be updated in real-time
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    box-shadow: 0 6px 14px rgba(0,0,0,0.35);">
+    <span aria-hidden="true" style="margin-right: 0.75rem;">📡</span>
+    <span id="offlineBannerText">
+      Offline Mode — changes are saved locally and will sync once you're reconnected.
+    </span>
   </div>
   <div class="app-shell">
     <aside class="sidebar" id="sidebar" aria-label="Screen selection">
@@ -49,6 +55,27 @@
       <span class="sidebar-toggle-icon" aria-hidden="true"></span>
     </button>
     <main class="main-content" id="mainContent">
+      <section id="offlineStatusPanel" class="offline-status" aria-live="polite">
+        <div class="offline-status__icon" aria-hidden="true">📡</div>
+        <div class="offline-status__content">
+          <h3>Offline Mode</h3>
+          <p id="offlineStatusMessage">
+            You're working without a connection. Updates will sync when we reconnect.
+          </p>
+          <div class="offline-status__actions">
+            <button type="button" class="offline-status__retry" id="offlineRetryButton">
+              Retry Connection
+            </button>
+            <span class="offline-status__quality" id="connectionQualityBadge">
+              Checking network…
+            </span>
+          </div>
+        </div>
+      </section>
+      <div id="connectionIndicatorChip" class="connection-chip" role="status" aria-live="polite">
+        <span class="connection-chip__dot" aria-hidden="true"></span>
+        <span id="connectionIndicatorText">Checking connection…</span>
+      </div>
       <div class="topbar topbar--legacy" aria-hidden="true">
         <select id="viewSelect">
           <option value="guest-count">Guest Count</option>

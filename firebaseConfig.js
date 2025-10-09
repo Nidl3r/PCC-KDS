@@ -12,24 +12,31 @@ import {
   // Firestore APIs re-exported for convenience
   collection,
   doc,
-  setDoc,
-  getDoc,
-  addDoc,
+  setDoc as setDocDirect,
+  getDoc as getDocDirect,
+  getDocFromCache,
+  getDocFromServer,
+  addDoc as addDocDirect,
   onSnapshot,
   serverTimestamp,
-  updateDoc,
+  updateDoc as updateDocDirect,
   query,
   where,
-  getDocs,
+  getDocs as getDocsDirect,
+  getDocsFromCache,
+  getDocsFromServer,
   Timestamp,
   orderBy,
   limit,
-  deleteDoc,
+  deleteDoc as deleteDocDirect,
   arrayUnion,
   arrayRemove,
   increment,
   connectFirestoreEmulator,
-  runTransaction, // ⬅️ ADDED
+  runTransaction as runTransactionDirect, // ⬅️ ADDED
+  enableNetwork,
+  disableNetwork,
+  waitForPendingWrites,
 } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore.js";
 
 import {
@@ -104,8 +111,9 @@ const isGithubDev = (h) => /\.github\.dev$/i.test(String(h || ""));
 const portOr443 = (host, fallbackPort) => (isGithubDev(host) ? 443 : fallbackPort);
 
 // 🧰 Optional: durable multi-tab cache
+const cachePreference = hasWindow ? localStorage.getItem("FIRESTORE_CACHE") : null;
 const useDurableCache =
-  hasWindow && localStorage.getItem("FIRESTORE_CACHE") === "1";
+  cachePreference === null ? true : cachePreference === "1";
 
 // ✅ Initialize Firebase
 const app = initializeApp(firebaseConfig);
@@ -205,7 +213,7 @@ if (hasWindow) {
   };
   window.__toggleCache = (on = true) => {
     if (on) localStorage.setItem("FIRESTORE_CACHE", "1");
-    else localStorage.removeItem("FIRESTORE_CACHE");
+    else localStorage.setItem("FIRESTORE_CACHE", "0");
     location.reload();
   };
   window.__emuSet = (host = EMU_HOST, p = {}) => {
@@ -235,6 +243,76 @@ if (hasWindow) {
   };
 }
 
+const shouldUseCacheForError = (error) => {
+  if (!error) return typeof navigator !== "undefined" && !navigator.onLine;
+  const code = String(error.code || error.name || "").toLowerCase();
+  if (code.includes("failed-precondition")) return true;
+  if (code.includes("unavailable")) return true;
+  if (code.includes("network")) return true;
+  if (code.includes("deadline-exceeded")) return true;
+  return typeof navigator !== "undefined" && !navigator.onLine;
+};
+
+const makeEmptyDocSnapshot = (reference) => ({
+  id: reference?.id ?? null,
+  ref: reference || null,
+  exists: () => false,
+  data: () => undefined,
+  metadata: { fromCache: true, hasPendingWrites: false },
+});
+
+const makeEmptyQuerySnapshot = () => ({
+  empty: true,
+  size: 0,
+  docs: [],
+  metadata: { fromCache: true, hasPendingWrites: false },
+  forEach: () => {},
+});
+
+async function getDocResilient(reference, options) {
+  try {
+    return await getDocDirect(reference, options);
+  } catch (error) {
+    if (!shouldUseCacheForError(error)) throw error;
+    try {
+      const cached = await getDocFromCache(reference);
+      console.debug("[Firestore] getDoc fallback to cache", reference?.id || reference);
+      return cached;
+    } catch (cacheError) {
+      console.warn("[Firestore] Cache fallback failed for getDoc:", cacheError);
+      if (typeof navigator !== "undefined" && !navigator.onLine) {
+        return makeEmptyDocSnapshot(reference);
+      }
+      throw error;
+    }
+  }
+}
+
+async function getDocsResilient(queryOrRef, options) {
+  try {
+    return await getDocsDirect(queryOrRef, options);
+  } catch (error) {
+    if (!shouldUseCacheForError(error)) throw error;
+    try {
+      const cachedSnap = await getDocsFromCache(queryOrRef);
+      console.debug("[Firestore] getDocs fallback to cache");
+      return cachedSnap;
+    } catch (cacheError) {
+      console.warn("[Firestore] Cache fallback failed for getDocs:", cacheError);
+      if (typeof navigator !== "undefined" && !navigator.onLine) {
+        return makeEmptyQuerySnapshot();
+      }
+      throw error;
+    }
+  }
+}
+
+const setDoc = (...args) => setDocDirect(...args);
+const addDoc = (...args) => addDocDirect(...args);
+const updateDoc = (...args) => updateDocDirect(...args);
+const deleteDoc = (...args) => deleteDocDirect(...args);
+const runTransaction = (...args) => runTransactionDirect(...args);
+
 // ✅ Export everything needed by your app (added runTransaction)
 export {
   db,
@@ -244,14 +322,12 @@ export {
   collection,
   doc,
   setDoc,
-  getDoc,
   addDoc,
   onSnapshot,
   serverTimestamp,
   updateDoc,
   query,
   where,
-  getDocs,
   Timestamp,
   orderBy,
   limit,
@@ -260,4 +336,13 @@ export {
   arrayRemove,
   increment,
   runTransaction, // ⬅️ ADDED
+  getDocResilient as getDoc,
+  getDocsResilient as getDocs,
+  getDocFromCache,
+  getDocFromServer,
+  getDocsFromCache,
+  getDocsFromServer,
+  enableNetwork,
+  disableNetwork,
+  waitForPendingWrites,
 };
