@@ -9,8 +9,9 @@ const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 initializeApp();
 const db = getFirestore();
 
-// --- Secret for Showware webhook ---
+// --- Secrets ---
 const SHOWWARE_WEBHOOK_SECRET = defineSecret("SHOWWARE_WEBHOOK_SECRET");
+const INGEST_KEY = defineSecret("INGEST_KEY");
 
 // ===========================
 // 1) Scheduled cleanup (yours)
@@ -109,6 +110,113 @@ exports.showwareWebhook = onRequest(
       res.status(200).send({ ok: true });
     } catch (err) {
       console.error("showwareWebhook error:", err);
+      res.status(500).send({ ok: false, error: err?.message || "Unknown error" });
+    }
+  }
+);
+
+// ------------------------------
+// Helper to chunk an array
+// ------------------------------
+const chunk = (items, size) => {
+  if (!Array.isArray(items) || size <= 0) {
+    return [];
+  }
+
+  const result = [];
+  for (let i = 0; i < items.length; i += size) {
+    result.push(items.slice(i, i + size));
+  }
+  return result;
+};
+
+// ======================================
+// 3) PowerBI ingestion → Firestore (v2)
+// ======================================
+exports.ingestPowerBI = onRequest(
+  {
+    region: "us-central1",
+    secrets: [INGEST_KEY],
+    timeoutSeconds: 60,
+    memory: "256MiB",
+  },
+  async (req, res) => {
+    try {
+      if (req.method !== "POST") {
+        res.status(405).send({ ok: false, error: "Method Not Allowed" });
+        return;
+      }
+
+      const providedKey = (req.get("x-api-key") || "").trim();
+      const expectedKey = (INGEST_KEY.value() || "").trim();
+      if (!providedKey || !expectedKey || providedKey !== expectedKey) {
+        res.status(401).send({ ok: false, error: "Unauthorized" });
+        return;
+      }
+
+      const payload =
+        typeof req.body === "object" && req.body !== null ? req.body : null;
+
+      if (!payload) {
+        res.status(400).send({ ok: false, error: "Invalid JSON body." });
+        return;
+      }
+
+      const { collection, pkField, runId, rows } = payload;
+
+      if (
+        typeof collection !== "string" ||
+        !collection ||
+        typeof pkField !== "string" ||
+        !pkField ||
+        typeof runId !== "string" ||
+        !runId ||
+        !Array.isArray(rows)
+      ) {
+        res.status(400).send({ ok: false, error: "Missing or invalid fields." });
+        return;
+      }
+
+      const batchId = Date.now();
+      let totalWritten = 0;
+      const rowChunks = chunk(rows, 450);
+
+      for (const chunkRows of rowChunks) {
+        const batch = db.batch();
+
+        chunkRows.forEach((row, index) => {
+          if (typeof row !== "object" || row === null) {
+            throw new Error(`Row at index ${totalWritten + index} is invalid.`);
+          }
+
+          const docIdValue = row[pkField];
+          if (docIdValue === undefined || docIdValue === null) {
+            throw new Error(
+              `Row at index ${totalWritten + index} missing pkField "${pkField}".`
+            );
+          }
+
+          const docRef = db.collection(collection).doc(String(docIdValue));
+          batch.set(docRef, {
+            ...row,
+            runId,
+            _batchId: batchId,
+            _ingestedAt: FieldValue.serverTimestamp(),
+          });
+        });
+
+        await batch.commit();
+        totalWritten += chunkRows.length;
+      }
+
+      res.status(200).send({
+        ok: true,
+        written: totalWritten,
+        collection,
+        pkField,
+      });
+    } catch (err) {
+      console.error("ingestPowerBI error:", err);
       res.status(500).send({ ok: false, error: err?.message || "Unknown error" });
     }
   }
