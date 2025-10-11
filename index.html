@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="app-build-id" content="2025.0009" />
+  <meta name="app-build-id" content="2025.0010" />
   <title>PCC KDS</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
@@ -1195,6 +1195,10 @@ Step 3: …"></textarea>
       <button onclick="showAccountingTab('lunch')">Lunch</button>
       <!-- NEW -->
       <button onclick="showAccountingTab('analytics'); showAccountingDashboard();">Analytics</button>
+      <!-- [ACCOUNTING] START buttons -->
+      <button onclick="showAccountingTab('ingredients')">Ingredients</button>
+      <button onclick="showAccountingTab('recipes')">Recipes &amp; Pars</button>
+      <!-- [ACCOUNTING] END buttons -->
     </div>
 
     <!-- Production Section -->
@@ -1467,6 +1471,133 @@ Step 3: …"></textarea>
 
   </section>
 </div>
+
+<!-- [ACCOUNTING] START ingredients -->
+    <div id="accountingIngredientsTab" class="accounting-section accounting-section--table" data-sec="ingredients" style="display:none;">
+      <div class="accounting-shell">
+        <div class="accounting-controls" role="toolbar">
+          <div class="accounting-controls__info">
+            <h3 class="accounting-controls__title">Ingredients</h3>
+            <p class="accounting-controls__hint">Manage purchasing units and minimums.</p>
+          </div>
+          <div class="accounting-controls__actions">
+            <button type="button" class="ghost-btn" id="accountingIngredientsRefresh">Refresh</button>
+            <button type="button" class="save-btn" id="accountingIngredientsAdd">Add</button>
+            <label class="accounting-controls__search">
+              <span class="visually-hidden">Search ingredients</span>
+              <input type="search" id="accountingIngredientsSearch" placeholder="Search ingredients…" autocomplete="off" />
+            </label>
+          </div>
+        </div>
+        <div class="table-wrap accounting-table">
+          <table id="accountingIngredientsTable">
+            <colgroup>
+              <col class="col-ing-itemno" />
+              <col class="col-ing-name" />
+              <col class="col-ing-base" />
+              <col class="col-ing-order" />
+              <col class="col-ing-number" />
+              <col class="col-ing-number" />
+              <col class="col-ing-number" />
+              <col class="col-ing-actions" />
+            </colgroup>
+            <thead>
+              <tr>
+                <th scope="col">Item No.</th>
+                <th scope="col">Item Name</th>
+                <th scope="col">Base UOM</th>
+                <th scope="col">Ordering UOM</th>
+                <th scope="col">Min</th>
+                <th scope="col">Amount / CS</th>
+                <th scope="col">Base UOM / CS</th>
+                <th scope="col" class="actions-header">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="accountingIngredientsTbody"></tbody>
+          </table>
+        </div>
+        <p id="accountingIngredientsEmpty" class="accounting-empty" hidden>No matches found.</p>
+      </div>
+    </div>
+    <!-- [ACCOUNTING] END ingredients -->
+
+    <!-- [ACCOUNTING] START recipes -->
+    <div id="accountingRecipesTab" class="accounting-section accounting-section--table" data-sec="recipes" style="display:none;">
+      <div class="accounting-shell">
+        <div class="accounting-controls" role="toolbar">
+          <div class="accounting-controls__info">
+            <h3 class="accounting-controls__title">Recipes &amp; Pars</h3>
+            <div class="accounting-controls__view-toggle" role="tablist" aria-label="Recipe view toggle">
+              <button type="button" class="accounting-subtab accounting-subtab--active" data-view="info">Recipe Info</button>
+              <button type="button" class="accounting-subtab" data-view="pars">Recipe Pars</button>
+            </div>
+          </div>
+          <div class="accounting-controls__actions">
+            <button type="button" class="ghost-btn" id="accountingRecipesRefresh">Refresh</button>
+            <label class="accounting-controls__search">
+              <span class="visually-hidden">Search recipes</span>
+              <input type="search" id="accountingRecipesSearch" placeholder="Search recipes…" autocomplete="off" />
+            </label>
+          </div>
+        </div>
+
+        <div class="accounting-venue-tabs" id="accountingRecipesVenueTabs" role="tablist" hidden>
+          <button type="button" class="accounting-venue-tab accounting-venue-tab--active" data-venue="Aloha">Aloha</button>
+          <button type="button" class="accounting-venue-tab" data-venue="Ohana">Ohana</button>
+          <button type="button" class="accounting-venue-tab" data-venue="Gateway">Gateway</button>
+          <button type="button" class="accounting-venue-tab" data-venue="Concessions">Concessions</button>
+        </div>
+
+        <div class="accounting-pars-toggle" id="accountingRecipesParsMode" role="group" aria-label="Pars data source" hidden>
+          <button type="button" class="accounting-pars-toggle__btn accounting-pars-toggle__btn--active" data-pars-mode="recipe">Recipe Pars</button>
+          <button type="button" class="accounting-pars-toggle__btn" data-pars-mode="prep">Prep Pars</button>
+        </div>
+
+        <div class="table-wrap accounting-table" id="accountingRecipesInfoWrap">
+          <table id="accountingRecipesInfoTable">
+            <colgroup>
+              <col class="col-recipes-number" />
+              <col class="col-recipes-desc" />
+              <col class="col-recipes-meta" />
+              <col class="col-recipes-meta" />
+              <col class="col-recipes-meta" />
+              <col class="col-recipes-number" />
+              <col class="col-recipes-meta" />
+              <col class="col-recipes-number" />
+              <col class="col-recipes-number" />
+              <col class="col-recipes-actions" />
+            </colgroup>
+            <thead>
+              <tr>
+                <th scope="col">Recipe No.</th>
+                <th scope="col">Description</th>
+                <th scope="col">UOM</th>
+                <th scope="col">Category</th>
+                <th scope="col">Station</th>
+                <th scope="col">Pan Weight</th>
+                <th scope="col">Returns</th>
+                <th scope="col">Cook Time</th>
+                <th scope="col">Cost</th>
+                <th scope="col" class="actions-header">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="accountingRecipesInfoBody"></tbody>
+          </table>
+        </div>
+
+        <div class="table-wrap accounting-table" id="accountingRecipesParsWrap" hidden>
+          <table id="accountingRecipesParsTable">
+            <colgroup id="accountingRecipesParsCols"></colgroup>
+            <thead>
+              <tr id="accountingRecipesParsHeader"></tr>
+            </thead>
+            <tbody id="accountingRecipesParsBody"></tbody>
+          </table>
+        </div>
+        <p id="accountingRecipesEmpty" class="accounting-empty" hidden>No matches found.</p>
+      </div>
+    </div>
+    <!-- [ACCOUNTING] END recipes -->
 
 
 <script>

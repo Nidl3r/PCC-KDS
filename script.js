@@ -1155,9 +1155,1498 @@ function showAccountingTab(tabName) {
   if (tabName === "lunch") {
     loadLunchAccountingTable();
   }
+
+  // [ACCOUNTING] START
+  if (tabName === "ingredients") {
+    ensureAccountingIngredientsUI();
+    loadAccountingIngredients();
+  }
+
+  if (tabName === "recipes") {
+    ensureAccountingRecipesUI();
+    loadAccountingRecipesPars();
+  }
+  // [ACCOUNTING] END
 }
 
 window.showAccountingTab = showAccountingTab;
+
+
+
+// [ACCOUNTING] START Accounting Ingredients & Recipes/Pars
+const INGREDIENTS_COLL = "ingredients";
+const LEGACY_INGREDIENTS_COLL = "ingredietn";
+const PREP_PARS_COLL = "prepPars";
+const ACCOUNTING_VENUES = ["Aloha", "Ohana", "Gateway", "Concessions"];
+const ACCOUNTING_ING_NUMERIC_FIELDS = ["min", "amountpercs", "amountbaseUOMperCS"];
+const ACCOUNTING_RECIPE_NUMERIC_FIELDS = ["panWeight", "cookTime", "cost"];
+
+function accountingString(value) {
+  if (value === undefined || value === null) return "";
+  return String(value);
+}
+
+function accountingTrim(value) {
+  return accountingString(value).trim();
+}
+
+function accountingToFixed(value) {
+  if (value === undefined || value === null) return "";
+  if (typeof value === "string" && value.trim() === "") return "";
+  const rawStr = typeof value === "string" ? value.trim() : "";
+  const num = Number(value);
+  if (!Number.isFinite(num)) {
+    return typeof value === "string" ? rawStr : "";
+  }
+  if (Number.isInteger(num)) {
+    return String(Math.trunc(num));
+  }
+  return num.toFixed(2).replace(/\.?0+$/, "");
+}
+
+function accountingHasValue(value) {
+  if (value === undefined || value === null) return false;
+  if (typeof value === "number") return !Number.isNaN(value);
+  if (typeof value === "string") return value.trim().length > 0;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "object") return Object.keys(value).length > 0;
+  return true;
+}
+
+function accountingClone(value) {
+  if (value === undefined || value === null) return value;
+  if (typeof value !== "object") return value;
+  try {
+    if (typeof structuredClone === "function") {
+      return structuredClone(value);
+    }
+  } catch (err) {
+    console.debug("structuredClone failed", err);
+  }
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch (err) {
+    console.debug("JSON clone failed", err);
+    return value;
+  }
+}
+
+function accountingEscapeSelector(value) {
+  const str = accountingString(value);
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
+    return CSS.escape(str);
+  }
+  return str.replace(/"/g, '\\"').replace(/'/g, "\\'");
+}
+
+function parseAccountingNumber(raw) {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw === "number") {
+    return Number.isFinite(raw) ? Number(raw.toFixed(2)) : null;
+  }
+  const trimmed = String(raw).trim();
+  if (!trimmed) return null;
+  let evaluated = evaluateMathExpression(trimmed);
+  if (!Number.isFinite(evaluated)) {
+    evaluated = Number(trimmed);
+  }
+  if (!Number.isFinite(evaluated)) return null;
+  return Number(evaluated.toFixed(2));
+}
+
+function normalizeRecipeKey(value, fallback) {
+  const base = accountingTrim(value || fallback || "");
+  if (!base) return "";
+  return base.replace(/\s+/g, "_").toUpperCase();
+}
+
+function getAccountingIngredientsState() {
+  if (!window.__accountingIngredientsState) {
+    window.__accountingIngredientsState = {
+      rows: [],
+      filtered: [],
+      byKey: new Map(),
+      search: "",
+      initialized: false,
+      isLoaded: false,
+      loading: null
+    };
+  }
+  return window.__accountingIngredientsState;
+}
+
+function getAccountingRecipesState() {
+  if (!window.__accountingRecipesState) {
+    window.__accountingRecipesState = {
+      rows: [],
+      filteredInfo: [],
+      filteredPars: [],
+      byKey: new Map(),
+      search: "",
+      activeView: "info",
+      activeVenue: ACCOUNTING_VENUES[0],
+      parsMode: "recipe",
+      parsDisplayCount: 0,
+      initialized: false,
+      isLoaded: false,
+      loading: null
+    };
+  }
+  return window.__accountingRecipesState;
+}
+
+function syncAccountingIngredientsMap() {
+  const state = getAccountingIngredientsState();
+  state.byKey = new Map();
+  state.rows.forEach((row) => {
+    state.byKey.set(row._key, row);
+  });
+}
+
+function syncAccountingRecipesMap() {
+  const state = getAccountingRecipesState();
+  state.byKey = new Map();
+  state.rows.forEach((row) => {
+    state.byKey.set(row._key, row);
+  });
+}
+
+function normalizeIngredientDoc(docSnap, source) {
+  const data = docSnap && typeof docSnap.data === "function" ? (docSnap.data() || {}) : {};
+  const row = {
+    _key: docSnap.id,
+    id: source === "ingredients" ? docSnap.id : null,
+    legacyId: source === "legacy" ? docSnap.id : null,
+    source,
+    itemNo: accountingToFixed(data.itemNo ?? data.itemno ?? data.number),
+    itemName: accountingTrim(data.itemName ?? data.item ?? data.name ?? ""),
+    baseUOM: accountingTrim(data.baseUOM ?? data.baseUom ?? data.baseUnit ?? ""),
+    orderingUOM: accountingTrim(data.orderingUOM ?? data.orderingUom ?? data.orderingUnit ?? ""),
+    min: accountingToFixed(data.min ?? data.minimum ?? data.minQty),
+    amountpercs: accountingToFixed(data.amountpercs ?? data.amountPerCs ?? data.amountPerCase),
+    amountbaseUOMperCS: accountingToFixed(
+      data.amountbaseUOMperCS ??
+      data.amountBaseUOMperCS ??
+      data.amountBasePerCs ??
+      data.amountBasePerCase
+    ),
+    isDraft: false,
+    dirty: false
+  };
+  if (!row.itemNo) {
+    const rawNo = data.itemNo ?? data.itemno ?? "";
+    row.itemNo = rawNo ? accountingString(rawNo) : "";
+  }
+  return row;
+}
+
+function fillIngredientFromLegacy(primary, legacyRow) {
+  if (!primary || !legacyRow) return;
+  ["itemNo", "itemName", "baseUOM", "orderingUOM", "min", "amountpercs", "amountbaseUOMperCS"].forEach((field) => {
+    if (!accountingHasValue(primary[field]) && accountingHasValue(legacyRow[field])) {
+      primary[field] = legacyRow[field];
+    }
+  });
+  if (!primary.legacyId && legacyRow.legacyId) {
+    primary.legacyId = legacyRow.legacyId;
+  }
+}
+
+function getIngredientDedupKey(row) {
+  const itemNoKey = accountingTrim(row.itemNo).toLowerCase();
+  if (itemNoKey) return itemNoKey;
+  if (row.id) return accountingString(row.id).toLowerCase();
+  if (row.legacyId) return accountingString(row.legacyId).toLowerCase();
+  return accountingString(row._key).toLowerCase();
+}
+
+async function loadAccountingIngredients(options = {}) {
+  const state = getAccountingIngredientsState();
+  const { silent = false, force = false } = options || {};
+  if (state.loading && !force) return state.loading;
+  if (state.isLoaded && !force) {
+    applyAccountingIngredientsFilter();
+    return null;
+  }
+
+  const tbody = document.getElementById("accountingIngredientsTbody");
+  if (!silent && tbody) {
+    showTableLoading(tbody, "Loading ingredients…");
+  }
+
+  state.loading = (async () => {
+    try {
+      const [primarySnap, legacySnap] = await Promise.all([
+        getDocs(collection(db, INGREDIENTS_COLL)),
+        getDocs(collection(db, LEGACY_INGREDIENTS_COLL)).catch((err) => {
+          console.debug("Legacy ingredients skipped", err);
+          return null;
+        })
+      ]);
+
+      const rows = [];
+      const dedupe = new Map();
+
+      if (primarySnap) {
+        primarySnap.forEach((docSnap) => {
+          const row = normalizeIngredientDoc(docSnap, "ingredients");
+          const key = getIngredientDedupKey(row);
+          rows.push(row);
+          dedupe.set(key, row);
+        });
+      }
+
+      if (legacySnap) {
+        legacySnap.forEach((docSnap) => {
+          const row = normalizeIngredientDoc(docSnap, "legacy");
+          const key = getIngredientDedupKey(row);
+          if (dedupe.has(key)) {
+            fillIngredientFromLegacy(dedupe.get(key), row);
+          } else {
+            rows.push(row);
+            dedupe.set(key, row);
+          }
+        });
+      }
+
+      rows.sort((a, b) => {
+        const aNum = Number(a.itemNo);
+        const bNum = Number(b.itemNo);
+        if (Number.isFinite(aNum) && Number.isFinite(bNum) && aNum !== bNum) {
+          return aNum - bNum;
+        }
+        return accountingTrim(a.itemName).localeCompare(accountingTrim(b.itemName), undefined, { sensitivity: "base" });
+      });
+
+      state.rows = rows;
+      syncAccountingIngredientsMap();
+      state.isLoaded = true;
+      applyAccountingIngredientsFilter();
+    } catch (err) {
+      console.warn("Failed to load accounting ingredients", err);
+      state.isLoaded = false;
+      if (!silent && tbody) {
+        showTableEmpty(tbody, "Unable to load ingredients.");
+      }
+      const empty = document.getElementById("accountingIngredientsEmpty");
+      if (empty) {
+        empty.hidden = true;
+      }
+    }
+  })();
+
+  try {
+    await state.loading;
+  } finally {
+    state.loading = null;
+  }
+  return null;
+}
+
+function renderAccountingIngredientsTable(rows = []) {
+  const tbody = document.getElementById("accountingIngredientsTbody");
+  if (!tbody) return;
+
+  if (!rows.length) {
+    tbody.innerHTML = "";
+    return;
+  }
+
+  const html = rows.map((row) => {
+    const key = accountingString(row._key);
+    return `
+      <tr data-row-key="${escapeHtml(key)}" data-source="${escapeHtml(accountingString(row.source || ""))}">
+        <td data-label="Item No.">
+          <input type="number" step="0.01" inputmode="decimal" name="itemNo" value="${escapeHtml(accountingString(row.itemNo))}" />
+        </td>
+        <td data-label="Item Name">
+          <input type="text" name="itemName" value="${escapeHtml(accountingString(row.itemName))}" />
+        </td>
+        <td data-label="Base UOM">
+          <input type="text" name="baseUOM" value="${escapeHtml(accountingString(row.baseUOM))}" />
+        </td>
+        <td data-label="Ordering UOM">
+          <input type="text" name="orderingUOM" value="${escapeHtml(accountingString(row.orderingUOM))}" />
+        </td>
+        <td data-label="Min">
+          <input type="number" step="0.01" inputmode="decimal" name="min" value="${escapeHtml(accountingString(row.min))}" />
+        </td>
+        <td data-label="Amount / CS">
+          <input type="number" step="0.01" inputmode="decimal" name="amountpercs" value="${escapeHtml(accountingString(row.amountpercs))}" />
+        </td>
+        <td data-label="Base UOM / CS">
+          <input type="number" step="0.01" inputmode="decimal" name="amountbaseUOMperCS" value="${escapeHtml(accountingString(row.amountbaseUOMperCS))}" />
+        </td>
+        <td data-label="Actions">
+          <div class="row-actions">
+            <button type="button" class="save-btn" data-action="save-ingredient" data-row-key="${escapeHtml(key)}">Save</button>
+            <button type="button" class="ghost-btn" data-action="delete-ingredient" data-row-key="${escapeHtml(key)}">Delete</button>
+          </div>
+        </td>
+      </tr>`;
+  }).join("");
+
+  tbody.innerHTML = html;
+}
+
+function applyAccountingIngredientsFilter() {
+  const state = getAccountingIngredientsState();
+  const termRaw = accountingTrim(state.search).toLowerCase();
+  const terms = termRaw.length ? termRaw.split(/\s+/).filter(Boolean) : [];
+
+  const filtered = state.rows.filter((row) => {
+    if (row.isDraft) return true;
+    if (!terms.length) return true;
+    const haystack = [
+      row.itemNo,
+      row.itemName,
+      row.baseUOM,
+      row.orderingUOM
+    ].map((val) => accountingString(val).toLowerCase()).join(" ");
+    return terms.every((term) => haystack.includes(term));
+  });
+
+  state.filtered = filtered;
+  renderAccountingIngredientsTable(filtered);
+
+  const empty = document.getElementById("accountingIngredientsEmpty");
+  if (empty) {
+    empty.hidden = filtered.length > 0 || !state.isLoaded;
+  }
+}
+
+function addAccountingIngredientDraft() {
+  const state = getAccountingIngredientsState();
+  const key = `draft-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const draft = {
+    _key: key,
+    id: null,
+    legacyId: null,
+    source: "draft",
+    itemNo: "",
+    itemName: "",
+    baseUOM: "",
+    orderingUOM: "",
+    min: "",
+    amountpercs: "",
+    amountbaseUOMperCS: "",
+    isDraft: true,
+    dirty: true
+  };
+  state.rows = [draft, ...state.rows];
+  syncAccountingIngredientsMap();
+  state.isLoaded = true;
+  applyAccountingIngredientsFilter();
+  setTimeout(() => focusIngredientField(key, 'input[name="itemNo"]'), 50);
+}
+
+async function saveIngredient(rowKey) {
+  const state = getAccountingIngredientsState();
+  const row = state.byKey.get(rowKey);
+  if (!row) return;
+
+  const itemName = accountingTrim(row.itemName);
+  if (!itemName) {
+    alert("Item name is required.");
+    focusIngredientField(rowKey, 'input[name="itemName"]');
+    return;
+  }
+
+  const itemNoValue = parseAccountingNumber(row.itemNo);
+  if (itemNoValue === null) {
+    alert("Item number must be numeric.");
+    focusIngredientField(rowKey, 'input[name="itemNo"]');
+    return;
+  }
+
+  const payload = {
+    itemNo: itemNoValue,
+    itemName,
+    baseUOM: accountingTrim(row.baseUOM),
+    orderingUOM: accountingTrim(row.orderingUOM),
+    updatedAt: serverTimestamp()
+  };
+
+  ACCOUNTING_ING_NUMERIC_FIELDS.forEach((field) => {
+    const parsed = parseAccountingNumber(row[field]);
+    if (parsed !== null) {
+      payload[field] = parsed;
+      row[field] = accountingToFixed(parsed);
+    } else {
+      payload[field] = null;
+      row[field] = "";
+    }
+  });
+
+  row.itemNo = accountingToFixed(itemNoValue);
+
+  const ingredientsRef = collection(db, INGREDIENTS_COLL);
+  let docRef = null;
+
+  try {
+    const desiredId = row.id || normalizeRecipeKey(row.itemNo, null);
+    if (desiredId) {
+      docRef = doc(db, INGREDIENTS_COLL, desiredId);
+      await setDoc(docRef, payload, { merge: true });
+    } else {
+      docRef = await addDoc(ingredientsRef, payload);
+    }
+    row.id = docRef.id;
+    row.source = "ingredients";
+    row.isDraft = false;
+    row.dirty = false;
+
+    if (row.legacyId && row.legacyId !== row.id) {
+      try {
+        await deleteDoc(doc(db, LEGACY_INGREDIENTS_COLL, row.legacyId));
+      } catch (err) {
+        console.debug("Legacy ingredient cleanup skipped", err);
+      }
+      row.legacyId = null;
+    }
+
+    await loadAccountingIngredients({ silent: true, force: true });
+    applyAccountingIngredientsFilter();
+  } catch (err) {
+    console.warn("Failed to save ingredient", err);
+    alert("Unable to save ingredient. Check console for details.");
+  }
+}
+
+async function deleteIngredient(rowKey) {
+  const state = getAccountingIngredientsState();
+  const row = state.byKey.get(rowKey);
+  if (!row) return;
+
+  const proceed = typeof window.confirm === "function" ? window.confirm("Delete this ingredient?") : true;
+  if (!proceed) return;
+
+  try {
+    if (row.id) {
+      await deleteDoc(doc(db, INGREDIENTS_COLL, row.id));
+    }
+  } catch (err) {
+    console.warn("Failed to delete ingredient", err);
+    alert("Unable to delete ingredient. Check console for details.");
+    return;
+  }
+
+  state.rows = state.rows.filter((item) => item._key !== rowKey);
+  syncAccountingIngredientsMap();
+  state.isLoaded = true;
+  applyAccountingIngredientsFilter();
+}
+
+function handleAccountingIngredientInput(event) {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  const rowEl = target.closest("tr[data-row-key]");
+  if (!rowEl) return;
+  const rowKey = rowEl.getAttribute("data-row-key");
+  if (!rowKey) return;
+
+  const state = getAccountingIngredientsState();
+  const row = state.byKey.get(rowKey);
+  if (!row) return;
+
+  const field = target.getAttribute("name");
+  if (!field) return;
+
+  row[field] = target.value;
+  row.dirty = true;
+}
+
+function handleAccountingIngredientClick(event) {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  const actionBtn = target.closest("[data-action]");
+  if (!actionBtn) return;
+
+  const action = actionBtn.getAttribute("data-action");
+  const rowKey = actionBtn.getAttribute("data-row-key");
+  if (!rowKey) return;
+
+  if (action === "save-ingredient") {
+    event.preventDefault();
+    saveIngredient(rowKey);
+  } else if (action === "delete-ingredient") {
+    event.preventDefault();
+    deleteIngredient(rowKey);
+  }
+}
+
+function focusIngredientField(rowKey, selector) {
+  try {
+    const escapedKey = accountingEscapeSelector(rowKey);
+    const input = document.querySelector(`#accountingIngredientsTbody tr[data-row-key="${escapedKey}"] ${selector}`);
+    if (input) {
+      input.focus();
+      if (typeof input.select === "function") {
+        input.select();
+      }
+    }
+  } catch (err) {
+    console.debug("focusIngredientField failed", err);
+  }
+}
+
+function ensureAccountingIngredientsUI() {
+  const state = getAccountingIngredientsState();
+  if (state.initialized) return;
+
+  const tbody = document.getElementById("accountingIngredientsTbody");
+  if (tbody) {
+    tbody.addEventListener("input", handleAccountingIngredientInput);
+    tbody.addEventListener("click", handleAccountingIngredientClick);
+  }
+
+  const search = document.getElementById("accountingIngredientsSearch");
+  if (search && !search.dataset.bound) {
+    search.dataset.bound = "1";
+    search.addEventListener("input", (event) => {
+      state.search = event.target.value || "";
+      applyAccountingIngredientsFilter();
+    });
+  }
+
+  const refreshBtn = document.getElementById("accountingIngredientsRefresh");
+  if (refreshBtn && !refreshBtn.dataset.bound) {
+    refreshBtn.dataset.bound = "1";
+    refreshBtn.addEventListener("click", () => loadAccountingIngredients({ silent: false, force: true }));
+  }
+
+  const addBtn = document.getElementById("accountingIngredientsAdd");
+  if (addBtn && !addBtn.dataset.bound) {
+    addBtn.dataset.bound = "1";
+    addBtn.addEventListener("click", () => {
+      addAccountingIngredientDraft();
+    });
+  }
+
+  state.initialized = true;
+}
+
+function mergeRecipePars(primaryPars = {}, legacyPars = {}) {
+  const result = {};
+  const venueKeys = new Set([
+    ...Object.keys(legacyPars || {}),
+    ...Object.keys(primaryPars || {})
+  ]);
+
+  venueKeys.forEach((rawVenue) => {
+    const canonicalVenue = canonicalizeVenueName(rawVenue) || accountingString(rawVenue);
+    const primaryVenue = primaryPars?.[rawVenue] || primaryPars?.[canonicalVenue] || {};
+    const legacyVenue = legacyPars?.[rawVenue] || legacyPars?.[canonicalVenue] || {};
+    const mergedVenue = {};
+
+    const guestKeys = new Set([
+      ...Object.keys(legacyVenue || {}),
+      ...Object.keys(primaryVenue || {})
+    ]);
+
+    guestKeys.forEach((guestCount) => {
+      const primaryVal = primaryVenue?.[guestCount];
+      if (accountingHasValue(primaryVal)) {
+        mergedVenue[guestCount] = accountingClone(primaryVal);
+        return;
+      }
+      const legacyVal = legacyVenue?.[guestCount];
+      if (accountingHasValue(legacyVal)) {
+        mergedVenue[guestCount] = accountingClone(legacyVal);
+      }
+    });
+
+    if (Object.keys(mergedVenue).length) {
+      result[canonicalVenue] = mergedVenue;
+    }
+  });
+
+  return result;
+}
+
+function mergeRecipeDocs(cookingDoc = {}, legacyDoc = {}) {
+  const merged = {};
+  const keys = new Set([
+    ...Object.keys(legacyDoc || {}),
+    ...Object.keys(cookingDoc || {})
+  ]);
+
+  keys.forEach((key) => {
+    if (key === "pars") {
+      merged.pars = mergeRecipePars(cookingDoc.pars || {}, legacyDoc.pars || {});
+      return;
+    }
+    if (key === "venueCodes") {
+      const primaryCodes = Array.isArray(cookingDoc.venueCodes) ? cookingDoc.venueCodes.slice() : [];
+      const legacyCodes = Array.isArray(legacyDoc.venueCodes) ? legacyDoc.venueCodes : [];
+      const mergedCodes = primaryCodes.length ? primaryCodes : Array.from(new Set([...primaryCodes, ...legacyCodes]));
+      merged.venueCodes = mergedCodes;
+      return;
+    }
+
+    const primaryVal = cookingDoc[key];
+    if (accountingHasValue(primaryVal)) {
+      merged[key] = accountingClone(primaryVal);
+      return;
+    }
+    const legacyVal = legacyDoc[key];
+    if (accountingHasValue(legacyVal)) {
+      merged[key] = accountingClone(legacyVal);
+      return;
+    }
+    if (primaryVal !== undefined) {
+      merged[key] = accountingClone(primaryVal);
+    } else if (legacyVal !== undefined) {
+      merged[key] = accountingClone(legacyVal);
+    }
+  });
+
+  return merged;
+}
+
+function normalizeParsObject(pars) {
+  const result = {};
+  if (!pars || typeof pars !== "object") return result;
+
+  Object.entries(pars).forEach(([venue, guestMap]) => {
+    if (!guestMap || typeof guestMap !== "object") return;
+    const canonicalVenue = canonicalizeVenueName(venue) || accountingString(venue);
+    const target = {};
+    Object.entries(guestMap).forEach(([guestCount, value]) => {
+      const key = accountingString(guestCount);
+      const formatted = accountingToFixed(value);
+      if (formatted !== "") {
+        target[key] = formatted;
+      }
+    });
+    result[canonicalVenue] = target;
+  });
+
+  return result;
+}
+
+function buildAccountingRecipeRow(recipeKey, merged, cookingId, legacyId) {
+  const recipeNo = accountingTrim(merged.recipeNo || recipeKey);
+  const row = {
+    _key: cookingId || `legacy-${legacyId || recipeKey}`,
+    cookingId: cookingId || null,
+    legacyId: legacyId || null,
+    recipeNo: recipeNo || recipeKey,
+    description: accountingTrim(
+      merged.description ??
+      merged.recipeDescription ??
+      merged.recipeName ??
+      merged.name ??
+      ""
+    ),
+    uom: accountingTrim(merged.uom ?? merged.unit ?? merged.unitMeasure ?? ""),
+    category: accountingTrim(merged.category ?? merged.Category ?? ""),
+    station: accountingTrim(merged.station ?? merged.defaultStation ?? ""),
+    panWeight: accountingToFixed(merged.panWeight ?? merged.panweight),
+    returns: accountingTrim(merged.returns ?? merged.returnMethod ?? ""),
+    cookTime: accountingToFixed(merged.cookTime ?? merged.cook_time ?? merged.cooktime),
+    cost: accountingToFixed(merged.cost ?? merged.recipeCost ?? merged.avgCost),
+    pars: normalizeParsObject(merged.pars),
+    venueCodes: Array.isArray(merged.venueCodes) ? merged.venueCodes.slice() : [],
+    source: cookingId ? "cookingrecipes" : "legacy",
+    infoDirty: false,
+    parsDirtyByVenue: {}
+  };
+
+  if (!row.description) {
+    row.description = accountingTrim(merged.recipeDescription ?? merged.recipeName ?? "");
+  }
+
+  return row;
+}
+
+async function loadAccountingRecipesPars(options = {}) {
+  const state = getAccountingRecipesState();
+  const { silent = false, force = false } = options || {};
+  if (state.loading && !force) return state.loading;
+  if (state.isLoaded && !force) {
+    applyAccountingRecipesFilter();
+    return null;
+  }
+
+  const infoBody = document.getElementById("accountingRecipesInfoBody");
+  const parsBody = document.getElementById("accountingRecipesParsBody");
+
+  if (!silent) {
+    if (infoBody) showTableLoading(infoBody, "Loading recipes…");
+    if (parsBody) showTableLoading(parsBody, "Loading recipes…");
+  }
+
+  state.loading = (async () => {
+    try {
+      const [primarySnap, legacySnap] = await Promise.all([
+        getDocs(recipesCollection()),
+        getDocs(legacyRecipesCollection()).catch((err) => {
+          console.debug("Legacy recipes unavailable", err);
+          return null;
+        })
+      ]);
+
+      const cookingByRecipeNo = new Map();
+      if (primarySnap) {
+        primarySnap.forEach((docSnap) => {
+          const data = docSnap.data() || {};
+          const recipeKey = normalizeRecipeKey(data.recipeNo, docSnap.id);
+          cookingByRecipeNo.set(recipeKey || docSnap.id.toUpperCase(), { id: docSnap.id, data });
+        });
+      }
+
+      const legacyByRecipeNo = new Map();
+      if (legacySnap) {
+        legacySnap.forEach((docSnap) => {
+          const data = docSnap.data() || {};
+          const recipeKey = normalizeRecipeKey(data.recipeNo, docSnap.id);
+          legacyByRecipeNo.set(recipeKey || docSnap.id.toUpperCase(), { id: docSnap.id, data });
+        });
+      }
+
+      const recipeKeys = new Set([
+        ...cookingByRecipeNo.keys(),
+        ...legacyByRecipeNo.keys()
+      ]);
+
+      const rows = [];
+      recipeKeys.forEach((key) => {
+        const primary = cookingByRecipeNo.get(key);
+        const legacy = legacyByRecipeNo.get(key);
+        const merged = mergeRecipeDocs(primary?.data || {}, legacy?.data || {});
+        const row = buildAccountingRecipeRow(key, merged, primary?.id || null, legacy?.id || null);
+        rows.push(row);
+      });
+
+      rows.sort((a, b) => accountingTrim(a.recipeNo).localeCompare(accountingTrim(b.recipeNo), undefined, { numeric: true, sensitivity: "base" }));
+
+      state.rows = rows;
+      syncAccountingRecipesMap();
+      state.isLoaded = true;
+
+      await loadPrepParsOnce().catch((err) => {
+        console.debug("Prep pars preload skipped", err);
+      });
+
+      applyAccountingRecipesFilter();
+    } catch (err) {
+      console.warn("Failed to load accounting recipes", err);
+      state.isLoaded = false;
+      if (!silent) {
+        if (infoBody) showTableEmpty(infoBody, "Unable to load recipes.");
+        if (parsBody) showTableEmpty(parsBody, "Unable to load recipes.");
+      }
+    }
+  })();
+
+  try {
+    await state.loading;
+  } finally {
+    state.loading = null;
+  }
+  return null;
+}
+
+function renderRecipesInfoTable(rows = []) {
+  const tbody = document.getElementById("accountingRecipesInfoBody");
+  if (!tbody) return;
+
+  if (!rows.length) {
+    tbody.innerHTML = "";
+    return;
+  }
+
+  const html = rows.map((row) => {
+    const key = accountingString(row._key);
+    return `
+      <tr data-row-key="${escapeHtml(key)}">
+        <td data-label="Recipe No.">${escapeHtml(accountingString(row.recipeNo))}</td>
+        <td data-label="Description">
+          <input type="text" name="description" value="${escapeHtml(accountingString(row.description))}" />
+        </td>
+        <td data-label="UOM">
+          <input type="text" name="uom" value="${escapeHtml(accountingString(row.uom))}" />
+        </td>
+        <td data-label="Category">
+          <input type="text" name="category" value="${escapeHtml(accountingString(row.category))}" />
+        </td>
+        <td data-label="Station">
+          <input type="text" name="station" value="${escapeHtml(accountingString(row.station))}" />
+        </td>
+        <td data-label="Pan Weight">
+          <input type="number" step="0.01" inputmode="decimal" name="panWeight" value="${escapeHtml(accountingString(row.panWeight))}" />
+        </td>
+        <td data-label="Returns">
+          <input type="text" name="returns" value="${escapeHtml(accountingString(row.returns))}" />
+        </td>
+        <td data-label="Cook Time">
+          <input type="number" step="0.01" inputmode="decimal" name="cookTime" value="${escapeHtml(accountingString(row.cookTime))}" />
+        </td>
+        <td data-label="Cost">
+          <input type="number" step="0.01" inputmode="decimal" name="cost" value="${escapeHtml(accountingString(row.cost))}" />
+        </td>
+        <td data-label="Actions">
+          <div class="row-actions">
+            <button type="button" class="save-btn" data-action="save-recipe-info" data-row-key="${escapeHtml(key)}">Save</button>
+          </div>
+        </td>
+      </tr>`;
+  }).join("");
+
+  tbody.innerHTML = html;
+}
+
+function renderRecipesParsGrid(rows = [], activeVenue = ACCOUNTING_VENUES[0], mode = "recipe") {
+  const tbody = document.getElementById("accountingRecipesParsBody");
+  const headerRow = document.getElementById("accountingRecipesParsHeader");
+  const colgroup = document.getElementById("accountingRecipesParsCols");
+  if (!tbody || !headerRow || !colgroup) return 0;
+
+  const venue = canonicalizeVenueName(activeVenue) || activeVenue;
+  const eligible = [];
+  const countsSet = new Set();
+
+  rows.forEach((row) => {
+    const recipeMap = row.pars?.[venue] || {};
+    const recipeCounts = Object.keys(recipeMap);
+    const prepEntry = getPrepEntryForRow(row, venue);
+    const prepCounts = prepEntry ? Object.keys(prepEntry.counts || {}) : [];
+    const shouldInclude = mode === "prep"
+      ? Boolean(prepEntry)
+      : (recipeCounts.length > 0);
+    if (!shouldInclude) return;
+    eligible.push({ row, recipeMap, prepEntry });
+    recipeCounts.forEach((key) => countsSet.add(key));
+    prepCounts.forEach((key) => countsSet.add(key));
+  });
+
+  if (!eligible.length) {
+    tbody.innerHTML = "";
+    headerRow.innerHTML = "";
+    colgroup.innerHTML = "";
+    return 0;
+  }
+
+  const counts = Array.from(countsSet)
+    .filter((val) => accountingString(val).length > 0)
+    .sort((a, b) => {
+      const an = Number(a);
+      const bn = Number(b);
+      if (Number.isFinite(an) && Number.isFinite(bn)) {
+        return an - bn;
+      }
+      return accountingString(a).localeCompare(accountingString(b), undefined, { numeric: true, sensitivity: "base" });
+    });
+
+  if (!counts.length) {
+    tbody.innerHTML = "";
+    headerRow.innerHTML = "";
+    colgroup.innerHTML = "";
+    return 0;
+  }
+
+  headerRow.innerHTML = [
+    '<th scope="col">Recipe No.</th>',
+    '<th scope="col">Description</th>',
+    ...counts.map((count) => `<th scope="col" data-count="${escapeHtml(accountingString(count))}">${escapeHtml(accountingString(count))}</th>`),
+    '<th scope="col" class="actions-header">Actions</th>'
+  ].join("");
+
+  colgroup.innerHTML = [
+    '<col class="col-recipes-number" />',
+    '<col class="col-recipes-desc" />',
+    ...counts.map(() => '<col />'),
+    '<col class="col-recipes-actions" />'
+  ].join("");
+
+  const rowsHtml = eligible.map(({ row, recipeMap, prepEntry }) => {
+    const key = accountingString(row._key);
+    const recipeNo = accountingString(row.recipeNo);
+    const description = accountingString(row.description);
+    const venueMap = recipeMap || {};
+    const prepCounts = prepEntry?.counts || {};
+
+    const cellsHtml = counts.map((count) => {
+      const recipeValueRaw = venueMap?.[count];
+      const prepValueRaw = prepCounts?.[count];
+      const recipeValue = accountingString(recipeValueRaw ?? "");
+      const prepValue = accountingString(prepValueRaw ?? "");
+      const inputValue = mode === "prep" ? prepValue : recipeValue;
+      const recipeDisplay = accountingHasValue(recipeValueRaw) ? accountingToFixed(recipeValueRaw) : "";
+      const prepDisplay = accountingHasValue(prepValueRaw) ? accountingToFixed(prepValueRaw) : "";
+      const subLabelValue = mode === "prep"
+        ? (recipeDisplay ? `Recipe: ${escapeHtml(recipeDisplay)}` : "Recipe: —")
+        : (prepDisplay ? `Prep: ${escapeHtml(prepDisplay)}` : "Prep: —");
+      return `
+        <td data-count="${escapeHtml(accountingString(count))}">
+          <div class="pars-cell">
+            <input type="number" step="0.01" inputmode="decimal"
+                   data-row-key="${escapeHtml(key)}"
+                   data-count="${escapeHtml(accountingString(count))}"
+                   value="${escapeHtml(accountingString(inputValue))}" />
+            <div class="pars-cell__prep">${subLabelValue}</div>
+          </div>
+        </td>`;
+    }).join("");
+
+    const actionAttr = mode === "prep" ? "save-prep-pars" : "save-recipe-pars";
+    const buttonLabel = mode === "prep" ? "Save Prep" : "Save Pars";
+
+    return `
+      <tr data-row-key="${escapeHtml(key)}">
+        <td data-label="Recipe No.">${escapeHtml(recipeNo)}</td>
+        <td data-label="Description">${escapeHtml(description)}</td>
+        ${cellsHtml}
+        <td data-label="Actions">
+          <div class="row-actions">
+            <button type="button" class="save-btn" data-action="${actionAttr}" data-row-key="${escapeHtml(key)}">${buttonLabel}</button>
+          </div>
+        </td>
+      </tr>`;
+  }).join("");
+
+  tbody.innerHTML = rowsHtml;
+  requestAnimationFrame(updateParsConsistencyHighlights);
+  return eligible.length;
+}
+
+function updateParsConsistencyHighlights() {
+  const state = getAccountingRecipesState();
+  if (state.activeView !== "pars") return;
+  const headerRow = document.getElementById("accountingRecipesParsHeader");
+  const tbody = document.getElementById("accountingRecipesParsBody");
+  if (!headerRow || !tbody) return;
+
+  const headerCells = Array.from(headerRow.querySelectorAll("th[data-count]"));
+  const counts = headerCells.map((th) => th.getAttribute("data-count") || "");
+  headerCells.forEach((th) => th.classList.remove("pars-header--attention"));
+
+  const flaggedCounts = new Set();
+
+  Array.from(tbody.querySelectorAll("tr")).forEach((rowEl) => {
+    const series = counts.map((count) => {
+      const selector = `td[data-count="${accountingEscapeSelector(count)}"]`;
+      const td = rowEl.querySelector(selector);
+      if (td) td.classList.remove("pars-cell--attention");
+      const input = td?.querySelector(`input[data-count="${accountingEscapeSelector(count)}"]`);
+      const parsed = input ? parseAccountingNumber(input.value) : null;
+      const value = Number.isFinite(parsed) ? parsed : null;
+      return { count, td, value };
+    });
+
+    let highest = null;
+    let violationIndex = -1;
+    for (let i = 0; i < series.length; i++) {
+      const value = series[i].value;
+      if (value === null) continue;
+      if (highest === null || value >= highest) {
+        highest = value;
+      } else {
+        violationIndex = i;
+        break;
+      }
+    }
+
+    if (violationIndex !== -1) {
+      for (let i = violationIndex; i < series.length; i++) {
+        const { td, count } = series[i];
+        if (!td) continue;
+        td.classList.add("pars-cell--attention");
+        flaggedCounts.add(count);
+      }
+    }
+  });
+
+  headerCells.forEach((th) => {
+    const count = th.getAttribute("data-count") || "";
+    if (flaggedCounts.has(count)) {
+      th.classList.add("pars-header--attention");
+    }
+  });
+}
+
+function applyAccountingRecipesFilter() {
+  const state = getAccountingRecipesState();
+  const termRaw = accountingTrim(state.search).toLowerCase();
+  const terms = termRaw.length ? termRaw.split(/\s+/).filter(Boolean) : [];
+
+  const infoRows = state.rows.filter((row) => {
+    if (!terms.length) return true;
+    const haystack = [
+      row.recipeNo,
+      row.description,
+      row.category,
+      row.station,
+      row.uom,
+      row.returns
+    ].map((val) => accountingString(val).toLowerCase()).join(" ");
+    return terms.every((term) => haystack.includes(term));
+  });
+
+  state.filteredInfo = infoRows;
+  const activeVenueRaw = state.activeVenue || ACCOUNTING_VENUES[0];
+  const canonicalActiveVenue = canonicalizeVenueName(activeVenueRaw) || activeVenueRaw;
+  state.filteredPars = infoRows;
+
+  renderRecipesInfoTable(infoRows);
+  let displayed = 0;
+  if (state.activeView === "pars") {
+    const mode = state.parsMode || "recipe";
+    displayed = renderRecipesParsGrid(infoRows, canonicalActiveVenue, mode) || 0;
+  }
+  state.parsDisplayCount = displayed;
+  toggleAccountingRecipesEmpty(state.activeView);
+}
+
+function resolveRecipeDocRef(row) {
+  let docId = row.cookingId;
+  if (!docId) {
+    docId = row.legacyId || normalizeRecipeKey(row.recipeNo, row._key);
+    if (docId) {
+      row.cookingId = docId;
+    }
+  }
+  if (docId) {
+    return recipeDoc(docId);
+  }
+  const newRef = doc(recipesCollection());
+  row.cookingId = newRef.id;
+  return newRef;
+}
+
+async function saveRecipeInfo(rowKey) {
+  const state = getAccountingRecipesState();
+  const row = state.byKey.get(rowKey);
+  if (!row) return;
+
+  const description = accountingTrim(row.description);
+  if (!description) {
+    alert("Description is required.");
+    return;
+  }
+
+  const docRef = resolveRecipeDocRef(row);
+  const payload = {
+    recipeNo: row.recipeNo,
+    description,
+    uom: accountingTrim(row.uom),
+    category: accountingTrim(row.category),
+    station: accountingTrim(row.station),
+    returns: accountingTrim(row.returns),
+    updatedAt: serverTimestamp()
+  };
+
+  ACCOUNTING_RECIPE_NUMERIC_FIELDS.forEach((field) => {
+    const parsed = parseAccountingNumber(row[field]);
+    if (parsed !== null) {
+      payload[field] = parsed;
+      row[field] = accountingToFixed(parsed);
+    } else {
+      payload[field] = null;
+      row[field] = "";
+    }
+  });
+
+  const isMigrating = row.source !== "cookingrecipes";
+  if (isMigrating) {
+    payload.migratedAt = serverTimestamp();
+    if (row.pars && Object.keys(row.pars).length) {
+      payload.pars = accountingClone(row.pars);
+    }
+    if (row.venueCodes && row.venueCodes.length) {
+      payload.venueCodes = row.venueCodes.slice();
+    }
+    payload.createdAt = serverTimestamp();
+  }
+
+  try {
+    await setDoc(docRef, payload, { merge: true });
+    row.source = "cookingrecipes";
+    row.infoDirty = false;
+    applyAccountingRecipesFilter();
+  } catch (err) {
+    console.warn("Failed to save recipe info", err);
+    alert("Unable to save recipe. Check console for details.");
+  }
+}
+
+async function saveRecipePars(rowKey) {
+  const state = getAccountingRecipesState();
+  const row = state.byKey.get(rowKey);
+  if (!row) return;
+
+  const venue = canonicalizeVenueName(state.activeVenue) || ACCOUNTING_VENUES[0];
+  if (!row.pars[venue]) {
+    row.pars[venue] = {};
+  }
+  const venueMap = row.pars[venue];
+  const sanitized = {};
+
+  Object.keys(venueMap).forEach((countKey) => {
+    const parsed = parseAccountingNumber(venueMap[countKey]);
+    if (parsed !== null) {
+      sanitized[countKey] = parsed;
+      venueMap[countKey] = accountingToFixed(parsed);
+    } else {
+      delete venueMap[countKey];
+    }
+  });
+
+  const docRef = resolveRecipeDocRef(row);
+  const payload = {
+    recipeNo: row.recipeNo,
+    updatedAt: serverTimestamp(),
+    pars: { [venue]: sanitized }
+  };
+
+  if (row.source !== "cookingrecipes") {
+    payload.migratedAt = serverTimestamp();
+  }
+
+  try {
+    await setDoc(docRef, payload, { merge: true });
+    row.source = "cookingrecipes";
+    row.parsDirtyByVenue[venue] = false;
+    applyAccountingRecipesFilter();
+  } catch (err) {
+    console.warn("Failed to save recipe pars", err);
+    alert("Unable to save recipe pars. Check console for details.");
+  }
+}
+
+async function savePrepPars(rowKey) {
+  const state = getAccountingRecipesState();
+  const row = state.byKey.get(rowKey);
+  if (!row) return;
+
+  const venue = canonicalizeVenueName(state.activeVenue) || ACCOUNTING_VENUES[0];
+  const prepEntry = getPrepEntryForRow(row, venue);
+  if (!prepEntry) {
+    alert("No prep pars found for this recipe and venue.");
+    return;
+  }
+  if (!prepEntry.docId) {
+    alert("Prep pars entry is missing a document reference and cannot be saved.");
+    return;
+  }
+
+  const counts = prepEntry.counts || {};
+  const sanitized = {};
+  Object.keys(counts).forEach((countKey) => {
+    const parsed = parseAccountingNumber(counts[countKey]);
+    if (parsed !== null) {
+      sanitized[countKey] = parsed;
+      counts[countKey] = accountingToFixed(parsed);
+    } else {
+      sanitized[countKey] = null;
+      counts[countKey] = "";
+    }
+  });
+
+  try {
+    const docRef = doc(db, PREP_PARS_COLL, prepEntry.docId);
+    await setDoc(docRef, {
+      pars: {
+        [prepEntry.venueField || venue]: sanitized
+      },
+      updatedAt: serverTimestamp()
+    }, { merge: true });
+    prepEntry.dirty = false;
+    applyAccountingRecipesFilter();
+  } catch (err) {
+    console.warn("Failed to save prep pars", err);
+    alert("Unable to save prep pars. Check console for details.");
+  }
+}
+
+function handleAccountingRecipesInput(event) {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  const rowEl = target.closest("tr[data-row-key]");
+  if (!rowEl) return;
+  const rowKey = rowEl.getAttribute("data-row-key");
+  if (!rowKey) return;
+
+  const state = getAccountingRecipesState();
+  const row = state.byKey.get(rowKey);
+  if (!row) return;
+
+  if (target.closest("#accountingRecipesInfoWrap")) {
+    const field = target.getAttribute("name");
+    if (!field) return;
+    row[field] = target.value;
+    row.infoDirty = true;
+  } else if (target.closest("#accountingRecipesParsWrap")) {
+    const countKey = target.getAttribute("data-count");
+    if (!countKey) return;
+    const canonicalVenue = canonicalizeVenueName(state.activeVenue) || state.activeVenue;
+    if (state.parsMode === "prep") {
+      const prepEntry = getPrepEntryForRow(row, canonicalVenue);
+      if (!prepEntry) {
+        console.warn("Prep pars entry not found for", row.recipeNo, canonicalVenue);
+        return;
+      }
+      const counts = prepEntry.counts || (prepEntry.counts = {});
+      counts[countKey] = target.value;
+      prepEntry.dirty = true;
+    } else {
+      if (!row.pars[canonicalVenue]) {
+        row.pars[canonicalVenue] = {};
+      }
+      row.pars[canonicalVenue][countKey] = target.value;
+      row.parsDirtyByVenue[canonicalVenue] = true;
+    }
+  }
+
+  if (getAccountingRecipesState().activeView === "pars") {
+    requestAnimationFrame(updateParsConsistencyHighlights);
+  }
+}
+
+function handleAccountingRecipesClick(event) {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+
+  const subtab = target.closest(".accounting-subtab");
+  if (subtab) {
+    event.preventDefault();
+    const view = subtab.getAttribute("data-view") || "info";
+    setAccountingRecipesActiveView(view);
+    return;
+  }
+
+  const venueBtn = target.closest(".accounting-venue-tab");
+  if (venueBtn) {
+    event.preventDefault();
+    const venue = venueBtn.getAttribute("data-venue") || ACCOUNTING_VENUES[0];
+    setAccountingRecipesVenue(venue);
+    return;
+  }
+
+  const modeBtn = target.closest("[data-pars-mode]");
+  if (modeBtn) {
+    event.preventDefault();
+    const mode = modeBtn.getAttribute("data-pars-mode") || "recipe";
+    setAccountingParsMode(mode);
+    return;
+  }
+
+  const actionBtn = target.closest("[data-action]");
+  if (!actionBtn) return;
+  const action = actionBtn.getAttribute("data-action");
+  const rowKey = actionBtn.getAttribute("data-row-key");
+  if (!rowKey) return;
+
+  if (action === "save-recipe-info") {
+    event.preventDefault();
+    saveRecipeInfo(rowKey);
+  } else if (action === "save-recipe-pars") {
+    event.preventDefault();
+    saveRecipePars(rowKey);
+  } else if (action === "save-prep-pars") {
+    event.preventDefault();
+    savePrepPars(rowKey);
+  }
+}
+
+function toggleAccountingRecipesEmpty(view = getAccountingRecipesState().activeView) {
+  const state = getAccountingRecipesState();
+  const empty = document.getElementById("accountingRecipesEmpty");
+  if (!empty) return;
+  const hasRows = view === "pars"
+    ? (state.parsDisplayCount || 0) > 0
+    : (state.filteredInfo && state.filteredInfo.length > 0);
+  empty.hidden = hasRows || !state.isLoaded;
+}
+
+function updateAccountingRecipeSubtabs() {
+  const state = getAccountingRecipesState();
+  document.querySelectorAll("#accountingRecipesTab .accounting-subtab").forEach((btn) => {
+    const viewName = btn.getAttribute("data-view") || "info";
+    const isActive = viewName === state.activeView;
+    btn.classList.toggle("accounting-subtab--active", isActive);
+    btn.setAttribute("aria-pressed", isActive ? "true" : "false");
+  });
+}
+
+function updateAccountingVenueTabs() {
+  const state = getAccountingRecipesState();
+  const canonicalActive = canonicalizeVenueName(state.activeVenue) || state.activeVenue;
+  document.querySelectorAll("#accountingRecipesVenueTabs .accounting-venue-tab").forEach((btn) => {
+    const venueName = canonicalizeVenueName(btn.getAttribute("data-venue")) || btn.getAttribute("data-venue");
+    const isActive = venueName === canonicalActive;
+    btn.classList.toggle("accounting-venue-tab--active", isActive);
+    btn.setAttribute("aria-pressed", isActive ? "true" : "false");
+  });
+}
+
+function setAccountingRecipesActiveView(view) {
+  const state = getAccountingRecipesState();
+  const normalized = view === "pars" ? "pars" : "info";
+  state.activeView = normalized;
+
+  const infoWrap = document.getElementById("accountingRecipesInfoWrap");
+  const parsWrap = document.getElementById("accountingRecipesParsWrap");
+  const venueTabs = document.getElementById("accountingRecipesVenueTabs");
+
+  if (infoWrap) infoWrap.hidden = normalized !== "info";
+  if (parsWrap) parsWrap.hidden = normalized !== "pars";
+  if (venueTabs) venueTabs.hidden = normalized !== "pars";
+
+  updateAccountingRecipeSubtabs();
+  updateAccountingVenueTabs();
+  updateAccountingParsModeToggle();
+  applyAccountingRecipesFilter();
+}
+
+function setAccountingRecipesVenue(venue) {
+  const state = getAccountingRecipesState();
+  const canonicalVenue = canonicalizeVenueName(venue) || ACCOUNTING_VENUES[0];
+  state.activeVenue = canonicalVenue;
+  updateAccountingVenueTabs();
+  applyAccountingRecipesFilter();
+}
+
+function setAccountingParsMode(mode) {
+  const state = getAccountingRecipesState();
+  const normalized = mode === "prep" ? "prep" : "recipe";
+  if (state.parsMode === normalized) return;
+  state.parsMode = normalized;
+  updateAccountingParsModeToggle();
+  applyAccountingRecipesFilter();
+}
+
+function updateAccountingParsModeToggle() {
+  const state = getAccountingRecipesState();
+  const wrap = document.getElementById("accountingRecipesParsMode");
+  if (!wrap) return;
+  const isParsView = state.activeView === "pars";
+  wrap.hidden = !isParsView;
+  wrap.querySelectorAll(".accounting-pars-toggle__btn").forEach((btn) => {
+    const mode = btn.getAttribute("data-pars-mode") === "prep" ? "prep" : "recipe";
+    const isActive = mode === state.parsMode;
+    btn.classList.toggle("accounting-pars-toggle__btn--active", isActive);
+    btn.setAttribute("aria-pressed", isActive ? "true" : "false");
+  });
+}
+
+async function loadPrepParsOnce() {
+  if (window._prepParsByRecipe) return window._prepParsByRecipe;
+
+  const cache = {};
+  try {
+    const snap = await getDocs(collection(db, PREP_PARS_COLL));
+    snap.forEach((docSnap) => {
+      const data = docSnap.data() || {};
+      const recipeKey = getPrepRecipeKey(data.recipeNo || data.recipeId || docSnap.id);
+      if (!recipeKey) return;
+      const pars = data.pars || {};
+      Object.entries(pars).forEach(([venueName, counts]) => {
+        const canonicalVenue = canonicalizeVenueName(venueName) || accountingString(venueName);
+        const venueKey = getPrepVenueKey(canonicalVenue);
+        if (!venueKey) return;
+        cache[recipeKey] = cache[recipeKey] || {};
+        const existing = cache[recipeKey][venueKey] || {
+          docId: docSnap.id,
+          venueField: venueName,
+          venueName: canonicalVenue,
+          counts: {}
+        };
+        Object.entries(counts || {}).forEach(([guestCount, value]) => {
+          const formatted = accountingToFixed(value);
+          existing.counts[guestCount] = formatted;
+        });
+        existing.docId = docSnap.id;
+        existing.venueField = venueName;
+        cache[recipeKey][venueKey] = existing;
+      });
+    });
+  } catch (err) {
+    console.warn("Failed to load prep pars cache", err);
+  }
+
+  window._prepParsByRecipe = cache;
+  return cache;
+}
+
+function getPrepRecipeKey(recipeNo) {
+  const key = accountingTrim(recipeNo || "");
+  return key ? key.replace(/\s+/g, "_").toUpperCase() : "";
+}
+
+function getPrepVenueKey(venueName) {
+  const canonical = canonicalizeVenueName(venueName) || accountingTrim(venueName || "");
+  return canonical.replace(/\s+/g, "_").toUpperCase();
+}
+
+function getPrepEntryForRow(row, canonicalVenue) {
+  if (!row) return null;
+  const recipeKey = getPrepRecipeKey(row.recipeNo || row.cookingId || row._key);
+  if (!recipeKey) return null;
+  const venueKey = getPrepVenueKey(canonicalVenue);
+  if (!venueKey) return null;
+  const cache = window._prepParsByRecipe || {};
+  return cache?.[recipeKey]?.[venueKey] || null;
+}
+
+function ensureAccountingRecipesUI() {
+  const state = getAccountingRecipesState();
+  if (state.initialized) return;
+
+  const tab = document.getElementById("accountingRecipesTab");
+  if (tab) {
+    tab.addEventListener("input", handleAccountingRecipesInput);
+    tab.addEventListener("click", handleAccountingRecipesClick);
+  }
+
+  const search = document.getElementById("accountingRecipesSearch");
+  if (search && !search.dataset.bound) {
+    search.dataset.bound = "1";
+    search.addEventListener("input", (event) => {
+      state.search = event.target.value || "";
+      applyAccountingRecipesFilter();
+    });
+  }
+
+  const refreshBtn = document.getElementById("accountingRecipesRefresh");
+  if (refreshBtn && !refreshBtn.dataset.bound) {
+    refreshBtn.dataset.bound = "1";
+    refreshBtn.addEventListener("click", () => loadAccountingRecipesPars({ silent: false, force: true }));
+  }
+
+  const parsModeWrap = document.getElementById("accountingRecipesParsMode");
+  if (parsModeWrap && !parsModeWrap.dataset.bound) {
+    parsModeWrap.dataset.bound = "1";
+    parsModeWrap.addEventListener("click", (event) => {
+      const btn = event.target.closest("[data-pars-mode]");
+      if (!btn) return;
+      event.preventDefault();
+      const mode = btn.getAttribute("data-pars-mode") || "recipe";
+      setAccountingParsMode(mode);
+    });
+  }
+
+  updateAccountingRecipeSubtabs();
+  updateAccountingVenueTabs();
+  updateAccountingParsModeToggle();
+
+  state.initialized = true;
+}
+
+window.loadAccountingIngredients = loadAccountingIngredients;
+window.renderAccountingIngredientsTable = renderAccountingIngredientsTable;
+window.saveIngredient = saveIngredient;
+window.deleteIngredient = deleteIngredient;
+
+window.loadAccountingRecipesPars = loadAccountingRecipesPars;
+window.renderRecipesInfoTable = renderRecipesInfoTable;
+window.renderRecipesParsGrid = renderRecipesParsGrid;
+window.mergeRecipeDocs = mergeRecipeDocs;
+window.loadPrepParsOnce = loadPrepParsOnce;
+window.getPrepRecipeKey = getPrepRecipeKey;
+window.getPrepVenueKey = getPrepVenueKey;
+// [ACCOUNTING] END Accounting Ingredients & Recipes/Pars
 
 
 
