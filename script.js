@@ -6964,7 +6964,7 @@ function renderTransferOrderRows(state) {
   if (!tbody) return;
 
   if (!state.rows.length) {
-    tbody.innerHTML = '<tr><td colspan="8" class="transfer-order-empty">No transfer items found.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" class="transfer-order-empty">No transfer items found.</td></tr>';
     state.dom = new Map();
     refreshTransferOrderPickList(state);
     return;
@@ -6978,7 +6978,7 @@ function renderTransferOrderRows(state) {
     if (shelfLabel !== lastShelfKey) {
       rowsHtml.push(`
         <tr class="transfer-shelf-header" data-shelf="${escapeHtml(shelfLabel)}">
-          <td colspan="8">
+          <td colspan="7">
             <span class="transfer-shelf-label">Shelf ${escapeHtml(shelfLabel)}</span>
           </td>
         </tr>
@@ -7011,7 +7011,6 @@ function renderTransferOrderRows(state) {
             aria-label="On hand for ${escapeHtml(row.itemName)}" />
         </td>
         <td data-label="Per CS" class="transfer-value--number" data-field="perCs">${escapeHtml(row.perCaseLabel)}</td>
-        <td data-label="Inv Amount" class="transfer-value--number" data-field="inv">${escapeHtml(row.invDisplay)}</td>
         <td data-label="Min" class="transfer-value--number" data-field="min">${escapeHtml(row.minDisplay)}</td>
         <td data-label="Needed" class="transfer-value--number" data-field="needed">${row.needed}</td>
         <td data-label="UOM">${escapeHtml(row.uomDisplay)}</td>
@@ -7026,7 +7025,6 @@ function renderTransferOrderRows(state) {
     const rowEl = document.getElementById(row.domId);
     if (!rowEl) return;
     const inputEl = rowEl.querySelector(".transfer-onhand-input");
-    const invEl = rowEl.querySelector('[data-field="inv"]');
     const minEl = rowEl.querySelector('[data-field="min"]');
     const neededEl = rowEl.querySelector('[data-field="needed"]');
 
@@ -7043,7 +7041,6 @@ function renderTransferOrderRows(state) {
     domRefs.set(row.key, {
       rowEl,
       inputEl,
-      invEl,
       minEl,
       neededEl
     });
@@ -7059,7 +7056,6 @@ function updateTransferRowDom(row, refs, options = {}) {
   if (!skipInputUpdate && refs.inputEl) {
     refs.inputEl.value = row.onHand > 0 ? row.onHandLabel : "";
   }
-  if (refs.invEl) refs.invEl.textContent = row.invDisplay;
   if (refs.minEl) refs.minEl.textContent = row.minDisplay;
   if (refs.neededEl) refs.neededEl.textContent = String(row.needed);
   if (refs.rowEl) {
@@ -7348,7 +7344,7 @@ async function loadMainKitchenTransferOrder(options = {}) {
   state.docRef = doc(db, TRANSFER_ORDER_COLLECTION, docId);
 
   state.loading = (async () => {
-    tbody.innerHTML = '<tr><td colspan="8" class="transfer-order-empty">Loading transfer items…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="7" class="transfer-order-empty">Loading transfer items…</td></tr>';
 
     try {
       const [ingredientsSnap, countsSnap] = await Promise.all([
