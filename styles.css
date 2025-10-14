@@ -1185,9 +1185,41 @@ table {
 }
 
 .accounting-add-venues {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: 16px;
+  align-items: stretch;
+}
+
+.accounting-add-venues[data-expanded-venue] .accounting-add-venue {
+  transition: all 0.25s ease;
+}
+
+.accounting-add-venues[data-expanded-venue] .accounting-add-venue:not([data-venue]) {
+  /* fallback (should not happen) */
+}
+
+.accounting-add-venues[data-expanded-venue="Aloha"] .accounting-add-venue[data-venue="Aloha"],
+.accounting-add-venues[data-expanded-venue="Ohana"] .accounting-add-venue[data-venue="Ohana"],
+.accounting-add-venues[data-expanded-venue="Gateway"] .accounting-add-venue[data-venue="Gateway"],
+.accounting-add-venues[data-expanded-venue="Concessions"] .accounting-add-venue[data-venue="Concessions"] {
+  flex: 1 1 640px;
+  min-width: 320px;
+  opacity: 1;
+  transform: scale(1.01);
+  z-index: 2;
+}
+
+.accounting-add-venues[data-expanded-venue] .accounting-add-venue:not([open]) {
+  flex: 0 0 140px;
+  max-width: 160px;
+  opacity: 0.6;
+  transform: scale(0.98);
+  z-index: 1;
+}
+
+.accounting-add-venues[data-expanded-venue] .accounting-add-venue:not(.accounting-add-venue[data-venue]) {
+  /* no-op */
 }
 
 .accounting-add-venue {
@@ -1196,6 +1228,10 @@ table {
   border-radius: 12px;
   padding: 0;
   overflow: hidden;
+  flex: 1 1 220px;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
 }
 
 .accounting-add-venue summary {
@@ -1228,6 +1264,18 @@ table {
   display: none;
 }
 
+.accounting-add-venue__body {
+  display: none;
+  padding: 0 14px 14px;
+  background: rgba(15, 23, 42, 0.45);
+  flex: 1 1 auto;
+  overflow: auto;
+}
+
+.accounting-add-venue[open] .accounting-add-venue__body {
+  display: block;
+}
+
 .accounting-add-venue summary span {
   font-size: 0.75rem;
   text-transform: uppercase;
@@ -1241,15 +1289,21 @@ table {
 
 .accounting-add-pars-table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0 10px;
   background: rgba(15, 23, 42, 0.72);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 10px;
+  padding: 12px 12px 18px;
 }
 
 .accounting-add-pars-table th,
 .accounting-add-pars-table td {
-  padding: 8px 10px;
-  border: 1px solid rgba(148, 163, 184, 0.22);
+  padding: 12px 10px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
   font-size: 0.82rem;
+  background: rgba(15, 23, 42, 0.78);
+  border-radius: 6px;
 }
 
 .accounting-add-pars-table thead th {
@@ -1258,12 +1312,26 @@ table {
   font-size: 0.74rem;
   color: rgba(226, 232, 240, 0.7);
   background: rgba(59, 130, 246, 0.12);
+  padding-top: 12px;
+  padding-bottom: 12px;
+  border-bottom: 2px solid rgba(59, 130, 246, 0.35);
 }
 
 .accounting-add-pars-table tbody th {
   font-weight: 600;
   color: rgba(226, 232, 240, 0.82);
-  width: 110px;
+  width: 150px;
+  padding-top: 36px;
+}
+.accounting-add-pars-table tbody td {
+  padding-top: 36px;
+  background: rgba(15, 23, 42, 0.85);
+}
+
+.accounting-add-pars-table tbody tr:first-child td,
+.accounting-add-pars-table tbody tr:first-child th {
+  border-top: none;
+  margin-top: 32px;
 }
 
 .accounting-add-pars-table input {

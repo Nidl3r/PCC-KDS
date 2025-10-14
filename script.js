@@ -2132,10 +2132,11 @@ function buildVenueMapFromForm(form, prefix, errors) {
   ACCOUNTING_RECIPE_VENUES.forEach((venue) => {
     const canonicalVenue = canonicalizeVenueName(venue) || venue;
     const counts = {};
-    ACCOUNTING_RECIPE_PAR_GUEST_COUNTS.forEach((guest) => {
-      const inputName = `${prefix}_${venue}_${guest}`;
-      const input = form.elements[inputName];
-      if (!input) return;
+    const inputs = form.querySelectorAll(`[name^="${prefix}_${venue}_"]`);
+    inputs.forEach((input) => {
+      const match = input.name.match(new RegExp(`^${prefix}_${venue}_(.+)$`));
+      const guest = match ? accountingString(match[1]) : "";
+      if (!guest) return;
       const raw = accountingTrim(input.value || "");
       if (!raw) return;
       const parsed = parseAccountingNumber(raw);
@@ -2175,6 +2176,16 @@ function attachSelectOtherHandlers(select, otherInput) {
   update();
 }
 
+function updateAccountingRecipeExpandedVenue(venuesWrap) {
+  if (!venuesWrap) return;
+  const openDetail = venuesWrap.querySelector(".accounting-add-venue[open]");
+  if (openDetail) {
+    venuesWrap.dataset.expandedVenue = openDetail.dataset.venue || "";
+  } else {
+    delete venuesWrap.dataset.expandedVenue;
+  }
+}
+
 function setupAddRecipeFormControls(form) {
   if (!form || form.dataset.controlsInitialized === "1") return;
   const uomSelect = form.elements.uomSelect;
@@ -2197,6 +2208,22 @@ function setupAddRecipeFormControls(form) {
   });
 
   form.dataset.controlsInitialized = "1";
+
+  const venuesWrap = form.querySelector(".accounting-add-venues");
+  if (venuesWrap && !venuesWrap.dataset.toggleBound) {
+    venuesWrap.dataset.toggleBound = "1";
+    venuesWrap.addEventListener("toggle", (event) => {
+      const detail = event.target.closest(".accounting-add-venue");
+      if (!detail || !venuesWrap.contains(detail)) return;
+      if (detail.open) {
+        venuesWrap.querySelectorAll(".accounting-add-venue").forEach((other) => {
+          if (other !== detail && other.open) other.open = false;
+        });
+      }
+      updateAccountingRecipeExpandedVenue(venuesWrap);
+    });
+  }
+  updateAccountingRecipeExpandedVenue(venuesWrap);
 }
 
 function populateAccountingRecipeFormOptions() {
@@ -2205,16 +2232,47 @@ function populateAccountingRecipeFormOptions() {
   setupAddRecipeFormControls(form);
 
   const state = getAccountingRecipesState();
-  if (!state?.rows?.length) return;
 
   const categories = new Set();
   const stations = new Set();
+  const countsByVenue = new Map();
+  const venuesWrap = form.querySelector(".accounting-add-venues");
+  const previousExpanded = venuesWrap?.dataset?.expandedVenue;
+
+  const addCounts = (venueName, countsObj) => {
+    if (!countsObj || typeof countsObj !== "object") return;
+    const canonicalVenue = canonicalizeVenueName(venueName) || accountingString(venueName);
+    if (!canonicalVenue) return;
+    const set = countsByVenue.get(canonicalVenue) || new Set();
+    Object.keys(countsObj).forEach((guest) => {
+      const normalized = accountingString(guest);
+      if (normalized) set.add(normalized);
+    });
+    if (set.size) countsByVenue.set(canonicalVenue, set);
+  };
+
   state.rows.forEach((row) => {
     const category = accountingTrim(row.category);
     if (category) categories.add(category);
     const station = accountingTrim(row.station);
     if (station) stations.add(station);
+    const pars = row.pars || {};
+    Object.entries(pars).forEach(([venueName, counts]) => addCounts(venueName, counts));
   });
+
+  const prepCache = window._prepParsByRecipe;
+  if (prepCache && typeof prepCache === "object") {
+    Object.values(prepCache).forEach((venueMap) => {
+      if (!venueMap || typeof venueMap !== "object") return;
+      Object.values(venueMap).forEach((entry) => {
+        if (!entry || typeof entry !== "object") return;
+        const venueName = entry.venueName || entry.venueField;
+        addCounts(venueName, entry.counts);
+      });
+    });
+  }
+
+  const formData = new FormData(form);
 
   const populateSelect = (select, values, label) => {
     if (!select) return;
@@ -2269,6 +2327,100 @@ function populateAccountingRecipeFormOptions() {
 
   populateSelect(form.elements.categorySelect, categories, "Category");
   populateSelect(form.elements.stationSelect, stations, "Station");
+
+  const sortGuestCounts = (counts) => counts.sort((a, b) => {
+    const an = Number(a);
+    const bn = Number(b);
+    if (Number.isFinite(an) && Number.isFinite(bn)) return an - bn;
+    return accountingString(a).localeCompare(accountingString(b), undefined, { numeric: true, sensitivity: "base" });
+  });
+
+  const renderVenueInputs = (venue) => {
+    const details = form.querySelector(`.accounting-add-venue[data-venue="${venue}"]`);
+    if (!details) return;
+    const body = details.querySelector(".accounting-add-venue__body");
+    if (!body) return;
+    const canonicalVenue = canonicalizeVenueName(venue) || venue;
+    const set = countsByVenue.get(canonicalVenue);
+    let counts = set ? Array.from(set) : [];
+    if (!counts.length) {
+      counts = [...ACCOUNTING_RECIPE_PAR_GUEST_COUNTS];
+    }
+    counts = Array.from(new Set(counts.map((value) => accountingString(value)).filter(Boolean)));
+    if (!counts.length) {
+      body.innerHTML = "<p class=\"accounting-add-hint\">No pars yet for this venue.</p>";
+      return;
+    }
+    sortGuestCounts(counts);
+
+    const rowsMeta = [
+      { label: "Recipe Pars", prefix: "pars" },
+      { label: "Prep Pars", prefix: "prep" }
+    ];
+
+    const table = document.createElement("table");
+    table.className = "accounting-add-pars-table";
+
+    const thead = document.createElement("thead");
+    const headerRow = document.createElement("tr");
+    const typeTh = document.createElement("th");
+    typeTh.scope = "col";
+    typeTh.textContent = "Type";
+    headerRow.appendChild(typeTh);
+    counts.forEach((guest) => {
+      const th = document.createElement("th");
+      th.scope = "col";
+      th.textContent = guest;
+      headerRow.appendChild(th);
+    });
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+
+    const tbody = document.createElement("tbody");
+    rowsMeta.forEach(({ label, prefix }) => {
+      const tr = document.createElement("tr");
+      const rowTh = document.createElement("th");
+      rowTh.scope = "row";
+      rowTh.textContent = label;
+      tr.appendChild(rowTh);
+
+      counts.forEach((guest) => {
+        const td = document.createElement("td");
+        const input = document.createElement("input");
+        input.type = "number";
+        input.step = "0.01";
+        input.inputMode = "decimal";
+        input.name = `${prefix}_${venue}_${guest}`;
+        const existingValue = formData.get(input.name);
+        if (existingValue !== null) {
+          input.value = existingValue;
+        }
+        td.appendChild(input);
+        tr.appendChild(td);
+      });
+
+      tbody.appendChild(tr);
+    });
+    table.appendChild(tbody);
+
+    body.innerHTML = "";
+    body.appendChild(table);
+  };
+
+  ACCOUNTING_RECIPE_VENUES.forEach((venue) => renderVenueInputs(venue));
+
+  if (venuesWrap) {
+    let expandedDetail = previousExpanded
+      ? venuesWrap.querySelector(`.accounting-add-venue[data-venue="${previousExpanded}"]`)
+      : null;
+    if (!expandedDetail || !expandedDetail.querySelector('.accounting-add-pars-table')) {
+      expandedDetail = venuesWrap.querySelector('.accounting-add-venue');
+    }
+    if (expandedDetail && !expandedDetail.open) {
+      expandedDetail.open = true;
+    }
+    updateAccountingRecipeExpandedVenue(venuesWrap);
+  }
 }
 
 function setAccountingRecipeAddStatus(message, tone = "info") {
@@ -2301,6 +2453,7 @@ function setAccountingRecipeAddFormVisible(show) {
     form.elements.categorySelect?._updateOtherInput?.();
     form.elements.stationSelect?._updateOtherInput?.();
     setAccountingRecipeAddStatus("");
+    updateAccountingRecipeExpandedVenue(form.querySelector(".accounting-add-venues"));
   }
 }
 
