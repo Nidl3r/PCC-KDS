@@ -121,6 +121,14 @@ const appVersionDoc = () => doc(db, APP_VERSION_COLLECTION, APP_VERSION_DOC_ID);
 
 const WEIGHT_UOMS = new Set(["lb", "lbs", "pound", "pounds", "kg", "kilogram", "kilograms", "g", "gram", "grams"]);
 
+const LS_RECIPES_COLL = "powerbiDaily";
+const UOM_COLLECTION = "uom";
+const LS_RECIPES_QUANTITY_PRECISION = 6;
+const LS_RECIPES_DISPLAY_PRECISION = 4;
+const LS_RECIPES_QTY_FORMAT = (typeof Intl !== "undefined" && Intl.NumberFormat)
+  ? new Intl.NumberFormat("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 4 })
+  : null;
+
 const recipeDocFallbackOrder = [recipeDoc, legacyRecipeDoc];
 const recipeCollectionFallbackOrder = [recipesCollection, legacyRecipesCollection];
 
@@ -1157,6 +1165,11 @@ function showAccountingTab(tabName) {
   }
 
   // [ACCOUNTING] START
+  if (tabName === "ls-recipes") {
+    ensureAccountingLsRecipesUI();
+    loadAccountingLsRecipes();
+  }
+
   if (tabName === "ingredients") {
     ensureAccountingIngredientsUI();
     loadAccountingIngredients();
@@ -1170,6 +1183,937 @@ function showAccountingTab(tabName) {
 }
 
 window.showAccountingTab = showAccountingTab;
+
+
+
+// [ACCOUNTING] LS Recipes
+const LS_RECIPES_ZERO_EPSILON = 1e-6;
+
+function getAccountingLsRecipesState() {
+  if (!window.__accountingLsRecipesState) {
+    const defaultDate = (typeof getTodayDate === "function")
+      ? getTodayDate()
+      : new Date().toISOString().slice(0, 10);
+    window.__accountingLsRecipesState = {
+      initialized: false,
+      isLoading: false,
+      hasLoaded: false,
+      searchTerm: "",
+      selectedDate: defaultDate,
+      allRows: [],
+      filteredRows: [],
+      powerbiByParent: new Map(),
+      parentEntries: [],
+      parentNames: new Map(),
+      uomIndex: new Map(),
+      baseRows: [],
+      recipeTotals: new Map(),
+      isLoadingTotals: false,
+      pendingTotalsRefresh: false,
+      error: null,
+      sort: { column: null, direction: null }
+    };
+  }
+  return window.__accountingLsRecipesState;
+}
+
+function ensureAccountingLsRecipesUI() {
+  const state = getAccountingLsRecipesState();
+  if (state.initialized) return;
+  state.initialized = true;
+  const searchInput = document.getElementById("lsRecipesSearch");
+  if (searchInput) {
+    searchInput.addEventListener("input", (event) => {
+      setAccountingLsRecipesSearch(event?.target?.value || "");
+    });
+  }
+
+  const copyBtn = document.getElementById("lsRecipesCopy");
+  if (copyBtn) {
+    copyBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      copyLsRecipesTableToClipboard();
+    });
+  }
+
+  const dateInput = document.getElementById("lsRecipesDate");
+  if (dateInput) {
+    if (!dateInput.value) {
+      dateInput.value = state.selectedDate || "";
+    }
+    const onDateChange = (event) => {
+      const value = event?.target?.value || "";
+      setAccountingLsRecipesDate(value);
+    };
+    dateInput.addEventListener("change", onDateChange);
+    dateInput.addEventListener("input", onDateChange);
+  }
+
+  const table = document.getElementById("lsRecipesTable");
+  if (table) {
+    table.addEventListener("click", handleLsRecipesSortClick);
+  }
+}
+
+async function loadAccountingLsRecipes(forceReload = false) {
+  const state = getAccountingLsRecipesState();
+  if (state.isLoading) return;
+  if (state.hasLoaded && !forceReload) {
+    await refreshAccountingLsRecipeTotals();
+    return;
+  }
+
+  state.isLoading = true;
+  state.error = null;
+  updateAccountingLsRecipesLoading(true);
+
+  let loadedBase = false;
+
+  try {
+    const [powerbiSnap, uomSnap] = await Promise.all([
+      getDocs(collection(db, LS_RECIPES_COLL)),
+      getDocs(collection(db, UOM_COLLECTION))
+    ]);
+
+    const powerbiByParent = new Map();
+
+    powerbiSnap.forEach((docSnap) => {
+      const data = docSnap.data() || {};
+      const rawParent = data.Parent_Item_No ?? data.parentItemNo ?? data.parent_item_no ?? data.parentNo ?? docSnap.id;
+      const parentKey = normalizeLsRecipeKey(rawParent);
+      if (!parentKey) return;
+
+      const parentDisplay = normalizeLsRecipeDisplay(rawParent) || parentKey;
+      const items = Array.isArray(data.items) ? data.items : [];
+      const ingestedAt = parseLsRecipeTimestamp(data._ingestedAt ?? data.ingestedAt);
+      const existing = powerbiByParent.get(parentKey);
+      if (existing && existing.ingestedAt > ingestedAt) {
+        return;
+      }
+
+      powerbiByParent.set(parentKey, {
+        key: parentKey,
+        parentNo: parentDisplay,
+        data,
+        items,
+        ingestedAt
+      });
+    });
+
+    const parentEntries = Array.from(powerbiByParent.values());
+    parentEntries.sort((a, b) => a.parentNo.localeCompare(b.parentNo, undefined, { numeric: true, sensitivity: "base" }));
+
+    const parentKeys = parentEntries.map((entry) => entry.key);
+    const parentNameMap = await fetchLsRecipeParentNames(parentKeys);
+    const uomIndex = buildLsRecipesUomIndex(uomSnap);
+
+    const baseRows = [];
+
+    parentEntries.forEach((entry) => {
+      const parentNo = typeof entry.parentNo === "string"
+        ? entry.parentNo.trim()
+        : entry.parentNo || "";
+      if (!parentNo) return;
+
+      const parentKey = entry.key;
+      const parentNameRaw =
+        parentNameMap.get(parentKey) ||
+        entry.data.Parent_Name ||
+        entry.data.parentName ||
+        entry.data.Parent_Description ||
+        "";
+      const parentName = typeof parentNameRaw === "string"
+        ? parentNameRaw.trim()
+        : String(parentNameRaw || "").trim();
+      if (!parentName) return;
+
+      const aggregatedItems = aggregateLsRecipeItems(entry, {
+        powerbiByParent,
+        uomIndex
+      });
+
+      aggregatedItems.forEach((item) => {
+        const description = (item.description || "").trim();
+        const descriptionLower = description.toLowerCase();
+        const parentNameLower = parentName.toLowerCase();
+        const ingredientUpper = (item.ingredientKey || item.ingredientNo || "").toUpperCase();
+
+        baseRows.push({
+          parentKey,
+          parentNo,
+          parentName,
+          parentNameLower,
+          ingredientNo: item.ingredientNo,
+          ingredientKey: item.ingredientKey,
+          ingredientUpper,
+          description,
+          descriptionLower,
+          qtyBase: item.qtyBase,
+          uom: item.uom
+        });
+      });
+    });
+
+    state.powerbiByParent = powerbiByParent;
+    state.parentEntries = parentEntries;
+    state.parentNames = parentNameMap;
+    state.uomIndex = uomIndex;
+    state.baseRows = baseRows;
+    state.recipeTotals = new Map();
+    state.allRows = [];
+    state.filteredRows = [];
+    applyAccountingLsRecipesFilter();
+    state.hasLoaded = true;
+    loadedBase = true;
+  } catch (error) {
+    console.error("Failed to load LS Recipes", error);
+    state.error = error;
+  } finally {
+    state.isLoading = false;
+  }
+
+  if (loadedBase) {
+    await refreshAccountingLsRecipeTotals({ keepLoader: true });
+  } else {
+    updateAccountingLsRecipesLoading(false);
+    rebuildAccountingLsRecipesRows();
+    applyAccountingLsRecipesFilter();
+  }
+}
+
+function setAccountingLsRecipesSearch(term) {
+  const state = getAccountingLsRecipesState();
+  const normalized = String(term || "").trim().toLowerCase();
+  if (state.searchTerm === normalized) return;
+  state.searchTerm = normalized;
+  applyAccountingLsRecipesFilter();
+}
+
+function normalizeLsRecipesDate(value) {
+  if (value === undefined || value === null) return "";
+  const str = String(value).trim();
+  if (!str) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return str;
+  const parsed = Date.parse(str);
+  if (Number.isFinite(parsed)) {
+    const date = new Date(parsed);
+    const year = date.getUTCFullYear();
+    const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+    const day = String(date.getUTCDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+  return "";
+}
+
+function setAccountingLsRecipesDate(dateStr) {
+  const state = getAccountingLsRecipesState();
+  const fallback = (typeof getTodayDate === "function")
+    ? getTodayDate()
+    : new Date().toISOString().slice(0, 10);
+  const normalized = normalizeLsRecipesDate(dateStr) || fallback;
+  if (state.selectedDate === normalized) return;
+  state.selectedDate = normalized;
+  const input = document.getElementById("lsRecipesDate");
+  if (input && input.value !== normalized) {
+    input.value = normalized;
+  }
+  refreshAccountingLsRecipeTotals();
+}
+
+function rebuildAccountingLsRecipesRows() {
+  const state = getAccountingLsRecipesState();
+  const totals = state.recipeTotals instanceof Map ? state.recipeTotals : new Map();
+  const rows = state.baseRows.map((base) => {
+    const totalQtyRaw = Number(base.qtyBase) || 0;
+    const totalQty = roundLsRecipesQuantity(totalQtyRaw);
+    const recipeQtyRaw = totals.get(base.parentKey);
+    const recipeQty = roundLsRecipesQuantity(Number(recipeQtyRaw) || 0);
+    const amountUsed = roundLsRecipesQuantity(totalQty * recipeQty);
+    return {
+      parentKey: base.parentKey,
+      parentNo: base.parentNo,
+      parentName: base.parentName,
+      parentNameLower: base.parentNameLower,
+      ingredientNo: base.ingredientNo,
+      ingredientKey: base.ingredientKey,
+      ingredientUpper: base.ingredientUpper,
+      description: base.description,
+      descriptionLower: base.descriptionLower,
+      totalQty,
+      recipeQty,
+      amountUsed,
+      uom: base.uom
+    };
+  });
+  state.allRows = rows;
+}
+
+async function refreshAccountingLsRecipeTotals(options = {}) {
+  const state = getAccountingLsRecipesState();
+  if (state.isLoadingTotals) {
+    state.pendingTotalsRefresh = true;
+    return;
+  }
+  const { keepLoader = false } = options || {};
+  const fallback = (typeof getTodayDate === "function")
+    ? getTodayDate()
+    : new Date().toISOString().slice(0, 10);
+  const dateStr = normalizeLsRecipesDate(state.selectedDate) || fallback;
+  if (!keepLoader) updateAccountingLsRecipesLoading(true);
+
+  state.isLoadingTotals = true;
+  state.error = null;
+
+  try {
+    const totals = await fetchLsRecipeTotalsForDate(dateStr);
+    state.recipeTotals = totals;
+    rebuildAccountingLsRecipesRows();
+    applyAccountingLsRecipesFilter();
+  } catch (error) {
+    console.error("Failed to load LS recipe totals", error);
+    state.error = error;
+    state.recipeTotals = new Map();
+    rebuildAccountingLsRecipesRows();
+    applyAccountingLsRecipesFilter();
+  } finally {
+    state.isLoadingTotals = false;
+    updateAccountingLsRecipesLoading(false);
+    if (state.pendingTotalsRefresh) {
+      state.pendingTotalsRefresh = false;
+      // queue microtask to avoid recursion depth issues
+      Promise.resolve().then(() => refreshAccountingLsRecipeTotals());
+    }
+  }
+}
+
+function applyAccountingLsRecipesFilter() {
+  const state = getAccountingLsRecipesState();
+  const tbody = document.querySelector("#lsRecipesTable tbody");
+  if (!tbody) return;
+
+  const search = state.searchTerm;
+  let filtered = state.allRows.slice();
+  if (search) {
+    filtered = filtered.filter((row) => {
+      return (
+        (row.descriptionLower && row.descriptionLower.includes(search)) ||
+        (row.parentNameLower && row.parentNameLower.includes(search)) ||
+        (row.ingredientUpper && row.ingredientUpper.includes(search.toUpperCase()))
+      );
+    });
+  }
+
+  const sorted = sortAccountingLsRecipesRows(filtered);
+  state.filteredRows = sorted;
+  renderAccountingLsRecipesRows(sorted);
+}
+
+function renderAccountingLsRecipesRows(rows) {
+  const state = getAccountingLsRecipesState();
+  const tbody = document.querySelector("#lsRecipesTable tbody");
+  const emptyEl = document.getElementById("lsRecipesEmpty");
+  if (!tbody) return;
+
+  tbody.innerHTML = "";
+
+  if (!rows || rows.length === 0) {
+    if (emptyEl) {
+      if (state.isLoading || state.isLoadingTotals) {
+        emptyEl.hidden = true;
+      } else {
+        const hasData = Array.isArray(state.allRows) && state.allRows.length > 0;
+        const text = state.error
+          ? "Unable to load LS recipes. Please refresh."
+          : hasData
+          ? "No recipes match your filters."
+          : "No LS recipes found.";
+        emptyEl.textContent = text;
+        emptyEl.hidden = false;
+      }
+    }
+    return;
+  }
+
+  if (emptyEl) {
+    emptyEl.hidden = true;
+  }
+
+  const fragment = document.createDocumentFragment();
+
+  rows.forEach((row) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = [
+      `<td data-label="Parent No">${escapeHtml(row.parentNo || "")}</td>`,
+      `<td data-label="Parent Name">${escapeHtml(row.parentName || "")}</td>`,
+      `<td data-label="Ingredient No">${escapeHtml(row.ingredientNo || "")}</td>`,
+      `<td data-label="Description">${escapeHtml(row.description || "")}</td>`,
+      `<td data-label="Total Qty" style="text-align:right;">${escapeHtml(formatLsRecipesQuantity(row.totalQty))}</td>`,
+      `<td data-label="Recipe Qty" style="text-align:right;">${escapeHtml(formatLsRecipesQuantity(row.recipeQty))}</td>`,
+      `<td data-label="Amount Used" style="text-align:right;">${escapeHtml(formatLsRecipesQuantity(row.amountUsed))}</td>`,
+      `<td data-label="UOM">${escapeHtml(row.uom || "")}</td>`
+    ].join("");
+    fragment.appendChild(tr);
+  });
+
+  tbody.appendChild(fragment);
+  updateAccountingLsRecipesSortIndicators();
+}
+
+function updateAccountingLsRecipesLoading(isLoading) {
+  const loader = document.getElementById("lsRecipesLoading");
+  const emptyEl = document.getElementById("lsRecipesEmpty");
+  if (loader) {
+    loader.hidden = !isLoading;
+  }
+  if (isLoading && emptyEl) {
+    emptyEl.hidden = true;
+  }
+}
+
+function buildLsRecipesUomIndex(snapshot) {
+  const index = new Map();
+  if (!snapshot) return index;
+
+  snapshot.forEach((docSnap) => {
+    const data = docSnap.data() || {};
+    const rawItem = data.itemNo ?? data.Item_No ?? data.item_no ?? data.ItemNo;
+    const itemKey = normalizeLsRecipeKey(rawItem);
+    if (!itemKey) return;
+
+    const code = normalizeLsRecipeUomCode(data.code ?? data.Code ?? data.uomCode);
+    if (!code) return;
+
+    const qtyRaw = toFiniteNumber(data.qtyPerUnitOfMeasure ?? data.qty ?? data.quantityPerUnit);
+    const ratio = qtyRaw > 0 ? qtyRaw : 1;
+
+    const existing = index.get(itemKey) || { baseCode: "", conversions: new Map() };
+    existing.conversions.set(code, ratio);
+    if (!existing.baseCode && ratio === 1) {
+      existing.baseCode = code;
+    }
+    index.set(itemKey, existing);
+
+    const digitsKey = stripLeadingZeros(itemKey);
+    if (digitsKey && digitsKey !== itemKey) {
+      index.set(digitsKey, existing);
+    }
+  });
+
+  index.forEach((entry) => {
+    if (!entry.baseCode) {
+      for (const [code, ratio] of entry.conversions.entries()) {
+        if (ratio === 1) {
+          entry.baseCode = code;
+          break;
+        }
+      }
+    }
+    if (!entry.baseCode) {
+      const first = entry.conversions.keys().next();
+      if (!first.done) {
+        entry.baseCode = first.value;
+      }
+    }
+    if (entry.baseCode && !entry.conversions.has(entry.baseCode)) {
+      entry.conversions.set(entry.baseCode, 1);
+    }
+  });
+
+  return index;
+}
+
+function aggregateLsRecipeItems(parentEntry, context) {
+  const aggregateMap = new Map();
+  const items = Array.isArray(parentEntry.items) ? parentEntry.items : [];
+  if (items.length === 0) return [];
+
+  const visited = new Set([parentEntry.key]);
+  walkItems(items, 1, visited);
+
+  const rows = Array.from(aggregateMap.values()).filter((row) => !nearlyZero(row.qtyBase));
+  rows.sort((a, b) => {
+    const parentCompare = a.ingredientKey.localeCompare(b.ingredientKey, undefined, { numeric: true, sensitivity: "base" });
+    if (parentCompare !== 0) return parentCompare;
+    return (a.description || "").localeCompare(b.description || "", undefined, { sensitivity: "base" });
+  });
+  return rows;
+
+  function walkItems(itemList, multiplier, visitedSet) {
+    itemList.forEach((rawItem) => {
+      const displayItemNo = normalizeLsRecipeDisplay(rawItem?.Item_No ?? rawItem?.itemNo ?? rawItem?.item_no ?? rawItem?.itemNumber);
+      const itemKey = normalizeLsRecipeKey(displayItemNo);
+      if (!itemKey) return;
+
+      const qty = toFiniteNumber(rawItem?.Quantity_per ?? rawItem?.quantity ?? rawItem?.qty);
+      const unitCode = rawItem?.Unit_of_Measure_Code ?? rawItem?.unit ?? rawItem?.UOM ?? rawItem?.uom;
+
+      if (itemKey.startsWith("R")) {
+        if (!qty) return;
+        const child = context.powerbiByParent.get(itemKey);
+        if (!child) {
+          console.warn("LS Recipes: nested recipe not found", itemKey);
+          return;
+        }
+        if (visitedSet.has(itemKey)) return;
+        const nextVisited = new Set(visitedSet);
+        nextVisited.add(itemKey);
+        walkItems(Array.isArray(child.items) ? child.items : [], multiplier * qty, nextVisited);
+        return;
+      }
+
+      const effectiveQty = qty * multiplier;
+
+      if (!Number.isFinite(effectiveQty) || nearlyZero(effectiveQty)) return;
+
+      const conversion = convertLsRecipeQtyToBase({
+        itemKey,
+        displayItemNo,
+        unitCode,
+        qty: effectiveQty,
+        uomIndex: context.uomIndex
+      });
+
+      const entryKey = itemKey;
+      const existing = aggregateMap.get(entryKey) || {
+        ingredientKey: entryKey,
+        ingredientNo: displayItemNo || entryKey,
+        description: "",
+        qtyBase: 0,
+        uom: conversion.baseCode || normalizeLsRecipeUomCode(unitCode)
+      };
+
+      existing.qtyBase = roundLsRecipesQuantity(existing.qtyBase + conversion.qtyBase);
+      const itemDescription = rawItem?.Description ?? rawItem?.description;
+      if (!existing.description && itemDescription) {
+        existing.description = String(itemDescription);
+      }
+      if (!existing.uom && conversion.baseCode) {
+        existing.uom = conversion.baseCode;
+      }
+
+      aggregateMap.set(entryKey, existing);
+    });
+  }
+}
+
+function convertLsRecipeQtyToBase({ itemKey, displayItemNo, unitCode, qty, uomIndex }) {
+  const normalizedUnit = normalizeLsRecipeUomCode(unitCode);
+  const entry = resolveLsRecipeUomEntry(uomIndex, itemKey, displayItemNo);
+  if (!entry) {
+    return {
+      qtyBase: qty,
+      baseCode: normalizedUnit || ""
+    };
+  }
+
+  const conversions = entry.conversions || new Map();
+  const unitKey = normalizedUnit && conversions.has(normalizedUnit) ? normalizedUnit : entry.baseCode;
+  const ratio = unitKey && conversions.has(unitKey) ? Number(conversions.get(unitKey)) || 1 : 1;
+  const qtyBase = qty * ratio;
+  const baseCode = entry.baseCode || unitKey || normalizedUnit || "";
+
+  return {
+    qtyBase,
+    baseCode
+  };
+}
+
+function resolveLsRecipeUomEntry(index, itemKey, displayItemNo) {
+  if (!index || index.size === 0) return null;
+  const attempts = [];
+  if (itemKey) attempts.push(itemKey);
+  if (displayItemNo && displayItemNo !== itemKey) attempts.push(displayItemNo);
+
+  for (const attempt of attempts) {
+    const normalized = normalizeLsRecipeKey(attempt);
+    if (normalized && index.has(normalized)) return index.get(normalized);
+    const digitsKey = stripLeadingZeros(normalized);
+    if (digitsKey && index.has(digitsKey)) return index.get(digitsKey);
+  }
+  return null;
+}
+
+async function fetchLsRecipeParentNames(parentKeys = []) {
+  const map = new Map();
+  if (!Array.isArray(parentKeys) || parentKeys.length === 0) {
+    return map;
+  }
+
+  const normalized = parentKeys
+    .map((key) => normalizeLsRecipeKey(key))
+    .filter((key) => key);
+
+  const uniqueKeys = Array.from(new Set(normalized));
+  if (uniqueKeys.length === 0) return map;
+
+  const BATCH_SIZE = 10;
+  const CONCURRENCY = 5;
+
+  for (let offset = 0; offset < uniqueKeys.length; offset += BATCH_SIZE * CONCURRENCY) {
+    const windowKeys = uniqueKeys.slice(offset, offset + BATCH_SIZE * CONCURRENCY);
+    if (windowKeys.length === 0) continue;
+
+    const batchPromises = [];
+    for (let i = 0; i < windowKeys.length; i += BATCH_SIZE) {
+      const batch = windowKeys.slice(i, i + BATCH_SIZE);
+      if (batch.length === 0) continue;
+      batchPromises.push(
+        fetchRecipeNosBatchWithFallback(batch).catch((err) => {
+          console.debug("fetchLsRecipeParentNames error", batch, err);
+          return new Map();
+        })
+      );
+    }
+
+    const results = await Promise.all(batchPromises);
+    results.forEach((docsMap) => {
+      docsMap.forEach(({ data }, key) => {
+        const description =
+          data?.description ||
+          data?.recipeName ||
+          data?.name ||
+          "";
+        map.set(key, description);
+      });
+    });
+  }
+
+  return map;
+}
+
+async function fetchLsRecipeTotalsForDate(dateStr) {
+  const totals = new Map();
+  if (!dateStr) return totals;
+
+  const recipeIdTotals = new Map();
+  const recipeIdsToResolve = new Set();
+
+  const addQty = (map, key, delta) => {
+    if (!key || !Number.isFinite(delta) || delta === 0) return;
+    const current = Number(map.get(key) || 0);
+    const next = roundLsRecipesQuantity(current + delta);
+    if (Math.abs(next) < LS_RECIPES_ZERO_EPSILON) {
+      map.delete(key);
+    } else {
+      map.set(key, next);
+    }
+  };
+
+  const valueOrNull = (val) => {
+    const num = Number(val);
+    return Number.isFinite(num) ? num : null;
+  };
+
+  const chooseQty = (...vals) => {
+    for (const val of vals) {
+      const num = Number(val);
+      if (!Number.isFinite(num)) continue;
+      if (num > 0) return num;
+    }
+    return 0;
+  };
+
+  const resolveQty = (entry, prefersStartingPar) => {
+    const netQty = valueOrNull(entry.qtyNet ?? entry.netQty);
+    const netWeight = valueOrNull(entry.netWeight);
+    const sendQty = valueOrNull(entry.sendQty);
+    const qty = valueOrNull(entry.qty);
+
+    return prefersStartingPar
+      ? chooseQty(netQty, netWeight, sendQty, qty)
+      : chooseQty(netQty, sendQty, qty, netWeight);
+  };
+
+  try {
+    const orderSnapshot = await getDocs(query(
+      collection(db, "orders"),
+      where("date", "==", dateStr)
+    ));
+
+    orderSnapshot.forEach((docSnap) => {
+      const data = docSnap.data() || {};
+      const type = String(data.type || "").toLowerCase();
+      const qty = resolveQty(data, type === "starting-par");
+      if (!(qty > 0)) return;
+
+      const recipeNo = normalizeLsRecipeKey(data.recipeNo || data.recipe_no);
+      if (recipeNo) {
+        addQty(totals, recipeNo, qty);
+        return;
+      }
+
+      const recipeId = typeof data.recipeId === "string" ? data.recipeId.trim() : "";
+      if (!recipeId) return;
+      addQty(recipeIdTotals, recipeId, qty);
+      recipeIdsToResolve.add(recipeId);
+    });
+  } catch (error) {
+    console.error("fetchLsRecipeTotalsForDate orders failed", error);
+  }
+
+  try {
+    const returnsSnapshot = await getDocs(query(
+      collection(db, "returns"),
+      where("date", "==", dateStr)
+    ));
+
+    returnsSnapshot.forEach((docSnap) => {
+      const data = docSnap.data() || {};
+      const status = String(data.status || "").toLowerCase();
+      if (status === "received") return;
+      const qtyRaw = Number(data.qty ?? data.netQty ?? data.quantity ?? 0);
+      if (!Number.isFinite(qtyRaw) || qtyRaw <= 0) return;
+      const deduction = Math.abs(qtyRaw);
+
+      const recipeNo = normalizeLsRecipeKey(data.recipeNo || data.recipe_no);
+      if (recipeNo) {
+        addQty(totals, recipeNo, -deduction);
+        return;
+      }
+
+      const recipeId = typeof data.recipeId === "string" ? data.recipeId.trim() : "";
+      if (!recipeId) return;
+      addQty(recipeIdTotals, recipeId, -deduction);
+      recipeIdsToResolve.add(recipeId);
+    });
+  } catch (error) {
+    console.error("fetchLsRecipeTotalsForDate returns failed", error);
+  }
+
+  if (recipeIdsToResolve.size > 0) {
+    const idArr = Array.from(recipeIdsToResolve);
+    const docs = await Promise.all(idArr.map((id) => getRecipeDocWithFallback(id)));
+    docs.forEach((snap, idx) => {
+      const id = idArr[idx];
+      const total = Number(recipeIdTotals.get(id) || 0);
+      if (!Number.isFinite(total) || total === 0) return;
+      if (snap?.exists?.()) {
+        const data = snap.data() || {};
+        const recipeNo = normalizeLsRecipeKey(data.recipeNo || snap.id);
+        if (recipeNo) {
+          addQty(totals, recipeNo, total);
+        }
+      }
+    });
+  }
+
+  return totals;
+}
+
+function normalizeLsRecipeKey(value) {
+  if (value === undefined || value === null) return "";
+  const str = typeof value === "number" ? String(value) : String(value);
+  return str.trim().toUpperCase();
+}
+
+function normalizeLsRecipeDisplay(value) {
+  if (value === undefined || value === null) return "";
+  if (typeof value === "number") return String(value);
+  return String(value).trim();
+}
+
+function normalizeLsRecipeUomCode(value) {
+  if (value === undefined || value === null) return "";
+  return String(value).trim().toUpperCase();
+}
+
+function stripLeadingZeros(value) {
+  if (!value) return "";
+  if (!/^\d+$/.test(value)) return value;
+  const stripped = value.replace(/^0+/, "");
+  return stripped || "0";
+}
+
+function parseLsRecipeTimestamp(value) {
+  if (!value) return 0;
+  if (typeof value === "object" && typeof value.toMillis === "function") {
+    try {
+      return value.toMillis();
+    } catch {}
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed;
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) return numeric;
+  }
+  return 0;
+}
+
+function toFiniteNumber(value) {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : 0;
+  }
+  if (typeof value === "string") {
+    const sanitized = value.replace(/,/g, "");
+    const parsed = Number(sanitized);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
+}
+
+function nearlyZero(value) {
+  return Math.abs(value || 0) < LS_RECIPES_ZERO_EPSILON;
+}
+
+function roundLsRecipesQuantity(value, precision = LS_RECIPES_QUANTITY_PRECISION) {
+  if (!Number.isFinite(value)) return 0;
+  const factor = Math.pow(10, Math.max(0, precision));
+  return Math.round(value * factor) / factor;
+}
+
+function formatLsRecipesQuantity(value) {
+  if (!Number.isFinite(value)) return "";
+  const normalized = roundLsRecipesQuantity(value, LS_RECIPES_DISPLAY_PRECISION);
+  if (nearlyZero(normalized)) return "0";
+  if (LS_RECIPES_QTY_FORMAT) return LS_RECIPES_QTY_FORMAT.format(normalized);
+  return normalized.toFixed(LS_RECIPES_DISPLAY_PRECISION).replace(/\.?0+$/, "");
+}
+
+function handleLsRecipesSortClick(event) {
+  const target = event.target instanceof HTMLElement ? event.target : null;
+  if (!target) return;
+  const button = target.closest(".ls-sort-btn");
+  if (!button) return;
+  const column = button.getAttribute("data-column") || "";
+  const direction = button.getAttribute("data-direction") || "";
+  if (!column || !direction) return;
+  event.preventDefault();
+  setAccountingLsRecipesSort(column, direction);
+}
+
+function setAccountingLsRecipesSort(column, direction) {
+  const state = getAccountingLsRecipesState();
+  const normalizedColumn = normalizeLsRecipesSortColumn(column);
+  const normalizedDirection = direction === "desc" ? "desc" : "asc";
+  if (!normalizedColumn) return;
+
+  if (
+    state.sort.column === normalizedColumn &&
+    state.sort.direction === normalizedDirection
+  ) {
+    // Toggle off if clicking same direction again
+    state.sort = { column: null, direction: null };
+  } else {
+    state.sort = { column: normalizedColumn, direction: normalizedDirection };
+  }
+
+  applyAccountingLsRecipesFilter();
+}
+
+function normalizeLsRecipesSortColumn(column) {
+  const key = String(column || "").trim();
+  if (!key) return "";
+  switch (key) {
+    case "parentNo":
+    case "parentName":
+    case "ingredientNo":
+    case "description":
+    case "totalQty":
+    case "recipeQty":
+    case "amountUsed":
+    case "uom":
+      return key;
+    default:
+      return "";
+  }
+}
+
+function sortAccountingLsRecipesRows(rows) {
+  const state = getAccountingLsRecipesState();
+  const { column, direction } = state.sort || {};
+  if (!column || !direction) return rows.slice();
+  const multiplier = direction === "desc" ? -1 : 1;
+  const numericColumns = new Set(["totalQty", "recipeQty", "amountUsed"]);
+  return rows.slice().sort((a, b) => {
+    const aVal = a[column];
+    const bVal = b[column];
+    if (numericColumns.has(column)) {
+      const aNum = Number(aVal) || 0;
+      const bNum = Number(bVal) || 0;
+      if (aNum === bNum) {
+        return String(a.parentNo).localeCompare(String(b.parentNo));
+      }
+      return (aNum - bNum) * multiplier;
+    }
+    const aStr = String(aVal || "").toUpperCase();
+    const bStr = String(bVal || "").toUpperCase();
+    const compare = aStr.localeCompare(bStr, undefined, { numeric: true, sensitivity: "base" });
+    if (compare !== 0) return compare * multiplier;
+    return String(a.parentNo).localeCompare(String(b.parentNo)) * multiplier;
+  });
+}
+
+function updateAccountingLsRecipesSortIndicators() {
+  const state = getAccountingLsRecipesState();
+  const { column, direction } = state.sort || {};
+  document.querySelectorAll(".ls-sort-btn").forEach((btn) => {
+    const btnColumn = btn.getAttribute("data-column") || "";
+    const btnDirection = btn.getAttribute("data-direction") || "";
+    const isActive = column && direction && column === btnColumn && direction === btnDirection;
+    btn.classList.toggle("ls-sort-btn--active", Boolean(isActive));
+  });
+}
+
+async function copyLsRecipesTableToClipboard() {
+  const state = getAccountingLsRecipesState();
+  const rows = state.filteredRows && state.filteredRows.length > 0
+    ? state.filteredRows
+    : state.allRows;
+
+  const header = [
+    "Parent No",
+    "Parent Name",
+    "Ingredient No",
+    "Description",
+    "Total Qty",
+    "Recipe Qty",
+    "Amount Used",
+    "UOM"
+  ];
+  const lines = [header.join("\t")];
+
+  rows.forEach((row) => {
+    lines.push([
+      row.parentNo || "",
+      row.parentName || "",
+      row.ingredientNo || "",
+      row.description || "",
+      formatLsRecipesQuantity(row.totalQty),
+      formatLsRecipesQuantity(row.recipeQty),
+      formatLsRecipesQuantity(row.amountUsed),
+      row.uom || ""
+    ].join("\t"));
+  });
+
+  const text = lines.join("\n");
+
+  try {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "absolute";
+      textarea.style.left = "-9999px";
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+    }
+    alert("LS Recipes copied to clipboard.");
+  } catch (error) {
+    console.error("Failed to copy LS Recipes table", error);
+    alert("Unable to copy LS Recipes. Please try again.");
+  }
+}
+
+window.ensureAccountingLsRecipesUI = ensureAccountingLsRecipesUI;
+window.loadAccountingLsRecipes = loadAccountingLsRecipes;
 
 
 

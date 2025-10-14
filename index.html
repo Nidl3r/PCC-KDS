@@ -1196,6 +1196,7 @@ Step 3: …"></textarea>
       <!-- NEW -->
       <button onclick="showAccountingTab('analytics'); showAccountingDashboard();">Analytics</button>
       <!-- [ACCOUNTING] START buttons -->
+      <button onclick="showAccountingTab('ls-recipes'); ensureAccountingLsRecipesUI();">LS Recipes</button>
       <button onclick="showAccountingTab('ingredients')">Ingredients</button>
       <button onclick="showAccountingTab('recipes')">Recipes &amp; Pars</button>
       <!-- [ACCOUNTING] END buttons -->
@@ -1266,6 +1267,111 @@ Step 3: …"></textarea>
         </thead>
         <tbody></tbody>
       </table>
+    </div>
+
+    <!-- LS Recipes Section -->
+    <div id="lsRecipesTab" class="accounting-section" data-sec="ls-recipes" style="display:none;">
+      <div class="accounting-section__header">
+        <h3>LS Recipes</h3>
+        <span id="lsRecipesLoading" class="accounting-loader" hidden>Loading…</span>
+      </div>
+      <div class="accounting-controls">
+        <div class="accounting-controls__group">
+          <label for="lsRecipesDate" class="accounting-search-label">
+            Service Date
+          </label>
+          <input type="date" id="lsRecipesDate" />
+        </div>
+        <div class="accounting-controls__group">
+          <label for="lsRecipesSearch" class="accounting-search-label">
+            Search Description
+          </label>
+          <input type="search" id="lsRecipesSearch" placeholder="Type to filter ingredients…" autocomplete="off" />
+        </div>
+        <button type="button" id="lsRecipesCopy" class="ls-copy-btn">Copy Table</button>
+      </div>
+      <div class="table-wrapper">
+        <table id="lsRecipesTable" class="accounting-table">
+          <thead>
+            <tr>
+              <th>
+                <span class="ls-header">
+                  <span class="ls-header__label">Parent No</span>
+                  <span class="ls-header__sort">
+                    <button type="button" class="ls-sort-btn" data-column="parentNo" data-direction="asc" aria-label="Sort Parent No ascending">▲</button>
+                    <button type="button" class="ls-sort-btn" data-column="parentNo" data-direction="desc" aria-label="Sort Parent No descending">▼</button>
+                  </span>
+                </span>
+              </th>
+              <th>
+                <span class="ls-header">
+                  <span class="ls-header__label">Parent Name</span>
+                  <span class="ls-header__sort">
+                    <button type="button" class="ls-sort-btn" data-column="parentName" data-direction="asc" aria-label="Sort Parent Name ascending">▲</button>
+                    <button type="button" class="ls-sort-btn" data-column="parentName" data-direction="desc" aria-label="Sort Parent Name descending">▼</button>
+                  </span>
+                </span>
+              </th>
+              <th>
+                <span class="ls-header">
+                  <span class="ls-header__label">Ingredient No</span>
+                  <span class="ls-header__sort">
+                    <button type="button" class="ls-sort-btn" data-column="ingredientNo" data-direction="asc" aria-label="Sort Ingredient No ascending">▲</button>
+                    <button type="button" class="ls-sort-btn" data-column="ingredientNo" data-direction="desc" aria-label="Sort Ingredient No descending">▼</button>
+                  </span>
+                </span>
+              </th>
+              <th>
+                <span class="ls-header">
+                  <span class="ls-header__label">Description</span>
+                  <span class="ls-header__sort">
+                    <button type="button" class="ls-sort-btn" data-column="description" data-direction="asc" aria-label="Sort Description ascending">▲</button>
+                    <button type="button" class="ls-sort-btn" data-column="description" data-direction="desc" aria-label="Sort Description descending">▼</button>
+                  </span>
+                </span>
+              </th>
+              <th>
+                <span class="ls-header">
+                  <span class="ls-header__label">Total Qty</span>
+                  <span class="ls-header__sort">
+                    <button type="button" class="ls-sort-btn" data-column="totalQty" data-direction="asc" aria-label="Sort Total Qty ascending">▲</button>
+                    <button type="button" class="ls-sort-btn" data-column="totalQty" data-direction="desc" aria-label="Sort Total Qty descending">▼</button>
+                  </span>
+                </span>
+              </th>
+              <th>
+                <span class="ls-header">
+                  <span class="ls-header__label">Recipe Qty</span>
+                  <span class="ls-header__sort">
+                    <button type="button" class="ls-sort-btn" data-column="recipeQty" data-direction="asc" aria-label="Sort Recipe Qty ascending">▲</button>
+                    <button type="button" class="ls-sort-btn" data-column="recipeQty" data-direction="desc" aria-label="Sort Recipe Qty descending">▼</button>
+                  </span>
+                </span>
+              </th>
+              <th>
+                <span class="ls-header">
+                  <span class="ls-header__label">Amount Used</span>
+                  <span class="ls-header__sort">
+                    <button type="button" class="ls-sort-btn" data-column="amountUsed" data-direction="asc" aria-label="Sort Amount Used ascending">▲</button>
+                    <button type="button" class="ls-sort-btn" data-column="amountUsed" data-direction="desc" aria-label="Sort Amount Used descending">▼</button>
+                  </span>
+                </span>
+              </th>
+              <th>
+                <span class="ls-header">
+                  <span class="ls-header__label">UOM</span>
+                  <span class="ls-header__sort">
+                    <button type="button" class="ls-sort-btn" data-column="uom" data-direction="asc" aria-label="Sort UOM ascending">▲</button>
+                    <button type="button" class="ls-sort-btn" data-column="uom" data-direction="desc" aria-label="Sort UOM descending">▼</button>
+                  </span>
+                </span>
+              </th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+        <p id="lsRecipesEmpty" hidden>No recipes match your filters.</p>
+      </div>
     </div>
 
     <!-- Analytics Section -->

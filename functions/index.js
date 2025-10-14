@@ -22,27 +22,17 @@ exports.deleteOldChatMessages = onSchedule(
     timeZone: "Pacific/Honolulu",
   },
   async () => {
-    const snapshot = await db.collection("chats").get();
+    await deleteCollectionContents("chats", "chat messages");
+  }
+);
 
-    if (snapshot.empty) {
-      console.log("No chat messages to delete.");
-      return;
-    }
-
-    const docs = snapshot.docs;
-    const batchSize = 500;
-    let deleted = 0;
-
-    for (let i = 0; i < docs.length; i += batchSize) {
-      const batch = db.batch();
-      const slice = docs.slice(i, i + batchSize);
-
-      slice.forEach((doc) => batch.delete(doc.ref));
-      await batch.commit();
-      deleted += slice.length;
-    }
-
-    console.log(`✅ Deleted ${deleted} chat messages.`);
+exports.clearPowerbiDaily = onSchedule(
+  {
+    schedule: "59 23 * * *",
+    timeZone: "Pacific/Honolulu",
+  },
+  async () => {
+    await deleteCollectionContents("powerbiDaily", "powerbiDaily documents");
   }
 );
 
@@ -129,6 +119,30 @@ const chunk = (items, size) => {
   }
   return result;
 };
+
+async function deleteCollectionContents(collectionName, logLabel) {
+  const snapshot = await db.collection(collectionName).get();
+
+  if (snapshot.empty) {
+    console.log(`No ${logLabel} to delete.`);
+    return;
+  }
+
+  const docs = snapshot.docs;
+  const batchSize = 500;
+  let deleted = 0;
+
+  for (let i = 0; i < docs.length; i += batchSize) {
+    const batch = db.batch();
+    const slice = docs.slice(i, i + batchSize);
+
+    slice.forEach((doc) => batch.delete(doc.ref));
+    await batch.commit();
+    deleted += slice.length;
+  }
+
+  console.log(`✅ Deleted ${deleted} ${logLabel}.`);
+}
 
 // ======================================
 // 3) PowerBI ingestion → Firestore (v2)

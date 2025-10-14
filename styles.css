@@ -1087,6 +1087,188 @@ table {
   box-shadow: 0 4px 14px rgba(59, 130, 246, 0.28);
 }
 
+.accounting-section__header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.accounting-loader[hidden] {
+  display: none !important;
+}
+
+.accounting-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.accounting-controls input[type="search"] {
+  padding: 6px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  background: rgba(17, 24, 39, 0.85);
+  color: var(--text);
+  min-width: 220px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.accounting-controls input[type="date"] {
+  padding: 6px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  background: rgba(17, 24, 39, 0.85);
+  color: var(--text);
+  min-width: 160px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.accounting-controls input[type="search"]:focus-visible {
+  outline: none;
+  border-color: rgba(59, 130, 246, 0.55);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18);
+}
+
+.accounting-controls input[type="date"]:focus-visible {
+  outline: none;
+  border-color: rgba(59, 130, 246, 0.55);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18);
+}
+
+.accounting-search-label {
+  font-size: 0.9rem;
+  opacity: 0.8;
+}
+
+.accounting-controls__group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ls-copy-btn {
+  align-self: flex-end;
+  margin-left: auto;
+  padding: 6px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(59, 130, 246, 0.55);
+  background: rgba(37, 99, 235, 0.2);
+  color: #dbeafe;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+  box-shadow: var(--shadow-sm);
+}
+
+.ls-copy-btn:hover,
+.ls-copy-btn:focus-visible {
+  outline: none;
+  background: rgba(59, 130, 246, 0.3);
+  border-color: rgba(59, 130, 246, 0.75);
+  transform: translateY(-1px);
+}
+
+.ls-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ls-header__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ls-header__sort {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ls-sort-btn {
+  border: none;
+  background: transparent;
+  color: rgba(226, 232, 240, 0.6);
+  font-size: 0.65rem;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  transition: color 0.2s ease, transform 0.2s ease;
+}
+
+.ls-sort-btn:hover,
+.ls-sort-btn:focus-visible {
+  outline: none;
+  color: rgba(226, 232, 240, 0.95);
+  transform: translateY(-1px);
+}
+
+.ls-sort-btn--active {
+  color: rgba(59, 130, 246, 0.9);
+  font-weight: 600;
+}
+
+.table-wrapper {
+  overflow: auto;
+  max-width: 100%;
+  border-radius: var(--radius);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(15, 23, 42, 0.6);
+  box-shadow: var(--shadow-sm);
+  padding: 12px;
+}
+
+.table-wrapper table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table-wrapper thead th {
+  text-align: left;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.2);
+  padding: 8px 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.table-wrapper tbody td {
+  padding: 8px 10px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+  font-variant-numeric: tabular-nums;
+}
+
+.table-wrapper tbody tr:last-child td {
+  border-bottom: none;
+}
+
+#lsRecipesTable td::before {
+  content: none;
+}
+
+@media (min-width: 601px) {
+  #lsRecipesTable thead th {
+    z-index: 2;
+  }
+}
+
+@media (max-width: 600px) {
+  #lsRecipesTable td::before {
+    content: attr(data-label) !important;
+  }
+}
+
+#lsRecipesEmpty {
+  margin-top: 12px;
+  text-align: center;
+  opacity: 0.75;
+}
+
 .accounting-table table thead th {
   white-space: nowrap;
 }
@@ -1725,6 +1907,23 @@ table button {
 }
 
 /* Small screens = card rows */
+#accounting .accounting-table table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+#accounting .accounting-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: rgba(22, 27, 41, 0.96);
+  backdrop-filter: blur(8px);
+}
+
+#accounting .accounting-table tbody tr:first-child td {
+  border-top: 1px solid rgba(148, 163, 184, 0.22);
+}
+
 @media (max-width: 600px) {
   table,
   thead,
@@ -1735,7 +1934,9 @@ table button {
     display: block;
     width: 100%;
   }
-  thead { display: none; }
+  thead {
+    display: none;
+  }
   tr {
     margin-bottom: 14px;
     border-radius: 14px;
@@ -1756,7 +1957,9 @@ table button {
     text-align: left;
     font-size: 0.95rem;
   }
-  .send-qty-input { width: 100%; }
+  .send-qty-input {
+    width: 100%;
+  }
   .starting-actions {
     flex-direction: column;
     align-items: stretch;
@@ -1766,7 +1969,9 @@ table button {
   .starting-actions .send-qty-input {
     width: 100%;
   }
-  td:last-child { border-bottom: none; }
+  td:last-child {
+    border-bottom: none;
+  }
   td::before {
     content: attr(data-label);
     display: block;
