@@ -738,6 +738,7 @@
       <button class="area-tab" data-area="mainkitchen" data-sec="order" onclick="showKitchenSection('order')">Add-Ons</button>
       <button class="area-tab" data-area="mainkitchen" data-sec="starting" onclick="showKitchenSection('starting')">Starting Pars</button>
       <button class="area-tab" data-area="mainkitchen" data-sec="prep"     onclick="showKitchenSection('prep')">Prep Pars</button>
+      <button class="area-tab" data-area="mainkitchen" data-sec="transfer" onclick="showKitchenSection('transfer')">Transfer Order</button>
         <button class="area-tab" data-area="mainkitchen" data-sec="recipes" onclick="showKitchenSection('recipes')">Recipes</button>
       <button class="area-tab" data-area="mainkitchen" data-sec="waste" onclick="showKitchenSection('waste')">Waste</button>
       <button class="area-tab" data-area="mainkitchen" data-sec="returns" onclick="showKitchenSection('returns')">Returns</button>
@@ -908,6 +909,80 @@
       </thead>
       <tbody id="prepParsTbody"></tbody>
     </table>
+  </div>
+</div>
+
+<!-- Transfer Order Section -->
+<div class="main-kitchen-section transfer-section" data-sec="transfer" style="display:none;">
+  <div class="transfer-order-header">
+    <div class="transfer-order-title">
+      <h3>Transfer Order</h3>
+      <p class="transfer-order-subtext">
+        Update on-hand counts to see case needs. Items requiring transfer appear in the pick list.
+      </p>
+    </div>
+    <div class="transfer-order-actions">
+      <button type="button" id="transferOrderResetBtn" class="ghost-btn">Reset On-Hand</button>
+      <span id="transferOrderStatus" class="transfer-order-status" role="status" aria-live="polite"></span>
+    </div>
+  </div>
+
+  <div class="transfer-tabs" role="tablist">
+    <button type="button" class="transfer-tab active" data-transfer-tab="order" aria-selected="true">Transfer Order</button>
+    <button type="button" class="transfer-tab" data-transfer-tab="picklist" aria-selected="false">Current Order</button>
+  </div>
+
+  <div class="transfer-pane transfer-order-inventory" data-transfer-pane="order">
+    <div class="table-wrap table-wrap--transfer" aria-label="Transfer order inventory table">
+      <table id="transferOrderTable">
+        <thead>
+          <tr>
+            <th>Item #</th>
+            <th>Description</th>
+            <th>On Hand</th>
+            <th>Per CS</th>
+            <th>Inv Amount</th>
+            <th>Min</th>
+            <th>Needed</th>
+            <th>UOM</th>
+          </tr>
+        </thead>
+        <tbody id="transferOrderTableBody">
+          <tr>
+            <td colspan="8" class="transfer-order-empty">Loading transfer items…</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="transfer-pane transfer-order-picklist" data-transfer-pane="picklist" hidden>
+    <div class="transfer-order-panel">
+      <div class="transfer-order-panel-header">
+        <h4>Your Current Order</h4>
+        <div class="transfer-order-panel-actions">
+          <span id="transferOrderPickSummary" class="transfer-order-count">0 items</span>
+          <button type="button" id="transferOrderCopyBtn" class="ghost-btn transfer-copy-btn" disabled>Copy List</button>
+        </div>
+      </div>
+      <div class="table-wrap table-wrap--transfer-picklist">
+        <table id="transferOrderPickTable">
+          <thead>
+            <tr>
+              <th>Item #</th>
+              <th>Description</th>
+              <th>Needed</th>
+              <th>UOM</th>
+            </tr>
+          </thead>
+          <tbody id="transferOrderPickBody">
+            <tr>
+              <td colspan="4" class="transfer-order-empty">Nothing needed right now.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
   </div>
 </div>
 

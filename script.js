@@ -5896,7 +5896,7 @@ window.showKitchenSection = function (sectionId) {
 
   // Hide all sections (now includes 'prep-section')
   const allSections = mainKitchen.querySelectorAll(
-    ".order-section, .starting-section, .waste-section, .returns-section, .lunch-section, .prep-section"
+    ".order-section, .starting-section, .waste-section, .returns-section, .lunch-section, .prep-section, .transfer-section"
   );
   allSections.forEach(sec => { sec.style.display = "none"; });
 
@@ -5924,13 +5924,790 @@ window.showKitchenSection = function (sectionId) {
     waste:    window.loadMainKitchenWaste,
     returns:  window.loadMainKitchenReturns,
     lunch:    window.loadMainKitchenLunch,
-    prep:     window.loadMainKitchenPrepPars,   // ✅ NEW
-    order:    window.loadMainKitchenOrders      // if you have one
+    prep:      window.loadMainKitchenPrepPars,
+    transfer:  window.loadMainKitchenTransferOrder,
+    order:     window.loadMainKitchenOrders
   };
 
   const fn = loaders[sectionId];
   if (typeof fn === "function") fn();
 };
+
+
+const TRANSFER_ORDER_COLLECTION = "transferOrders";
+const TRANSFER_ORDER_DOC_PREFIX = "mainKitchen";
+const TRANSFER_ORDER_SAVE_DELAY_MS = 650;
+const TRANSFER_ORDER_STATUS_CLEAR_DELAY_MS = 4200;
+
+const TRANSFER_SHELF_ORDER = [
+  "1", "2", "3", "4", "48", "47", "46", "37", "36", "34", "33", "32", "S",
+  "30", "29", "28", "27", "26", "25", "22", "21", "20", "19", "18", "17", "16", "15", "14", "13", "12", "9"
+];
+const TRANSFER_ROW_ORDER = { A: 0, B: 1, C: 2, D: 3, E: 4 };
+const TRANSFER_SHELF_DEFAULT_INDEX = TRANSFER_SHELF_ORDER.length + 100;
+const TRANSFER_ROW_DEFAULT_INDEX = Object.keys(TRANSFER_ROW_ORDER).length + 5;
+
+function getShelfSortIndex(raw) {
+  if (raw === null || raw === undefined) return TRANSFER_SHELF_DEFAULT_INDEX;
+  let str = typeof raw === "number" ? String(raw) : String(raw || "");
+  str = str.trim();
+  if (!str) return TRANSFER_SHELF_DEFAULT_INDEX;
+  const upper = str.toUpperCase();
+  const idx = TRANSFER_SHELF_ORDER.indexOf(upper);
+  if (idx >= 0) return idx;
+  const asNum = Number(str);
+  if (Number.isFinite(asNum)) {
+    return TRANSFER_SHELF_ORDER.length + asNum / 100;
+  }
+  return TRANSFER_SHELF_DEFAULT_INDEX;
+}
+
+function getRowSortIndex(raw) {
+  if (raw === null || raw === undefined) return TRANSFER_ROW_DEFAULT_INDEX;
+  const str = typeof raw === "number" ? String(raw) : String(raw || "");
+  const upper = str.trim().toUpperCase();
+  if (!upper) return TRANSFER_ROW_DEFAULT_INDEX;
+  return Object.prototype.hasOwnProperty.call(TRANSFER_ROW_ORDER, upper) ? TRANSFER_ROW_ORDER[upper] : TRANSFER_ROW_DEFAULT_INDEX;
+}
+
+function getTransferOrderState() {
+  if (!window.__transferOrderState) {
+    window.__transferOrderState = {
+      initialized: false,
+      loading: null,
+      rows: [],
+      byKey: new Map(),
+      dom: new Map(),
+      counts: new Map(),
+      docId: null,
+      docRef: null,
+      unsub: null,
+      pendingSaveTimers: new Map(),
+      statusTimer: null,
+      activeEditKey: null,
+      activeTab: "order"
+    };
+  }
+  return window.__transferOrderState;
+}
+
+function initTransferOrderOnce() {
+  const state = getTransferOrderState();
+  if (state.initialized) return;
+  state.initialized = true;
+
+  const resetBtn = document.getElementById("transferOrderResetBtn");
+  if (resetBtn) {
+    resetBtn.addEventListener("click", handleTransferOrderReset);
+  }
+
+  const tabButtons = document.querySelectorAll("[data-transfer-tab]");
+  if (tabButtons.length) {
+    tabButtons.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const target = btn.dataset.transferTab || "order";
+        setTransferOrderTab(target);
+      });
+    });
+  }
+
+  const copyBtn = document.getElementById("transferOrderCopyBtn");
+  if (copyBtn) {
+    copyBtn.addEventListener("click", copyTransferOrderToClipboard);
+  }
+
+  setTransferOrderTab(state.activeTab || "order");
+}
+
+function setTransferOrderTab(tabId) {
+  const state = getTransferOrderState();
+  const buttons = Array.from(document.querySelectorAll('[data-transfer-tab]'));
+  const panes = Array.from(document.querySelectorAll('[data-transfer-pane]'));
+  if (!buttons.length || !panes.length) {
+    state.activeTab = 'order';
+    return;
+  }
+
+  const validIds = new Set(buttons.map((btn) => btn.dataset.transferTab || 'order'));
+  const finalTab = validIds.has(tabId) ? tabId : 'order';
+
+  buttons.forEach((btn) => {
+    const id = btn.dataset.transferTab || 'order';
+    const isActive = id === finalTab;
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+    btn.setAttribute('tabindex', '0');
+  });
+
+  panes.forEach((pane) => {
+    const id = pane.dataset.transferPane || 'order';
+    const match = id === finalTab;
+    pane.hidden = !match;
+  });
+
+  state.activeTab = finalTab;
+}
+
+function parseTransferNumber(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const normalized = trimmed.replace(/,/g, "");
+    const num = Number(normalized);
+    return Number.isFinite(num) ? num : null;
+  }
+  return null;
+}
+
+function normalizeTransferKey(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+  if (/^-?\d+(?:\.0+)?$/.test(raw)) {
+    return String(Number(raw));
+  }
+  return raw;
+}
+
+function transferSafeSegment(value) {
+  const str = String(value ?? "");
+  const cleaned = str.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return cleaned || "item";
+}
+
+function buildTransferCountsMap(items) {
+  const map = new Map();
+  if (!items || typeof items !== "object") return map;
+  Object.entries(items).forEach(([rawKey, payload]) => {
+    const onHandCandidate = (payload && typeof payload === "object")
+      ? (payload.onHand ?? payload.qty ?? payload.value)
+      : payload;
+    const parsed = parseTransferNumber(onHandCandidate);
+    if (!Number.isFinite(parsed)) return;
+    const baseKey = String(rawKey);
+    map.set(baseKey, parsed);
+    const normalized = normalizeTransferKey(baseKey);
+    if (normalized && normalized !== baseKey) {
+      map.set(normalized, parsed);
+    }
+  });
+  return map;
+}
+
+function formatTransferDecimal(value, decimals = 2, options = {}) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return "0";
+  const fixed = num.toFixed(decimals);
+  if (options.stripZeros) {
+    return fixed.replace(/\.0+$/, "").replace(/\.(\d*?)0+$/, (match, digits) => digits ? `.${digits}` : "");
+  }
+  return fixed;
+}
+
+function computeTransferRowMetrics(row) {
+  const perCase = Number.isFinite(row.perCase) && row.perCase > 0 ? row.perCase : 1;
+  row.perCase = perCase;
+  row.perCaseLabel = formatTransferDecimal(perCase, 2, { stripZeros: true });
+
+  const onHand = Number.isFinite(row.onHand) ? row.onHand : 0;
+  row.onHand = onHand;
+  row.onHandLabel = formatTransferDecimal(onHand, 2, { stripZeros: true });
+
+  const invRaw = perCase > 0 ? onHand / perCase : 0;
+  const invRounded = Math.round(invRaw * 100) / 100;
+  row.invAmount = invRounded;
+  row.invDisplay = formatTransferDecimal(invRounded, 2, { stripZeros: false });
+
+  const minCases = Number.isFinite(row.minCases) ? row.minCases : 0;
+  row.minCases = minCases;
+  row.minDisplay = formatTransferDecimal(minCases, 2, { stripZeros: true });
+
+  const deficit = minCases - invRounded;
+  const epsilon = 1e-6;
+  row.needed = deficit > epsilon ? Math.ceil(deficit - epsilon) : 0;
+  return row;
+}
+
+function buildTransferRowFromIngredient(docSnap, countsMap) {
+  const data = docSnap && typeof docSnap.data === "function" ? (docSnap.data() || {}) : {};
+
+  const itemNoRaw = data.itemNo ?? data.itemno ?? data.number ?? docSnap.id;
+  const itemNoDisplay = itemNoRaw !== undefined && itemNoRaw !== null
+    ? String(itemNoRaw)
+    : String(docSnap.id);
+  const saveKey = String(itemNoDisplay);
+  const uiKey = `${saveKey}|${docSnap.id}`;
+
+  const sectionCandidates = [
+    parseTransferNumber(data.section),
+    parseTransferNumber(data.sectionNumber),
+    parseTransferNumber(data.sectionNo),
+    parseTransferNumber(data.section_order),
+    parseTransferNumber(data.sectionIndex),
+    parseTransferNumber(data.sectionNum)
+  ];
+  const sectionValue = sectionCandidates.find((val) => Number.isFinite(val));
+  const sectionLabel = sectionValue !== undefined && sectionValue !== null
+    ? formatTransferDecimal(sectionValue, 0, { stripZeros: true })
+    : "";
+
+  const blockValue = [data.aisleBlock, data.block, data.aisle, data.locationBlock, data.location]
+    .map((val) => (typeof val === "string" ? val.trim() : val))
+    .find((val) => val) || "";
+
+  const shelfValue = data.shelfNumber ?? data.shelf ?? data.shelfNo ?? data.shelf_number ?? data.shelfLocation;
+  const shelfSort = getShelfSortIndex(shelfValue);
+  const shelfLabel = (() => {
+    if (shelfValue === null || shelfValue === undefined) return "";
+    if (typeof shelfValue === "number") return String(shelfValue);
+    return String(shelfValue || "").trim();
+  })();
+
+  const rowValue = data.row ?? data.rowLetter ?? data.rowNumber ?? data.row_code ?? data.rowCode;
+  const rowSort = getRowSortIndex(rowValue);
+  const rowLabel = (() => {
+    if (rowValue === null || rowValue === undefined) return "";
+    if (typeof rowValue === "number") return String(rowValue);
+    return String(rowValue || "").trim().toUpperCase();
+  })();
+
+  const perCaseCandidates = [
+    parseTransferNumber(data.amountpercs),
+    parseTransferNumber(data.amountPerCs),
+    parseTransferNumber(data.amountPerCase),
+    parseTransferNumber(data.amountbaseUOMperCS),
+    parseTransferNumber(data.eOMHelper),
+    parseTransferNumber(data.casePack)
+  ];
+  let perCase = perCaseCandidates.find((val) => Number.isFinite(val) && val > 0);
+
+  const uomCandidate = (
+    data.orderingUOM ??
+    data.orderingUom ??
+    data.orderingUnit ??
+    data.baseUOM ??
+    data.baseUom ??
+    data.uom ??
+    data.purchaseUOM ??
+    ""
+  );
+  const uom = typeof uomCandidate === "string" ? uomCandidate.trim() : "";
+  if (!Number.isFinite(perCase) || perCase <= 0 || (uom && uom.toLowerCase() === "ea")) {
+    perCase = 1;
+  }
+
+  const minCandidates = [
+    parseTransferNumber(data.min),
+    parseTransferNumber(data.minimum),
+    parseTransferNumber(data.minQty),
+    parseTransferNumber(data.targetCases)
+  ];
+  const minCases = minCandidates.find((val) => Number.isFinite(val)) ?? 0;
+
+  const lookupKeys = [];
+  [saveKey, normalizeTransferKey(saveKey), docSnap.id, normalizeTransferKey(docSnap.id)]
+    .filter((val) => val)
+    .forEach((val) => {
+      const key = String(val);
+      if (!lookupKeys.includes(key)) lookupKeys.push(key);
+    });
+
+  const currentOnHand = lookupKeys
+    .map((key) => countsMap.get(key))
+    .find((val) => Number.isFinite(val));
+
+  const row = {
+    key: uiKey,
+    saveKey,
+    docId: docSnap.id,
+    itemNoDisplay,
+    itemName: data.itemName ?? data.item ?? data.name ?? "(ingredient)",
+    section: sectionValue,
+    sectionLabel,
+    sectionSort: Number.isFinite(sectionValue) ? sectionValue : TRANSFER_SHELF_DEFAULT_INDEX,
+    block: blockValue ? String(blockValue).toUpperCase() : "",
+    shelf: shelfLabel,
+    shelfSort,
+    rowCode: rowLabel,
+    rowSort,
+    perCase,
+    minCases,
+    uom: uom ? uom.toLowerCase() : "",
+    uomDisplay: uom ? uom.toUpperCase() : "",
+    onHand: Number.isFinite(currentOnHand) ? currentOnHand : 0
+  };
+
+  row.lookupKeys = lookupKeys;
+  row.domId = `transfer-row-${transferSafeSegment(saveKey)}-${transferSafeSegment(docSnap.id)}`;
+  computeTransferRowMetrics(row);
+  return row;
+}
+
+function renderTransferOrderRows(state) {
+  const tbody = document.getElementById("transferOrderTableBody");
+  if (!tbody) return;
+
+  if (!state.rows.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="transfer-order-empty">No transfer items found.</td></tr>';
+    state.dom = new Map();
+    refreshTransferOrderPickList(state);
+    return;
+  }
+
+  const rowsHtml = [];
+  let lastShelfKey = null;
+
+  state.rows.forEach((row) => {
+    const shelfLabel = row.shelf && row.shelf.trim() ? row.shelf.trim() : "Unassigned";
+    if (shelfLabel !== lastShelfKey) {
+      rowsHtml.push(`
+        <tr class="transfer-shelf-header" data-shelf="${escapeHtml(shelfLabel)}">
+          <td colspan="8">
+            <span class="transfer-shelf-label">Shelf ${escapeHtml(shelfLabel)}</span>
+          </td>
+        </tr>
+      `);
+      lastShelfKey = shelfLabel;
+    }
+
+    const needsClass = row.needed > 0 ? " transfer-row--needs" : "";
+    const rowLabel = row.rowCode && row.rowCode.trim() ? row.rowCode.trim().toUpperCase() : "";
+    const blockLabel = row.block && row.block.trim() ? row.block.trim().toUpperCase() : "";
+    const subInfoParts = [];
+    if (rowLabel) subInfoParts.push(`Row ${escapeHtml(rowLabel)}`);
+    if (blockLabel) subInfoParts.push(`Block ${escapeHtml(blockLabel)}`);
+
+    rowsHtml.push(`
+      <tr id="${row.domId}" class="transfer-row${needsClass}" data-transfer-key="${row.key}">
+        <td data-label="Item #">${escapeHtml(row.itemNoDisplay)}</td>
+        <td data-label="Description">
+          <div class="transfer-row__meta">
+            <span>${escapeHtml(row.itemName)}</span>
+            ${subInfoParts.length ? `<span class="transfer-row__info">${subInfoParts.join(" • ")}</span>` : ""}
+          </div>
+        </td>
+        <td data-label="On Hand">
+          <input type="number" step="0.01" inputmode="decimal"
+            class="transfer-onhand-input"
+            data-transfer-key="${row.key}"
+            value="${row.onHand > 0 ? row.onHandLabel : ""}"
+            placeholder="0"
+            aria-label="On hand for ${escapeHtml(row.itemName)}" />
+        </td>
+        <td data-label="Per CS" class="transfer-value--number" data-field="perCs">${escapeHtml(row.perCaseLabel)}</td>
+        <td data-label="Inv Amount" class="transfer-value--number" data-field="inv">${escapeHtml(row.invDisplay)}</td>
+        <td data-label="Min" class="transfer-value--number" data-field="min">${escapeHtml(row.minDisplay)}</td>
+        <td data-label="Needed" class="transfer-value--number" data-field="needed">${row.needed}</td>
+        <td data-label="UOM">${escapeHtml(row.uomDisplay)}</td>
+      </tr>
+    `);
+  });
+
+  tbody.innerHTML = rowsHtml.join("");
+
+  const domRefs = new Map();
+  state.rows.forEach((row) => {
+    const rowEl = document.getElementById(row.domId);
+    if (!rowEl) return;
+    const inputEl = rowEl.querySelector(".transfer-onhand-input");
+    const invEl = rowEl.querySelector('[data-field="inv"]');
+    const minEl = rowEl.querySelector('[data-field="min"]');
+    const neededEl = rowEl.querySelector('[data-field="needed"]');
+
+    if (inputEl) {
+      inputEl.addEventListener("focus", () => {
+        const s = getTransferOrderState();
+        s.activeEditKey = row.key;
+      });
+      inputEl.addEventListener("input", handleTransferOnHandInput);
+      inputEl.addEventListener("keydown", handleTransferOnHandKeydown);
+      inputEl.addEventListener("blur", handleTransferOnHandBlur);
+    }
+
+    domRefs.set(row.key, {
+      rowEl,
+      inputEl,
+      invEl,
+      minEl,
+      neededEl
+    });
+  });
+
+  state.dom = domRefs;
+  refreshTransferOrderPickList(state);
+}
+
+function updateTransferRowDom(row, refs, options = {}) {
+  if (!refs) return;
+  const { skipInputUpdate = false } = options;
+  if (!skipInputUpdate && refs.inputEl) {
+    refs.inputEl.value = row.onHand > 0 ? row.onHandLabel : "";
+  }
+  if (refs.invEl) refs.invEl.textContent = row.invDisplay;
+  if (refs.minEl) refs.minEl.textContent = row.minDisplay;
+  if (refs.neededEl) refs.neededEl.textContent = String(row.needed);
+  if (refs.rowEl) {
+    refs.rowEl.classList.toggle("transfer-row--needs", row.needed > 0);
+  }
+}
+
+function refreshTransferOrderPickList(state) {
+  const body = document.getElementById("transferOrderPickBody");
+  const summary = document.getElementById("transferOrderPickSummary");
+  const copyBtn = document.getElementById("transferOrderCopyBtn");
+  if (!body || !summary) return;
+
+  const needing = state.rows.filter((row) => row.needed > 0);
+  if (!needing.length) {
+    body.innerHTML = '<tr><td colspan="4" class="transfer-order-empty">Nothing needed right now.</td></tr>';
+    summary.textContent = "0 items";
+    if (copyBtn) copyBtn.disabled = true;
+    return;
+  }
+
+  const rowsHtml = needing.map((row) => `
+    <tr>
+      <td>${escapeHtml(row.itemNoDisplay)}</td>
+      <td>${escapeHtml(row.itemName)}</td>
+      <td class="transfer-picklist-needed">${row.needed}</td>
+      <td>${escapeHtml(row.uomDisplay || "")}</td>
+    </tr>
+  `).join("");
+
+  body.innerHTML = rowsHtml;
+  const totalItems = needing.length;
+  const totalCases = needing.reduce((sum, row) => sum + (Number.isFinite(row.needed) ? row.needed : 0), 0);
+  summary.textContent = `${totalItems} item${totalItems === 1 ? "" : "s"} • ${totalCases} case${totalCases === 1 ? "" : "s"}`;
+  if (copyBtn) copyBtn.disabled = false;
+}
+
+function applyTransferCountsToRows(state, countsMap, options = {}) {
+  const skipPickList = options.skipPickList === true;
+  const skipActiveInputs = options.skipInputForActive === true;
+
+  state.rows.forEach((row) => {
+    const lookup = row.lookupKeys || [];
+    const value = lookup
+      .map((key) => countsMap.get(key))
+      .find((val) => Number.isFinite(val));
+    const newOnHand = Number.isFinite(value) ? value : 0;
+    row.onHand = newOnHand;
+    computeTransferRowMetrics(row);
+    const refs = state.dom.get(row.key);
+    if (refs) {
+      const skipInput = skipActiveInputs && state.activeEditKey === row.key;
+      updateTransferRowDom(row, refs, { skipInputUpdate: skipInput });
+    }
+  });
+
+  if (!skipPickList) {
+    refreshTransferOrderPickList(state);
+  }
+}
+
+function setTransferOrderStatus(message, tone = "muted") {
+  const statusEl = document.getElementById("transferOrderStatus");
+  if (!statusEl) return;
+  const state = getTransferOrderState();
+  if (state.statusTimer) {
+    clearTimeout(state.statusTimer);
+    state.statusTimer = null;
+  }
+
+  if (message) {
+    statusEl.textContent = message;
+    statusEl.dataset.tone = tone || "muted";
+    state.statusTimer = setTimeout(() => {
+      statusEl.textContent = "";
+      statusEl.removeAttribute("data-tone");
+      state.statusTimer = null;
+    }, TRANSFER_ORDER_STATUS_CLEAR_DELAY_MS);
+  } else {
+    statusEl.textContent = "";
+    statusEl.removeAttribute("data-tone");
+  }
+}
+
+async function copyTransferOrderToClipboard() {
+  const state = getTransferOrderState();
+  const needing = state.rows.filter((row) => row.needed > 0);
+  if (!needing.length) {
+    setTransferOrderStatus("Nothing to copy.", "muted");
+    return;
+  }
+
+  const sanitize = (value) => {
+    if (value === null || value === undefined) return "";
+    return String(value)
+      .replace(/\r?\n+/g, " ")
+      .replace(/\t+/g, " ")
+      .trim();
+  };
+
+  const payload = needing.map((row) => {
+    const cells = [
+      sanitize(row.itemNoDisplay),
+      sanitize(row.itemName),
+      sanitize(row.needed),
+      sanitize(row.uomDisplay || "")
+    ];
+    return cells.join("\t");
+  }).join("\n");
+
+  try {
+    if (navigator?.clipboard?.writeText) {
+      await navigator.clipboard.writeText(payload);
+    } else {
+      const textarea = document.createElement("textarea");
+      textarea.value = payload;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "absolute";
+      textarea.style.opacity = "0";
+      textarea.style.pointerEvents = "none";
+      textarea.style.left = "-9999px";
+      document.body.appendChild(textarea);
+      textarea.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(textarea);
+      if (!ok) throw new Error("execCommand copy failed");
+    }
+    setTransferOrderStatus("Current order copied.", "success");
+  } catch (err) {
+    console.error("copyTransferOrderToClipboard failed", err);
+    setTransferOrderStatus("Copy failed.", "error");
+  }
+}
+
+function scheduleTransferOrderSave(state, key) {
+  if (!state || !key) return;
+  const existing = state.pendingSaveTimers.get(key);
+  if (existing) clearTimeout(existing);
+  const timer = setTimeout(() => {
+    state.pendingSaveTimers.delete(key);
+    persistTransferOrderValue(state, key);
+  }, TRANSFER_ORDER_SAVE_DELAY_MS);
+  state.pendingSaveTimers.set(key, timer);
+}
+
+async function persistTransferOrderValue(state, key) {
+  const row = state?.byKey?.get?.(key);
+  if (!row || !state.docRef) return;
+
+  const onHandValue = Number.isFinite(row.onHand) ? Number(row.onHand) : 0;
+  const payload = {
+    serviceDate: getTodayDate(),
+    venue: "Main Kitchen",
+    updatedAt: serverTimestamp(),
+    items: {
+      [row.saveKey]: {
+        onHand: onHandValue,
+        updatedAt: serverTimestamp()
+      }
+    }
+  };
+
+  try {
+    setTransferOrderStatus("Saving…", "muted");
+    await setDoc(state.docRef, payload, { merge: true });
+    setTransferOrderStatus("Saved", "success");
+  } catch (err) {
+    console.error("persistTransferOrderValue failed", err);
+    setTransferOrderStatus("Save failed", "error");
+  }
+}
+
+function handleTransferOnHandInput(event) {
+  const input = event?.currentTarget;
+  if (!input) return;
+  const key = input.dataset.transferKey;
+  if (!key) return;
+
+  const state = getTransferOrderState();
+  const row = state.byKey.get(key);
+  if (!row) return;
+
+  state.activeEditKey = key;
+  const parsed = parseTransferNumber(input.value);
+  row.onHand = Number.isFinite(parsed) ? parsed : 0;
+  computeTransferRowMetrics(row);
+  updateTransferRowDom(row, state.dom.get(key), { skipInputUpdate: true });
+  refreshTransferOrderPickList(state);
+  scheduleTransferOrderSave(state, key);
+}
+
+function focusNextTransferInput(currentInput, direction = 1) {
+  if (!currentInput) return;
+  const pane = document.querySelector('[data-transfer-pane="order"]');
+  if (!pane || pane.hasAttribute('hidden')) return;
+  const inputs = Array.from(pane.querySelectorAll('.transfer-onhand-input'));
+  const index = inputs.indexOf(currentInput);
+  if (index === -1) return;
+  const nextIndex = index + direction;
+  if (nextIndex >= 0 && nextIndex < inputs.length) {
+    inputs[nextIndex].focus();
+  }
+}
+
+function handleTransferOnHandKeydown(event) {
+  if (event.key === "Enter" && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey) {
+    event.preventDefault();
+    const input = event.currentTarget;
+    if (!input) return;
+    input.blur();
+    setTimeout(() => focusNextTransferInput(input, 1), 0);
+  }
+}
+
+function handleTransferOnHandBlur(event) {
+  const input = event?.currentTarget;
+  if (!input) return;
+  const key = input.dataset.transferKey;
+  if (!key) return;
+
+  const state = getTransferOrderState();
+  const row = state.byKey.get(key);
+  if (!row) return;
+
+  const parsed = parseTransferNumber(input.value);
+  row.onHand = Number.isFinite(parsed) ? parsed : 0;
+  computeTransferRowMetrics(row);
+  state.activeEditKey = null;
+  updateTransferRowDom(row, state.dom.get(key));
+  refreshTransferOrderPickList(state);
+  scheduleTransferOrderSave(state, key);
+}
+
+async function handleTransferOrderReset() {
+  const state = getTransferOrderState();
+  if (!state.docRef) {
+    setTransferOrderStatus("Nothing to reset yet.", "muted");
+    return;
+  }
+
+  if (!window.confirm("Clear all on-hand counts for today?")) return;
+
+  state.pendingSaveTimers.forEach((timer) => clearTimeout(timer));
+  state.pendingSaveTimers.clear();
+
+  try {
+    const payload = {
+      serviceDate: getTodayDate(),
+      venue: "Main Kitchen",
+      items: {},
+      updatedAt: serverTimestamp()
+    };
+    await setDoc(state.docRef, payload, { merge: true });
+    state.counts = new Map();
+    state.rows.forEach((row) => {
+      row.onHand = 0;
+      computeTransferRowMetrics(row);
+      updateTransferRowDom(row, state.dom.get(row.key));
+    });
+    refreshTransferOrderPickList(state);
+    setTransferOrderStatus("On-hand reset.", "success");
+  } catch (err) {
+    console.error("handleTransferOrderReset failed", err);
+    setTransferOrderStatus("Reset failed.", "error");
+  }
+}
+
+async function loadMainKitchenTransferOrder(options = {}) {
+  const state = getTransferOrderState();
+  initTransferOrderOnce();
+  const { force = false } = options || {};
+  if (state.loading && !force) return state.loading;
+
+  const tbody = document.getElementById("transferOrderTableBody");
+  if (!tbody) return null;
+
+  state.rows = Array.isArray(state.rows) ? state.rows : [];
+  if (state.unsub) {
+    try { state.unsub(); } catch (err) { console.debug("transfer order unsub failed", err); }
+    state.unsub = null;
+  }
+
+  const serviceDate = getTodayDate();
+  const docId = `${TRANSFER_ORDER_DOC_PREFIX}|${serviceDate}`;
+  state.docId = docId;
+  state.docRef = doc(db, TRANSFER_ORDER_COLLECTION, docId);
+
+  state.loading = (async () => {
+    tbody.innerHTML = '<tr><td colspan="8" class="transfer-order-empty">Loading transfer items…</td></tr>';
+
+    try {
+      const [ingredientsSnap, countsSnap] = await Promise.all([
+        getDocs(collection(db, INGREDIENTS_COLL)),
+        getDoc(state.docRef).catch((err) => {
+          console.debug("transfer order doc load skipped", err);
+          return null;
+        })
+      ]);
+
+      const countsRaw = countsSnap?.exists?.() ? (countsSnap.data()?.items || countsSnap.data() || {}) : {};
+      const countsMap = buildTransferCountsMap(countsRaw);
+      state.counts = countsMap;
+
+      const rows = [];
+      ingredientsSnap.forEach((docSnap) => {
+        const row = buildTransferRowFromIngredient(docSnap, countsMap);
+        if (!row) return;
+        const shelf = row.shelf ? row.shelf.trim() : "";
+        if (!shelf || shelf.toUpperCase() === '#N/A') return;
+        rows.push(row);
+      });
+
+      rows.sort((a, b) => {
+        const shelfDiff = a.shelfSort - b.shelfSort;
+        if (shelfDiff) return shelfDiff;
+        const rowDiff = a.rowSort - b.rowSort;
+        if (rowDiff) return rowDiff;
+        const shelfLabelCompare = (a.shelf || "").localeCompare(b.shelf || "", undefined, { numeric: true, sensitivity: "base" });
+        if (shelfLabelCompare) return shelfLabelCompare;
+        const rowLabelCompare = (a.rowCode || "").localeCompare(b.rowCode || "", undefined, { sensitivity: "base" });
+        if (rowLabelCompare) return rowLabelCompare;
+        const itemCompare = String(a.itemNoDisplay || "").localeCompare(String(b.itemNoDisplay || ""), undefined, { numeric: true, sensitivity: "base" });
+        if (itemCompare) return itemCompare;
+        return (a.itemName || "").localeCompare(b.itemName || "", undefined, { sensitivity: "base" });
+      });
+
+      state.rows = rows;
+      state.byKey = new Map(rows.map((row) => [row.key, row]));
+      renderTransferOrderRows(state);
+      applyTransferCountsToRows(state, countsMap, { skipInputForActive: true, skipPickList: false });
+      setTransferOrderTab(state.activeTab || "order");
+
+      if (state.docRef) {
+        state.unsub = onSnapshot(state.docRef, (snap) => {
+          try {
+            const data = snap?.exists?.() ? (snap.data()?.items || snap.data() || {}) : {};
+            const map = buildTransferCountsMap(data);
+            state.counts = map;
+            applyTransferCountsToRows(state, map, { skipInputForActive: true });
+          } catch (err) {
+            console.warn("transfer order snapshot error", err);
+          }
+        }, (err) => {
+          console.warn("transfer order snapshot listener failed", err);
+        });
+      }
+
+      setTransferOrderStatus("", "muted");
+    } catch (err) {
+      console.error("loadMainKitchenTransferOrder failed", err);
+      tbody.innerHTML = '<tr><td colspan="10" class="transfer-order-empty">Unable to load transfer items.</td></tr>';
+      setTransferOrderStatus("Failed to load transfer order.", "error");
+    } finally {
+      state.loading = null;
+    }
+  })();
+
+  return state.loading;
+}
+
+window.loadMainKitchenTransferOrder = loadMainKitchenTransferOrder;
 
 
 //Kitchen add ons
