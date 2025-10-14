@@ -94,8 +94,8 @@ const networkInformation =
   null;
 
 // === Collection config ===
-const RECIPES_COLL = "cookingrecipes";   // new home
-const LEGACY_RECIPES_COLL = "recipes";   // old (read-only fallback)
+const RECIPES_COLL = "recipes";   // primary writable collection
+const LEGACY_RECIPES_COLL = "cookingrecipes";   // secondary/legacy mirror
 
 // Live version control (auto-refresh)
 const APP_VERSION_COLLECTION = "appMeta";
@@ -2124,6 +2124,250 @@ const PREP_PARS_COLL = "prepPars";
 const ACCOUNTING_VENUES = ["Aloha", "Ohana", "Gateway", "Concessions"];
 const ACCOUNTING_ING_NUMERIC_FIELDS = ["min", "amountpercs", "amountbaseUOMperCS"];
 const ACCOUNTING_RECIPE_NUMERIC_FIELDS = ["panWeight", "cookTime", "cost"];
+const ACCOUNTING_RECIPE_VENUES = ["Aloha", "Ohana", "Gateway", "Concessions"];
+const ACCOUNTING_RECIPE_PAR_GUEST_COUNTS = ["200", "250", "300", "350"];
+
+function buildVenueMapFromForm(form, prefix, errors) {
+  const map = {};
+  ACCOUNTING_RECIPE_VENUES.forEach((venue) => {
+    const canonicalVenue = canonicalizeVenueName(venue) || venue;
+    const counts = {};
+    ACCOUNTING_RECIPE_PAR_GUEST_COUNTS.forEach((guest) => {
+      const inputName = `${prefix}_${venue}_${guest}`;
+      const input = form.elements[inputName];
+      if (!input) return;
+      const raw = accountingTrim(input.value || "");
+      if (!raw) return;
+      const parsed = parseAccountingNumber(raw);
+      if (parsed === null) {
+        errors?.push(`Invalid number for ${prefix === "pars" ? "Recipe" : "Prep"} ${venue} ${guest}.`);
+        return;
+      }
+      counts[guest] = parsed;
+    });
+    if (Object.keys(counts).length) {
+      map[canonicalVenue] = counts;
+    }
+  });
+  return map;
+}
+
+function attachSelectOtherHandlers(select, otherInput) {
+  if (!select || !otherInput) return;
+  if (select.dataset.otherHandlerBound === "1") {
+    select._updateOtherInput?.();
+    return;
+  }
+  const update = () => {
+    const showOther = select.value === "__other__";
+    otherInput.hidden = !showOther;
+    otherInput.disabled = !showOther;
+    otherInput.required = showOther;
+    if (showOther) {
+      otherInput.focus();
+    } else {
+      otherInput.value = "";
+    }
+  };
+  select.addEventListener("change", update);
+  select.dataset.otherHandlerBound = "1";
+  select._updateOtherInput = update;
+  update();
+}
+
+function setupAddRecipeFormControls(form) {
+  if (!form || form.dataset.controlsInitialized === "1") return;
+  const uomSelect = form.elements.uomSelect;
+  const uomOther = form.elements.uomOther;
+  const categorySelect = form.elements.categorySelect;
+  const categoryOther = form.elements.categoryOther;
+  const stationSelect = form.elements.stationSelect;
+  const stationOther = form.elements.stationOther;
+
+  attachSelectOtherHandlers(uomSelect, uomOther);
+  attachSelectOtherHandlers(categorySelect, categoryOther);
+  attachSelectOtherHandlers(stationSelect, stationOther);
+
+  form.addEventListener("reset", () => {
+    requestAnimationFrame(() => {
+      uomSelect?._updateOtherInput?.();
+      categorySelect?._updateOtherInput?.();
+      stationSelect?._updateOtherInput?.();
+    });
+  });
+
+  form.dataset.controlsInitialized = "1";
+}
+
+function populateAccountingRecipeFormOptions() {
+  const form = document.getElementById("accountingRecipeAddForm");
+  if (!form) return;
+  setupAddRecipeFormControls(form);
+
+  const state = getAccountingRecipesState();
+  if (!state?.rows?.length) return;
+
+  const categories = new Set();
+  const stations = new Set();
+  state.rows.forEach((row) => {
+    const category = accountingTrim(row.category);
+    if (category) categories.add(category);
+    const station = accountingTrim(row.station);
+    if (station) stations.add(station);
+  });
+
+  const populateSelect = (select, values, label) => {
+    if (!select) return;
+    const previousValue = select.value;
+    const wasOther = previousValue === "__other__";
+
+    let placeholder = select.querySelector("option[data-placeholder=\"1\"]");
+    if (!placeholder) {
+      placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.disabled = true;
+      placeholder.dataset.placeholder = "1";
+      placeholder.textContent = `Select ${label}`;
+      select.insertBefore(placeholder, select.firstChild);
+    }
+
+    const otherOption = select.querySelector("option[value=\"__other__\"]") || (() => {
+      const opt = document.createElement("option");
+      opt.value = "__other__";
+      opt.textContent = "Other";
+      select.appendChild(opt);
+      return opt;
+    })();
+
+    Array.from(select.options).forEach((option) => {
+      if (option !== placeholder && option !== otherOption) {
+        option.remove();
+      }
+    });
+
+    const sorted = Array.from(values).filter(Boolean).sort((a, b) =>
+      a.localeCompare(b, undefined, { sensitivity: "base" })
+    );
+    sorted.forEach((value) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = value;
+      select.insertBefore(option, otherOption);
+    });
+
+    if (wasOther) {
+      select.value = "__other__";
+    } else if (previousValue && sorted.includes(previousValue)) {
+      select.value = previousValue;
+    } else {
+      select.value = "";
+      placeholder.selected = true;
+    }
+
+    select._updateOtherInput?.();
+  };
+
+  populateSelect(form.elements.categorySelect, categories, "Category");
+  populateSelect(form.elements.stationSelect, stations, "Station");
+}
+
+function setAccountingRecipeAddStatus(message, tone = "info") {
+  const statusEl = document.getElementById("accountingRecipeAddStatus");
+  if (!statusEl) return;
+  if (message) {
+    statusEl.textContent = message;
+    statusEl.dataset.tone = tone;
+  } else {
+    statusEl.textContent = "";
+    statusEl.removeAttribute("data-tone");
+  }
+}
+
+function setAccountingRecipeAddFormVisible(show) {
+  const form = document.getElementById("accountingRecipeAddForm");
+  const toggle = document.getElementById("accountingRecipeAddToggle");
+  if (!form || !toggle) return;
+  if (show) {
+    form.hidden = false;
+    setupAddRecipeFormControls(form);
+    populateAccountingRecipeFormOptions();
+    toggle.setAttribute("aria-expanded", "true");
+    toggle.textContent = "Hide Recipe Form";
+  } else {
+    form.hidden = true;
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.textContent = "Add Recipe";
+    form.elements.uomSelect?._updateOtherInput?.();
+    form.elements.categorySelect?._updateOtherInput?.();
+    form.elements.stationSelect?._updateOtherInput?.();
+    setAccountingRecipeAddStatus("");
+  }
+}
+
+function sumPowerbiItemsCost(entry) {
+  if (!entry) return 0;
+  const items = Array.isArray(entry.items) ? entry.items : entry.data?.items;
+  if (!Array.isArray(items)) return 0;
+  return items.reduce((total, item) => {
+    const costVal = parseAccountingNumber(item?.Cost ?? item?.cost);
+    return total + (Number.isFinite(costVal) ? costVal : 0);
+  }, 0);
+}
+
+function tryGetCostFromLsState(recipeKey) {
+  const state = window.__accountingLsRecipesState;
+  if (!state || !(state.powerbiByParent instanceof Map)) return null;
+  const entry = state.powerbiByParent.get(recipeKey);
+  if (!entry) return null;
+  const total = sumPowerbiItemsCost(entry);
+  return Number.isFinite(total) ? total : null;
+}
+
+async function computeRecipeCostFromPowerbi(recipeNo) {
+  const normalized = normalizeLsRecipeKey(recipeNo || "");
+  if (!normalized) return 0;
+
+  const cached = tryGetCostFromLsState(normalized);
+  if (cached !== null) {
+    return Number(cached.toFixed(4));
+  }
+
+  let bestData = null;
+  let bestTimestamp = -Infinity;
+
+  try {
+    const docRef = doc(db, LS_RECIPES_COLL, normalized);
+    const snap = await getDoc(docRef);
+    if (snap?.exists?.()) {
+      bestData = snap.data();
+      bestTimestamp = parseLsRecipeTimestamp(bestData?._ingestedAt || bestData?.ingestedAt);
+    }
+  } catch (err) {
+    console.debug("computeRecipeCostFromPowerbi doc fetch failed", err);
+  }
+
+  if (!bestData) {
+    try {
+      const q = query(collection(db, LS_RECIPES_COLL), where("Parent_Item_No", "==", normalized), limit(5));
+      const snap = await getDocs(q);
+      snap.forEach((docSnap) => {
+        const data = docSnap.data() || {};
+        const ts = parseLsRecipeTimestamp(data?._ingestedAt || data?.ingestedAt);
+        if (ts > bestTimestamp) {
+          bestTimestamp = ts;
+          bestData = data;
+        }
+      });
+    } catch (err) {
+      console.debug("computeRecipeCostFromPowerbi query failed", err);
+    }
+  }
+
+  if (!bestData) return 0;
+  const total = sumPowerbiItemsCost(bestData);
+  return Number.isFinite(total) ? Number(total.toFixed(4)) : 0;
+}
+
 
 function accountingString(value) {
   if (value === undefined || value === null) return "";
@@ -2274,6 +2518,26 @@ function normalizeIngredientDoc(docSnap, source) {
       data.amountBasePerCs ??
       data.amountBasePerCase
     ),
+    shelfNumber: accountingTrim(
+      data.shelfNumber ??
+      data.shelf_number ??
+      data.shelf ??
+      data.shelfNo ??
+      data.shelfLocation ??
+      data.locationShelf ??
+      ""
+    ),
+    row: (() => {
+      const val = accountingTrim(
+        data.row ??
+        data.rowLetter ??
+        data.row_number ??
+        data.rowCode ??
+        data.row_code ??
+        ""
+      );
+      return val ? val.toUpperCase() : "";
+    })(),
     isDraft: false,
     dirty: false
   };
@@ -2286,7 +2550,7 @@ function normalizeIngredientDoc(docSnap, source) {
 
 function fillIngredientFromLegacy(primary, legacyRow) {
   if (!primary || !legacyRow) return;
-  ["itemNo", "itemName", "baseUOM", "orderingUOM", "min", "amountpercs", "amountbaseUOMperCS"].forEach((field) => {
+  ["itemNo", "itemName", "baseUOM", "orderingUOM", "min", "amountpercs", "amountbaseUOMperCS", "shelfNumber", "row"].forEach((field) => {
     if (!accountingHasValue(primary[field]) && accountingHasValue(legacyRow[field])) {
       primary[field] = legacyRow[field];
     }
@@ -2412,6 +2676,12 @@ function renderAccountingIngredientsTable(rows = []) {
         <td data-label="Ordering UOM">
           <input type="text" name="orderingUOM" value="${escapeHtml(accountingString(row.orderingUOM))}" />
         </td>
+        <td data-label="Shelf">
+          <input type="text" name="shelfNumber" value="${escapeHtml(accountingString(row.shelfNumber))}" placeholder="e.g. 36" />
+        </td>
+        <td data-label="Row">
+          <input type="text" name="row" value="${escapeHtml(accountingString(row.row))}" placeholder="e.g. C" />
+        </td>
         <td data-label="Min">
           <input type="number" step="0.01" inputmode="decimal" name="min" value="${escapeHtml(accountingString(row.min))}" />
         </td>
@@ -2445,7 +2715,9 @@ function applyAccountingIngredientsFilter() {
       row.itemNo,
       row.itemName,
       row.baseUOM,
-      row.orderingUOM
+      row.orderingUOM,
+      row.shelfNumber,
+      row.row
     ].map((val) => accountingString(val).toLowerCase()).join(" ");
     return terms.every((term) => haystack.includes(term));
   });
@@ -2471,6 +2743,8 @@ function addAccountingIngredientDraft() {
     itemName: "",
     baseUOM: "",
     orderingUOM: "",
+    shelfNumber: "",
+    row: "",
     min: "",
     amountpercs: "",
     amountbaseUOMperCS: "",
@@ -2521,6 +2795,24 @@ async function saveIngredient(rowKey) {
       row[field] = "";
     }
   });
+
+  const shelfTrimmed = accountingTrim(row.shelfNumber);
+  if (shelfTrimmed) {
+    payload.shelfNumber = shelfTrimmed;
+    row.shelfNumber = shelfTrimmed;
+  } else {
+    payload.shelfNumber = null;
+    row.shelfNumber = "";
+  }
+
+  const rowTrimmed = accountingTrim(row.row).toUpperCase();
+  if (rowTrimmed) {
+    payload.row = rowTrimmed;
+    row.row = rowTrimmed;
+  } else {
+    payload.row = null;
+    row.row = "";
+  }
 
   row.itemNo = accountingToFixed(itemNoValue);
 
@@ -2874,6 +3166,7 @@ async function loadAccountingRecipesPars(options = {}) {
       });
 
       applyAccountingRecipesFilter();
+      populateAccountingRecipeFormOptions();
     } catch (err) {
       console.warn("Failed to load accounting recipes", err);
       state.isLoaded = false;
@@ -2933,6 +3226,7 @@ function renderRecipesInfoTable(rows = []) {
         <td data-label="Actions">
           <div class="row-actions">
             <button type="button" class="save-btn" data-action="save-recipe-info" data-row-key="${escapeHtml(key)}">Save</button>
+            <button type="button" class="ghost-btn" data-action="delete-recipe" data-row-key="${escapeHtml(key)}">Delete</button>
           </div>
         </td>
       </tr>`;
@@ -3304,6 +3598,56 @@ async function savePrepPars(rowKey) {
   }
 }
 
+async function deleteAccountingRecipe(rowKey) {
+  const state = getAccountingRecipesState();
+  const row = state.byKey.get(rowKey);
+  if (!row) return;
+
+  const recipeLabel = accountingTrim(row.recipeNo || row.description || row._key);
+  const confirmMessage = recipeLabel
+    ? `Delete recipe ${recipeLabel}? This cannot be undone.`
+    : "Delete this recipe? This cannot be undone.";
+  const proceed = typeof window.confirm === "function" ? window.confirm(confirmMessage) : true;
+  if (!proceed) return;
+
+  setAccountingRecipeAddStatus("Deleting recipe…", "info");
+
+  const tasks = [];
+  let docId = row.cookingId || normalizeRecipeKey(row.recipeNo, row._key);
+  if (docId) {
+    tasks.push(deleteDoc(doc(db, RECIPES_COLL, docId)).catch((err) => { throw err; }));
+  }
+
+  if (row.legacyId) {
+    tasks.push(deleteDoc(doc(db, LEGACY_RECIPES_COLL, row.legacyId)).catch(() => void 0));
+  }
+
+  const prepDocId = normalizeRecipeKey(row.recipeNo || row._key);
+  if (prepDocId) {
+    tasks.push(deleteDoc(doc(db, PREP_PARS_COLL, prepDocId)).catch(() => void 0));
+  }
+
+  try {
+    await Promise.all(tasks);
+    const recipeKey = normalizeRecipeKey(row.recipeNo || row._key);
+    state.rows = state.rows.filter((r) => r._key !== rowKey);
+    syncAccountingRecipesMap();
+    state.isLoaded = true;
+
+    if (window._prepParsByRecipe && recipeKey) {
+      delete window._prepParsByRecipe[recipeKey];
+    }
+
+    applyAccountingRecipesFilter();
+    toggleAccountingRecipesEmpty();
+    setAccountingRecipeAddStatus(`Recipe ${recipeLabel || ""} deleted.`, "success");
+    await loadAccountingRecipesPars({ silent: true, force: true });
+  } catch (err) {
+    console.error("deleteAccountingRecipe failed", err);
+    setAccountingRecipeAddStatus("Failed to delete recipe. Check console for details.", "error");
+  }
+}
+
 function handleAccountingRecipesInput(event) {
   const target = event.target;
   if (!(target instanceof HTMLElement)) return;
@@ -3391,6 +3735,9 @@ function handleAccountingRecipesClick(event) {
   } else if (action === "save-prep-pars") {
     event.preventDefault();
     savePrepPars(rowKey);
+  } else if (action === "delete-recipe") {
+    event.preventDefault();
+    deleteAccountingRecipe(rowKey);
   }
 }
 
@@ -3534,6 +3881,195 @@ function getPrepEntryForRow(row, canonicalVenue) {
   return cache?.[recipeKey]?.[venueKey] || null;
 }
 
+async function handleAccountingRecipeAdd(event) {
+  event.preventDefault();
+  const form = event.target;
+  if (!(form instanceof HTMLFormElement)) return;
+
+  const submitBtn = form.querySelector('button[type="submit"]');
+  const clearBtn = form.querySelector('button[type="reset"]');
+  if (submitBtn) submitBtn.disabled = true;
+  if (clearBtn) clearBtn.disabled = true;
+  setAccountingRecipeAddStatus("Saving recipe…", "info");
+
+  const errors = [];
+
+  try {
+    const recipeNoRaw = accountingTrim(form.elements.recipeNo?.value || "");
+    if (!recipeNoRaw) {
+      errors.push("Recipe number is required.");
+    }
+    const description = accountingTrim(form.elements.description?.value || "");
+    if (!description) {
+      errors.push("Description is required.");
+    }
+
+    const recipeNo = recipeNoRaw ? normalizeLsRecipeKey(recipeNoRaw) : "";
+
+    const uom = (() => {
+      const select = form.elements.uomSelect;
+      const otherInput = form.elements.uomOther;
+      if (!select) {
+        errors.push("UOM is required.");
+        return "";
+      }
+      const value = select.value;
+      if (!value) {
+        errors.push("Select a UOM.");
+        return "";
+      }
+      if (value === "__other__") {
+        const custom = accountingTrim(otherInput?.value || "");
+        if (!custom) {
+          errors.push("Enter a custom UOM.");
+          return "";
+        }
+        return custom;
+      }
+      const normalized = value.toUpperCase();
+      if (!["EA", "LB"].includes(normalized)) {
+        errors.push("Invalid UOM selection.");
+      }
+      return normalized;
+    })();
+
+    const category = (() => {
+      const select = form.elements.categorySelect;
+      const otherInput = form.elements.categoryOther;
+      if (!select) {
+        errors.push("Category is required.");
+        return "";
+      }
+      const value = select.value;
+      if (!value) {
+        errors.push("Select a category.");
+        return "";
+      }
+      if (value === "__other__") {
+        const custom = accountingTrim(otherInput?.value || "");
+        if (!custom) {
+          errors.push("Enter a custom category.");
+          return "";
+        }
+        return custom;
+      }
+      return value;
+    })();
+
+    const station = (() => {
+      const select = form.elements.stationSelect;
+      const otherInput = form.elements.stationOther;
+      if (!select) {
+        errors.push("Station is required.");
+        return "";
+      }
+      const value = select.value;
+      if (!value) {
+        errors.push("Select a station.");
+        return "";
+      }
+      if (value === "__other__") {
+        const custom = accountingTrim(otherInput?.value || "");
+        if (!custom) {
+          errors.push("Enter a custom station.");
+          return "";
+        }
+        return custom;
+      }
+      return value;
+    })();
+
+    const returnsValue = (() => {
+      const select = form.elements.returns;
+      if (!select) {
+        errors.push("Select returns yes or no.");
+        return "";
+      }
+      const value = (select.value || "").toUpperCase();
+      if (!["YES", "NO"].includes(value)) {
+        errors.push("Returns must be Yes or No.");
+      }
+      return value;
+    })();
+
+    const panWeightVal = parseAccountingNumber(form.elements.panWeight?.value || "");
+    if (panWeightVal === null || panWeightVal < 0) {
+      errors.push("Pan weight must be a non-negative number.");
+    }
+
+    const cookTimeVal = parseAccountingNumber(form.elements.cookTime?.value || "");
+    if (cookTimeVal === null || cookTimeVal < 0) {
+      errors.push("Cook time must be a non-negative number.");
+    }
+
+    const recipePars = buildVenueMapFromForm(form, "pars", errors);
+    const prepPars = buildVenueMapFromForm(form, "prep", errors);
+
+    const hasPars = Object.values(recipePars).some((counts) => Object.keys(counts).length > 0) ||
+      Object.values(prepPars).some((counts) => Object.keys(counts).length > 0);
+    if (!hasPars) {
+      errors.push("Enter at least one recipe or prep par value.");
+    }
+
+    if (errors.length) {
+      setAccountingRecipeAddStatus(errors[0], "error");
+      return;
+    }
+
+    setAccountingRecipeAddStatus("Computing ingredient cost…", "info");
+    const costVal = await computeRecipeCostFromPowerbi(recipeNo);
+
+    const docRef = doc(db, RECIPES_COLL, recipeNo);
+    const existingSnap = await getDoc(docRef).catch(() => null);
+    const isExisting = existingSnap?.exists?.() === true;
+    const payload = {
+      recipeNo,
+      description,
+      uom,
+      category,
+      station,
+      returns: returnsValue,
+      updatedAt: serverTimestamp(),
+      cost: Number.isFinite(costVal) ? Number(costVal.toFixed(4)) : null
+    };
+    if (Object.keys(recipePars).length) {
+      payload.pars = recipePars;
+    }
+    if (!isExisting) {
+      payload.createdAt = serverTimestamp();
+    }
+    if (panWeightVal !== null) payload.panWeight = panWeightVal;
+    if (cookTimeVal !== null) payload.cookTime = cookTimeVal;
+
+    const venueCodes = Array.from(new Set([...Object.keys(recipePars), ...Object.keys(prepPars)]));
+    if (venueCodes.length) payload.venueCodes = venueCodes;
+
+    await setDoc(docRef, payload, { merge: true });
+
+    if (Object.keys(prepPars).length) {
+      const prepRef = doc(db, PREP_PARS_COLL, recipeNo);
+      const prepUpdates = { recipeNo, updatedAt: serverTimestamp(), pars: prepPars };
+      await setDoc(prepRef, prepUpdates, { merge: true });
+      window._prepParsByRecipe = null;
+    }
+
+    form.reset();
+    form.elements.uomSelect?._updateOtherInput?.();
+    form.elements.categorySelect?._updateOtherInput?.();
+    form.elements.stationSelect?._updateOtherInput?.();
+
+    const displayCost = Number.isFinite(costVal) ? costVal : 0;
+    setAccountingRecipeAddStatus(`Recipe saved. Cost $${displayCost.toFixed(2)}`, "success");
+    await loadAccountingRecipesPars({ silent: true, force: true });
+  } catch (err) {
+    console.error("handleAccountingRecipeAdd failed", err);
+    setAccountingRecipeAddStatus("Failed to add recipe. Check console for details.", "error");
+  } finally {
+    if (submitBtn) submitBtn.disabled = false;
+    if (clearBtn) clearBtn.disabled = false;
+  }
+}
+
 function ensureAccountingRecipesUI() {
   const state = getAccountingRecipesState();
   if (state.initialized) return;
@@ -3557,6 +4093,30 @@ function ensureAccountingRecipesUI() {
   if (refreshBtn && !refreshBtn.dataset.bound) {
     refreshBtn.dataset.bound = "1";
     refreshBtn.addEventListener("click", () => loadAccountingRecipesPars({ silent: false, force: true }));
+  }
+
+  const addToggle = document.getElementById("accountingRecipeAddToggle");
+  if (addToggle && !addToggle.dataset.bound) {
+    addToggle.dataset.bound = "1";
+    addToggle.addEventListener("click", () => {
+      const form = document.getElementById("accountingRecipeAddForm");
+      const shouldShow = form ? form.hidden : false;
+      setAccountingRecipeAddFormVisible(shouldShow);
+      if (shouldShow) {
+        form?.elements?.recipeNo?.focus();
+      }
+    });
+    setAccountingRecipeAddFormVisible(false);
+  }
+
+  const addForm = document.getElementById("accountingRecipeAddForm");
+  if (addForm && !addForm.dataset.bound) {
+    addForm.dataset.bound = "1";
+    addForm.addEventListener("submit", handleAccountingRecipeAdd);
+    addForm.addEventListener("reset", () => setAccountingRecipeAddStatus(""));
+  }
+  if (addForm) {
+    setupAddRecipeFormControls(addForm);
   }
 
   const parsModeWrap = document.getElementById("accountingRecipesParsMode");

@@ -1087,6 +1087,233 @@ table {
   box-shadow: 0 4px 14px rgba(59, 130, 246, 0.28);
 }
 
+.accounting-add-form[hidden] {
+  display: none !important;
+}
+
+.accounting-add-form {
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px dashed rgba(148, 163, 184, 0.28);
+  border-radius: 14px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.accounting-add-fieldset {
+  border: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.accounting-add-legend {
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(226, 232, 240, 0.92);
+}
+
+.accounting-add-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.accounting-add-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.accounting-add-field span {
+  font-size: 0.78rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: rgba(226, 232, 240, 0.72);
+}
+
+.accounting-add-field input {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  background: rgba(15, 23, 42, 0.75);
+  color: var(--text);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.accounting-add-field input:focus-visible {
+  outline: none;
+  border-color: rgba(59, 130, 246, 0.55);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18);
+  background: rgba(15, 23, 42, 0.9);
+}
+
+.accounting-add-field select {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  background: rgba(15, 23, 42, 0.75);
+  color: var(--text);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.accounting-add-field select:focus-visible {
+  outline: none;
+  border-color: rgba(59, 130, 246, 0.55);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18);
+  background: rgba(15, 23, 42, 0.9);
+}
+
+.accounting-add-other {
+  margin-top: 6px;
+  display: block;
+}
+
+.accounting-add-field--wide {
+  grid-column: span 2;
+}
+
+@media (max-width: 720px) {
+  .accounting-add-field--wide {
+    grid-column: span 1;
+  }
+}
+
+.accounting-add-venues {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+}
+
+.accounting-add-venue {
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 12px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.accounting-add-venue summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 12px 14px;
+  font-size: 0.95rem;
+  letter-spacing: 0.04em;
+  color: rgba(226, 232, 240, 0.88);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.accounting-add-venue summary::after {
+  content: "\25B6";
+  font-size: 0.75rem;
+  color: rgba(226, 232, 240, 0.65);
+  transition: transform 0.2s ease;
+}
+
+.accounting-add-venue[open] summary::after {
+  content: "\25BC";
+  color: rgba(59, 130, 246, 0.8);
+}
+
+.accounting-add-venue summary::marker,
+.accounting-add-venue summary::-webkit-details-marker {
+  display: none;
+}
+
+.accounting-add-venue summary span {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  color: rgba(226, 232, 240, 0.55);
+}
+
+.accounting-add-venue[open] summary {
+  background: rgba(59, 130, 246, 0.18);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.32);
+}
+
+.accounting-add-pars-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: rgba(15, 23, 42, 0.72);
+}
+
+.accounting-add-pars-table th,
+.accounting-add-pars-table td {
+  padding: 8px 10px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  font-size: 0.82rem;
+}
+
+.accounting-add-pars-table thead th {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 0.74rem;
+  color: rgba(226, 232, 240, 0.7);
+  background: rgba(59, 130, 246, 0.12);
+}
+
+.accounting-add-pars-table tbody th {
+  font-weight: 600;
+  color: rgba(226, 232, 240, 0.82);
+  width: 110px;
+}
+
+.accounting-add-pars-table input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(17, 24, 39, 0.8);
+  color: var(--text);
+  font-size: 0.8rem;
+}
+
+.accounting-add-pars-table input:focus-visible {
+  outline: none;
+  border-color: rgba(59, 130, 246, 0.4);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.18);
+}
+
+.accounting-add-hint {
+  margin: 0;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  color: rgba(226, 232, 240, 0.6);
+}
+
+.accounting-add-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+.accounting-add-status {
+  min-height: 1.2em;
+  font-size: 0.82rem;
+  color: rgba(226, 232, 240, 0.75);
+}
+
+.accounting-add-status[data-tone="success"] {
+  color: #34d399;
+}
+
+.accounting-add-status[data-tone="error"] {
+  color: #f87171;
+}
+
+.accounting-add-status[data-tone="info"] {
+  color: #38bdf8;
+}
 .accounting-section__header {
   display: flex;
   align-items: center;
