@@ -10564,11 +10564,11 @@ window.loadAlohaReturns = async function () {
       const recNet  = Number(o.netWeight ?? 0);
       const recSend = Number(o.sendQty   ?? 0);
       const recQty  = Number(o.qty       ?? 0);
-      const used = Math.max(
-        Number.isFinite(recNet)  ? recNet  : 0,
-        Number.isFinite(recSend) ? recSend : 0,
-        Number.isFinite(recQty)  ? recQty  : 0
-      );
+      const used =
+        (Number.isFinite(recNet)  && recNet  > 0) ? recNet  :
+        (Number.isFinite(recSend) && recSend > 0) ? recSend :
+        (Number.isFinite(recQty)  && recQty  > 0) ? recQty  :
+        0;
       if (!used) return;
 
       qtyByKey.set(key, (qtyByKey.get(key) || 0) + used);
@@ -10585,7 +10585,7 @@ window.loadAlohaReturns = async function () {
       collection(db, "returns"),
       where("venue", "==", "Aloha"),
       where("date", "==", todayStr),
-      where("status", "in", ["sent", "received"])
+      where("status", "in", ["sent", "received", "returned"])
     ));
     const returnedByKey = new Map();
     returnsSnap.forEach(d => {
@@ -10690,6 +10690,7 @@ window.loadAlohaReturns = async function () {
       tr.dataset.recipeId   = r.id;
       tr.dataset.uom        = r.uom;
       tr.dataset.panWeight  = String(r.panWeight || 0);
+      tr.dataset.remaining  = String(r.qty || 0);
      tr.innerHTML = `
   <td>${r.name}</td>
   <td>${r.qty} ${r.uom}</td>
@@ -10740,6 +10741,15 @@ window.sendSingleAlohaReturn = async function (btn, recipeId) {
   if (net <= 0) {
     alert(`Net return is 0 after subtracting pan weight (${panWeight}).`);
     return;
+  }
+
+  const available = Number(row.dataset.remaining ?? row.dataset.qty ?? row.dataset.available ?? NaN);
+  if (Number.isFinite(available) && available > 0) {
+    const projectedRemaining = available - net;
+    if (projectedRemaining <= 0) {
+      alert("Return would reduce the total amount sent to zero or below. Enter a smaller quantity.");
+      return;
+    }
   }
 
   try {
@@ -11698,11 +11708,11 @@ window.loadGatewayReturns = async function () {
       const recNet  = Number(o.netWeight ?? 0);
       const recSend = Number(o.sendQty   ?? 0);
       const recQty  = Number(o.qty       ?? 0);
-      const used = Math.max(
-        Number.isFinite(recNet)  ? recNet  : 0,
-        Number.isFinite(recSend) ? recSend : 0,
-        Number.isFinite(recQty)  ? recQty  : 0
-      );
+      const used =
+        (Number.isFinite(recNet)  && recNet  > 0) ? recNet  :
+        (Number.isFinite(recSend) && recSend > 0) ? recSend :
+        (Number.isFinite(recQty)  && recQty  > 0) ? recQty  :
+        0;
       if (!used) return;
 
       recipeQtyMap.set(key, (recipeQtyMap.get(key) || 0) + used);
@@ -11827,6 +11837,7 @@ window.loadGatewayReturns = async function () {
       tr.dataset.recipeId  = r.id;
       tr.dataset.uom       = r.uom;
       tr.dataset.panWeight = String(r.panWeight || 0);
+      tr.dataset.remaining = String(r.qty || 0);
       // Example for Gateway row render
 tr.innerHTML = `
   <td>${r.name}</td>
@@ -11880,6 +11891,15 @@ window.sendSingleGatewayReturn = async function (btn, recipeId) {
   if (net <= 0) {
     alert(`Net return is 0 after subtracting pan weight (${panWeight}).`);
     return;
+  }
+
+  const available = Number(row.dataset.remaining ?? row.dataset.qty ?? row.dataset.available ?? NaN);
+  if (Number.isFinite(available) && available > 0) {
+    const projectedRemaining = available - net;
+    if (projectedRemaining <= 0) {
+      alert("Return would reduce the total amount sent to zero or below. Enter a smaller quantity.");
+      return;
+    }
   }
 
   try {
@@ -13093,11 +13113,11 @@ window.loadOhanaReturns = async function () {
       const recNet  = Number(o.netWeight ?? 0);
       const recSend = Number(o.sendQty   ?? 0);
       const recQty  = Number(o.qty       ?? 0);
-      const used = Math.max(
-        Number.isFinite(recNet)  ? recNet  : 0,
-        Number.isFinite(recSend) ? recSend : 0,
-        Number.isFinite(recQty)  ? recQty  : 0
-      );
+      const used =
+        (Number.isFinite(recNet)  && recNet  > 0) ? recNet  :
+        (Number.isFinite(recSend) && recSend > 0) ? recSend :
+        (Number.isFinite(recQty)  && recQty  > 0) ? recQty  :
+        0;
       if (!used) return;
       qtyByKey.set(key, (qtyByKey.get(key) || 0) + used);
       if (o.recipeNo && o.recipeId) idFromNo.set(String(o.recipeNo).toUpperCase(), String(o.recipeId));
@@ -13114,7 +13134,7 @@ window.loadOhanaReturns = async function () {
       collection(db, "returns"),
       where("venue", "==", "Ohana"),
       where("date", "==", todayStr),
-      where("status", "in", ["sent", "received"])
+      where("status", "in", ["sent", "received", "returned"])
     ));
     const returnedByKey = new Map(); // KEY = recipeNo or recipeId (upper)
     returnsSnap.forEach(d => {
@@ -13212,6 +13232,7 @@ window.loadOhanaReturns = async function () {
       tr.dataset.recipeId = r.id;
       tr.dataset.uom = r.uom;
       tr.dataset.panWeight = String(r.panWeight || 0);
+      tr.dataset.remaining = String(r.qty || 0);
      tr.innerHTML = `
   <td>${r.name}</td>
   <td>${r.qty} ${r.uom}</td>
@@ -13264,6 +13285,15 @@ window.sendSingleOhanaReturn = async function (btn, recipeId) {
   if (net <= 0) {
     alert(`Net return is 0 after subtracting pan weight (${panWeight}).`);
     return;
+  }
+
+  const available = Number(row.dataset.remaining ?? row.dataset.qty ?? row.dataset.available ?? NaN);
+  if (Number.isFinite(available) && available > 0) {
+    const projectedRemaining = available - net;
+    if (projectedRemaining <= 0) {
+      alert("Return would reduce the total amount sent to zero or below. Enter a smaller quantity.");
+      return;
+    }
   }
 
   try {
