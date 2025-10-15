@@ -1128,6 +1128,69 @@ try {
 
 
 //**accounting */
+
+const ACCOUNTING_GROUP_TABS = {
+  "meal-plan": ["production", "shipments", "waste", "lunch"],
+  data: ["analytics", "ls-recipes"],
+  items: ["ingredients", "uom", "recipes"]
+};
+
+const ACCOUNTING_TAB_TO_GROUP = (() => {
+  const map = {};
+  Object.entries(ACCOUNTING_GROUP_TABS).forEach(([group, tabs]) => {
+    tabs.forEach((tab) => {
+      map[tab] = group;
+    });
+  });
+  return map;
+})();
+
+function updateAccountingGroupButtons(activeGroup) {
+  document.querySelectorAll(".accounting-group-btn").forEach((btn) => {
+    const group = btn.getAttribute("data-group");
+    const isActive = group === activeGroup;
+    btn.classList.toggle("accounting-group-btn--active", isActive);
+    btn.setAttribute("aria-pressed", isActive ? "true" : "false");
+  });
+}
+
+function updateAccountingSubtabButtons(activeTab) {
+  document.querySelectorAll(".accounting-subtabs button[data-accounting-tab]").forEach((btn) => {
+    const tab = btn.getAttribute("data-accounting-tab");
+    const isActive = tab === activeTab;
+    btn.classList.toggle("accounting-subtab--active", isActive);
+    btn.setAttribute("aria-pressed", isActive ? "true" : "false");
+  });
+}
+
+function showAccountingGroup(groupName, options = {}) {
+  if (!ACCOUNTING_GROUP_TABS[groupName]) return;
+
+  window.__accountingActiveGroup = groupName;
+  updateAccountingGroupButtons(groupName);
+
+  document.querySelectorAll(".accounting-subtabs").forEach((wrap) => {
+    const group = wrap.getAttribute("data-group");
+    const shouldShow = group === groupName;
+    if (shouldShow) {
+      wrap.hidden = false;
+      wrap.setAttribute("aria-hidden", "false");
+    } else {
+      wrap.hidden = true;
+      wrap.setAttribute("aria-hidden", "true");
+    }
+  });
+
+  if (options.skipTab) return;
+
+  const allowedTabs = ACCOUNTING_GROUP_TABS[groupName];
+  const currentTab = window.__accountingActiveTab;
+  const targetTab = allowedTabs.includes(currentTab) ? currentTab : allowedTabs[0];
+  if (targetTab) {
+    showAccountingTab(targetTab, { skipGroup: true });
+  }
+}
+
 window.unlockAccounting = function () {
   const input = document.getElementById("accountingPass").value;
 
@@ -1137,7 +1200,7 @@ window.unlockAccounting = function () {
     console.log("✅ Accounting Unlocked");
 
     // Show default tab (Production)
-    showAccountingTab("production");
+    showAccountingGroup("meal-plan");
 
     // Preload empty Production Shipments (update with real data later)
     loadProductionShipments([]);
@@ -1147,10 +1210,18 @@ window.unlockAccounting = function () {
 };
 
 // 🧭 Switch between tabs
-function showAccountingTab(tabName) {
-  document.querySelectorAll(".accounting-section").forEach(sec => {
+function showAccountingTab(tabName, options = {}) {
+  const groupName = ACCOUNTING_TAB_TO_GROUP[tabName];
+  if (groupName && !options.skipGroup) {
+    showAccountingGroup(groupName, { skipTab: true });
+  }
+
+  document.querySelectorAll(".accounting-section").forEach((sec) => {
     sec.style.display = sec.dataset.sec === tabName ? "block" : "none";
   });
+
+  window.__accountingActiveTab = tabName;
+  updateAccountingSubtabButtons(tabName);
 
   if (tabName === "production") {
     loadProductionSummary();
@@ -1175,6 +1246,11 @@ function showAccountingTab(tabName) {
     loadAccountingIngredients();
   }
 
+  if (tabName === "uom") {
+    ensureAccountingUomUI();
+    loadAccountingUom();
+  }
+
   if (tabName === "recipes") {
     ensureAccountingRecipesUI();
     loadAccountingRecipesPars();
@@ -1183,6 +1259,7 @@ function showAccountingTab(tabName) {
 }
 
 window.showAccountingTab = showAccountingTab;
+window.showAccountingGroup = showAccountingGroup;
 
 
 
@@ -2120,9 +2197,11 @@ window.loadAccountingLsRecipes = loadAccountingLsRecipes;
 // [ACCOUNTING] START Accounting Ingredients & Recipes/Pars
 const INGREDIENTS_COLL = "ingredients";
 const LEGACY_INGREDIENTS_COLL = "ingredietn";
+const UOM_COLL = "uom";
 const PREP_PARS_COLL = "prepPars";
 const ACCOUNTING_VENUES = ["Aloha", "Ohana", "Gateway", "Concessions"];
 const ACCOUNTING_ING_NUMERIC_FIELDS = ["min", "amountpercs", "amountbaseUOMperCS"];
+const ACCOUNTING_UOM_QTY_KEYS = ["qtyPerUnitOfMeasure", "qtyPerUnit", "qtyPerUOM", "quantityPerUnit"];
 const ACCOUNTING_RECIPE_NUMERIC_FIELDS = ["panWeight", "cookTime", "cost"];
 const ACCOUNTING_RECIPE_VENUES = ["Aloha", "Ohana", "Gateway", "Concessions"];
 const ACCOUNTING_RECIPE_PAR_GUEST_COUNTS = ["200", "250", "300", "350"];
@@ -2616,6 +2695,21 @@ function getAccountingIngredientsState() {
   return window.__accountingIngredientsState;
 }
 
+function getAccountingUomState() {
+  if (!window.__accountingUomState) {
+    window.__accountingUomState = {
+      rows: [],
+      filtered: [],
+      byKey: new Map(),
+      search: "",
+      initialized: false,
+      isLoaded: false,
+      loading: null
+    };
+  }
+  return window.__accountingUomState;
+}
+
 function getAccountingRecipesState() {
   if (!window.__accountingRecipesState) {
     window.__accountingRecipesState = {
@@ -2638,6 +2732,14 @@ function getAccountingRecipesState() {
 
 function syncAccountingIngredientsMap() {
   const state = getAccountingIngredientsState();
+  state.byKey = new Map();
+  state.rows.forEach((row) => {
+    state.byKey.set(row._key, row);
+  });
+}
+
+function syncAccountingUomMap() {
+  const state = getAccountingUomState();
   state.byKey = new Map();
   state.rows.forEach((row) => {
     state.byKey.set(row._key, row);
@@ -2698,6 +2800,44 @@ function normalizeIngredientDoc(docSnap, source) {
     const rawNo = data.itemNo ?? data.itemno ?? "";
     row.itemNo = rawNo ? accountingString(rawNo) : "";
   }
+  return row;
+}
+
+function normalizeUomDoc(docSnap) {
+  const data = docSnap && typeof docSnap.data === "function" ? (docSnap.data() || {}) : {};
+  const qtyValue = (() => {
+    for (const key of ACCOUNTING_UOM_QTY_KEYS) {
+      const candidate = data?.[key];
+      if (accountingHasValue(candidate)) return candidate;
+    }
+    return null;
+  })();
+
+  const row = {
+    _key: docSnap.id,
+    id: docSnap.id,
+    code: accountingTrim(data.code ?? data.Code ?? data.uom ?? ""),
+    itemNo: accountingToFixed(data.itemNo ?? data.itemno ?? data.number),
+    itemName: "",
+    qtyPerUnitOfMeasure: accountingToFixed(qtyValue),
+    isDraft: false,
+    dirty: false
+  };
+
+  if (!row.code) {
+    row.code = accountingTrim(docSnap.id) || "";
+  }
+
+  if (!row.itemNo) {
+    const parsedItemNo = parseAccountingNumber(data.itemNo ?? data.itemno ?? data.number);
+    row.itemNo = parsedItemNo !== null ? accountingToFixed(parsedItemNo) : "";
+  }
+
+  if (!row.qtyPerUnitOfMeasure && qtyValue !== null) {
+    const parsedQty = parseAccountingNumber(qtyValue);
+    row.qtyPerUnitOfMeasure = parsedQty !== null ? accountingToFixed(parsedQty) : "";
+  }
+
   return row;
 }
 
@@ -3043,6 +3183,18 @@ function handleAccountingIngredientInput(event) {
 
   row[field] = target.value;
   row.dirty = true;
+
+  if (field === "itemNo") {
+    Promise.resolve(typeof _ensureIngredientsLoaded === "function" ? _ensureIngredientsLoaded() : null)
+      .catch((err) => {
+        console.debug("UOM item name lookup skipped", err);
+      })
+      .finally(() => {
+        window.__accountingUomIngredientLookup = buildIngredientLookupByItemNo();
+        row.itemName = getIngredientNameForItemNo(row.itemNo) || "";
+        updateUomRowItemNameCell(rowKey, row.itemName);
+      });
+  }
 }
 
 function handleAccountingIngredientClick(event) {
@@ -3109,6 +3261,398 @@ function ensureAccountingIngredientsUI() {
     addBtn.dataset.bound = "1";
     addBtn.addEventListener("click", () => {
       addAccountingIngredientDraft();
+    });
+  }
+
+  state.initialized = true;
+}
+
+function buildIngredientLookupByItemNo() {
+  const lookup = new Map();
+  const cache = Array.isArray(window._ingredientsCache) ? window._ingredientsCache : [];
+  cache.forEach((entry) => {
+    const parsed = parseAccountingNumber(entry?.itemNo);
+    if (parsed === null) return;
+    const name = accountingTrim(entry?.itemName ?? entry?.name ?? "");
+    if (!name) return;
+    lookup.set(parsed, name);
+  });
+  return lookup;
+}
+
+function getIngredientNameForItemNo(value) {
+  const parsed = parseAccountingNumber(value);
+  if (parsed === null) return "";
+  if (!window.__accountingUomIngredientLookup) {
+    window.__accountingUomIngredientLookup = buildIngredientLookupByItemNo();
+  }
+  return window.__accountingUomIngredientLookup.get(parsed) || "";
+}
+
+async function loadAccountingUom(options = {}) {
+  const state = getAccountingUomState();
+  const { silent = false, force = false } = options || {};
+  if (state.loading && !force) return state.loading;
+  if (state.isLoaded && !force) {
+    applyAccountingUomFilter();
+    return null;
+  }
+
+  const tbody = document.getElementById("accountingUomTbody");
+  if (!silent && tbody) {
+    showTableLoading(tbody, "Loading UOM…");
+  }
+
+  state.loading = (async () => {
+    try {
+      if (typeof _ensureIngredientsLoaded === "function") {
+        try {
+          await _ensureIngredientsLoaded();
+        } catch (err) {
+          console.debug("Ingredients preload for UOM failed", err);
+        }
+      }
+
+      const snap = await getDocs(collection(db, UOM_COLL));
+      const rows = [];
+      if (snap) {
+        snap.forEach((docSnap) => {
+          rows.push(normalizeUomDoc(docSnap));
+        });
+      }
+
+      const ingredientLookup = buildIngredientLookupByItemNo();
+      window.__accountingUomIngredientLookup = ingredientLookup;
+      rows.forEach((row) => {
+        const parsedItemNo = parseAccountingNumber(row.itemNo);
+        if (parsedItemNo !== null) {
+          row.itemName = ingredientLookup.get(parsedItemNo) || "";
+        } else {
+          row.itemName = "";
+        }
+      });
+
+      rows.sort((a, b) => {
+        const aNum = parseAccountingNumber(a.itemNo);
+        const bNum = parseAccountingNumber(b.itemNo);
+        const aHasNum = aNum !== null;
+        const bHasNum = bNum !== null;
+
+        if (aHasNum && bHasNum && aNum !== bNum) {
+          return aNum - bNum;
+        }
+        if (aHasNum && !bHasNum) return -1;
+        if (!aHasNum && bHasNum) return 1;
+
+        const codeCompare = accountingTrim(a.code).localeCompare(accountingTrim(b.code), undefined, { sensitivity: "base" });
+        if (codeCompare !== 0) return codeCompare;
+
+        return accountingString(a.itemNo).localeCompare(accountingString(b.itemNo), undefined, { sensitivity: "base" });
+      });
+
+      state.rows = rows;
+      syncAccountingUomMap();
+      state.isLoaded = true;
+      applyAccountingUomFilter();
+    } catch (err) {
+      console.warn("Failed to load accounting UOM", err);
+      state.isLoaded = false;
+      if (!silent && tbody) {
+        showTableEmpty(tbody, "Unable to load UOM records.");
+      }
+      const empty = document.getElementById("accountingUomEmpty");
+      if (empty) {
+        empty.hidden = true;
+      }
+    }
+  })();
+
+  try {
+    await state.loading;
+  } finally {
+    state.loading = null;
+  }
+  return null;
+}
+
+function renderAccountingUomTable(rows = []) {
+  const tbody = document.getElementById("accountingUomTbody");
+  if (!tbody) return;
+
+  if (!rows.length) {
+    tbody.innerHTML = "";
+    return;
+  }
+
+  const html = rows.map((row) => {
+    const key = accountingString(row._key);
+    return `
+      <tr data-row-key="${escapeHtml(key)}">
+        <td data-label="Item No.">
+          <input type="number" step="0.01" inputmode="decimal" name="itemNo" value="${escapeHtml(accountingString(row.itemNo))}" />
+        </td>
+        <td data-label="Item Name" data-field="itemName">
+          <span class="table-text">${escapeHtml(accountingString(row.itemName) || "—")}</span>
+        </td>
+        <td data-label="UOM">
+          <input type="text" name="code" value="${escapeHtml(accountingString(row.code))}" />
+        </td>
+        <td data-label="Qty / UOM">
+          <input type="number" step="0.01" inputmode="decimal" name="qtyPerUnitOfMeasure" value="${escapeHtml(accountingString(row.qtyPerUnitOfMeasure))}" />
+        </td>
+        <td data-label="Actions">
+          <div class="row-actions">
+            <button type="button" class="save-btn" data-action="save-uom" data-row-key="${escapeHtml(key)}">Save</button>
+            <button type="button" class="ghost-btn" data-action="delete-uom" data-row-key="${escapeHtml(key)}">Delete</button>
+          </div>
+        </td>
+      </tr>`;
+  }).join("");
+
+  tbody.innerHTML = html;
+}
+
+function applyAccountingUomFilter() {
+  const state = getAccountingUomState();
+  const termRaw = accountingTrim(state.search).toLowerCase();
+  const terms = termRaw.length ? termRaw.split(/\s+/).filter(Boolean) : [];
+
+  const filtered = state.rows.filter((row) => {
+    if (row.isDraft) return true;
+    if (!terms.length) return true;
+    const haystack = [
+      row.itemName,
+      row.code,
+      row.itemNo,
+      row.qtyPerUnitOfMeasure
+    ].map((val) => accountingString(val).toLowerCase()).join(" ");
+    return terms.every((term) => haystack.includes(term));
+  });
+
+  state.filtered = filtered;
+  renderAccountingUomTable(filtered);
+
+  const empty = document.getElementById("accountingUomEmpty");
+  if (empty) {
+    empty.hidden = filtered.length > 0 || !state.isLoaded;
+  }
+}
+
+function addAccountingUomDraft() {
+  const state = getAccountingUomState();
+  const key = `draft-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  const draft = {
+    _key: key,
+    id: null,
+    code: "",
+    itemNo: "",
+    itemName: "",
+    qtyPerUnitOfMeasure: "",
+    isDraft: true,
+    dirty: true
+  };
+  state.rows = [draft, ...state.rows];
+  syncAccountingUomMap();
+  state.isLoaded = true;
+  applyAccountingUomFilter();
+  setTimeout(() => focusUomField(key, 'input[name="itemNo"]'), 50);
+}
+
+function focusUomField(rowKey, selector) {
+  try {
+    const escapedKey = accountingEscapeSelector(rowKey);
+    const input = document.querySelector(`#accountingUomTbody tr[data-row-key="${escapedKey}"] ${selector}`);
+    if (input) {
+      input.focus();
+      if (typeof input.select === "function") {
+        input.select();
+      }
+    }
+  } catch (err) {
+    console.debug("focusUomField failed", err);
+  }
+}
+
+function updateUomRowItemNameCell(rowKey, itemName) {
+  try {
+    const escapedKey = accountingEscapeSelector(rowKey);
+    const cell = document.querySelector(`#accountingUomTbody tr[data-row-key="${escapedKey}"] [data-field="itemName"] .table-text`);
+    if (cell) {
+      const text = accountingTrim(itemName);
+      cell.textContent = text || "—";
+    }
+  } catch (err) {
+    console.debug("updateUomRowItemNameCell failed", err);
+  }
+}
+
+async function saveUom(rowKey) {
+  const state = getAccountingUomState();
+  const row = state.byKey.get(rowKey);
+  if (!row) return;
+
+  const code = accountingTrim(row.code);
+  if (!code) {
+    alert("Code is required.");
+    focusUomField(rowKey, 'input[name="code"]');
+    return;
+  }
+
+  const itemNoValue = parseAccountingNumber(row.itemNo);
+  if (itemNoValue === null) {
+    alert("Item number must be numeric.");
+    focusUomField(rowKey, 'input[name="itemNo"]');
+    return;
+  }
+
+  const qtyValue = parseAccountingNumber(row.qtyPerUnitOfMeasure);
+  if (qtyValue === null) {
+    alert("Quantity per UOM must be numeric.");
+    focusUomField(rowKey, 'input[name="qtyPerUnitOfMeasure"]');
+    return;
+  }
+
+  const payload = {
+    code,
+    itemNo: itemNoValue,
+    qtyPerUnitOfMeasure: qtyValue,
+    updatedAt: serverTimestamp()
+  };
+
+  const uomRef = collection(db, UOM_COLL);
+  let docRef = null;
+
+  try {
+    const desiredId = row.id || normalizeRecipeKey(code, row.itemNo);
+    if (desiredId) {
+      docRef = doc(db, UOM_COLL, desiredId);
+      await setDoc(docRef, payload, { merge: true });
+    } else {
+      docRef = await addDoc(uomRef, payload);
+    }
+
+    row.id = docRef.id;
+    row.code = code;
+    row.itemNo = accountingToFixed(itemNoValue);
+    row.itemName = getIngredientNameForItemNo(itemNoValue) || "";
+    row.qtyPerUnitOfMeasure = accountingToFixed(qtyValue);
+    row.isDraft = false;
+    row.dirty = false;
+    updateUomRowItemNameCell(rowKey, row.itemName);
+
+    await loadAccountingUom({ silent: true, force: true });
+    applyAccountingUomFilter();
+  } catch (err) {
+    console.warn("Failed to save UOM", err);
+    alert("Unable to save UOM. Check console for details.");
+  }
+}
+
+async function deleteUom(rowKey) {
+  const state = getAccountingUomState();
+  const row = state.byKey.get(rowKey);
+  if (!row) return;
+
+  const proceed = typeof window.confirm === "function" ? window.confirm("Delete this UOM?") : true;
+  if (!proceed) return;
+
+  try {
+    if (row.id) {
+      await deleteDoc(doc(db, UOM_COLL, row.id));
+    }
+  } catch (err) {
+    console.warn("Failed to delete UOM", err);
+    alert("Unable to delete UOM. Check console for details.");
+    return;
+  }
+
+  state.rows = state.rows.filter((item) => item._key !== rowKey);
+  syncAccountingUomMap();
+  state.isLoaded = true;
+  applyAccountingUomFilter();
+}
+
+function handleAccountingUomInput(event) {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  const rowEl = target.closest("tr[data-row-key]");
+  if (!rowEl) return;
+  const rowKey = rowEl.getAttribute("data-row-key");
+  if (!rowKey) return;
+
+  const state = getAccountingUomState();
+  const row = state.byKey.get(rowKey);
+  if (!row) return;
+
+  const field = target.getAttribute("name");
+  if (!field) return;
+
+  row[field] = target.value;
+  row.dirty = true;
+
+  if (field === "itemNo") {
+    Promise.resolve(typeof _ensureIngredientsLoaded === "function" ? _ensureIngredientsLoaded() : null)
+      .catch((err) => {
+        console.debug("UOM item name lookup skipped", err);
+        return null;
+      })
+      .finally(() => {
+        window.__accountingUomIngredientLookup = buildIngredientLookupByItemNo();
+        row.itemName = getIngredientNameForItemNo(row.itemNo) || "";
+        updateUomRowItemNameCell(rowKey, row.itemName);
+      });
+  }
+}
+
+function handleAccountingUomClick(event) {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  const actionBtn = target.closest("[data-action]");
+  if (!actionBtn) return;
+
+  const action = actionBtn.getAttribute("data-action");
+  const rowKey = actionBtn.getAttribute("data-row-key");
+  if (!rowKey) return;
+
+  if (action === "save-uom") {
+    event.preventDefault();
+    saveUom(rowKey);
+  } else if (action === "delete-uom") {
+    event.preventDefault();
+    deleteUom(rowKey);
+  }
+}
+
+function ensureAccountingUomUI() {
+  const state = getAccountingUomState();
+  if (state.initialized) return;
+
+  const tbody = document.getElementById("accountingUomTbody");
+  if (tbody) {
+    tbody.addEventListener("input", handleAccountingUomInput);
+    tbody.addEventListener("click", handleAccountingUomClick);
+  }
+
+  const search = document.getElementById("accountingUomSearch");
+  if (search && !search.dataset.bound) {
+    search.dataset.bound = "1";
+    search.addEventListener("input", (event) => {
+      state.search = event.target.value || "";
+      applyAccountingUomFilter();
+    });
+  }
+
+  const refreshBtn = document.getElementById("accountingUomRefresh");
+  if (refreshBtn && !refreshBtn.dataset.bound) {
+    refreshBtn.dataset.bound = "1";
+    refreshBtn.addEventListener("click", () => loadAccountingUom({ silent: false, force: true }));
+  }
+
+  const addBtn = document.getElementById("accountingUomAdd");
+  if (addBtn && !addBtn.dataset.bound) {
+    addBtn.dataset.bound = "1";
+    addBtn.addEventListener("click", () => {
+      addAccountingUomDraft();
     });
   }
 
@@ -4295,6 +4839,10 @@ window.loadAccountingIngredients = loadAccountingIngredients;
 window.renderAccountingIngredientsTable = renderAccountingIngredientsTable;
 window.saveIngredient = saveIngredient;
 window.deleteIngredient = deleteIngredient;
+window.loadAccountingUom = loadAccountingUom;
+window.renderAccountingUomTable = renderAccountingUomTable;
+window.saveUom = saveUom;
+window.deleteUom = deleteUom;
 
 window.loadAccountingRecipesPars = loadAccountingRecipesPars;
 window.renderRecipesInfoTable = renderRecipesInfoTable;

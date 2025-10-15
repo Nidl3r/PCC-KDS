@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="app-build-id" content="2025.0011" />
+  <meta name="app-build-id" content="2025.0012" />
   <title>PCC KDS</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
@@ -1263,17 +1263,27 @@ Step 3: …"></textarea>
 
   <div id="accounting-content" style="display:none;">
     <div class="area-tabs">
-      <button onclick="showAccountingTab('production')">Production</button>
-      <button onclick="showAccountingTab('shipments'); loadProductionShipments([]);">Production Shipments</button>
-      <button onclick="showAccountingTab('waste')">Waste</button>
-      <button onclick="showAccountingTab('lunch')">Lunch</button>
-      <!-- NEW -->
-      <button onclick="showAccountingTab('analytics'); showAccountingDashboard();">Analytics</button>
-      <!-- [ACCOUNTING] START buttons -->
-      <button onclick="showAccountingTab('ls-recipes'); ensureAccountingLsRecipesUI();">LS Recipes</button>
-      <button onclick="showAccountingTab('ingredients')">Ingredients</button>
-      <button onclick="showAccountingTab('recipes')">Recipes &amp; Pars</button>
-      <!-- [ACCOUNTING] END buttons -->
+      <button type="button" class="accounting-group-btn" data-group="meal-plan" onclick="showAccountingGroup('meal-plan')">Meal Plan</button>
+      <button type="button" class="accounting-group-btn" data-group="data" onclick="showAccountingGroup('data')">Data</button>
+      <button type="button" class="accounting-group-btn" data-group="items" onclick="showAccountingGroup('items')">Items</button>
+    </div>
+
+    <div class="accounting-subtabs-wrapper">
+      <div class="accounting-subtabs" data-group="meal-plan">
+        <button type="button" class="accounting-subtab" data-accounting-tab="production" onclick="showAccountingTab('production')">Production</button>
+        <button type="button" class="accounting-subtab" data-accounting-tab="shipments" onclick="showAccountingTab('shipments'); loadProductionShipments([]);">Production Shipments</button>
+        <button type="button" class="accounting-subtab" data-accounting-tab="waste" onclick="showAccountingTab('waste')">Waste</button>
+        <button type="button" class="accounting-subtab" data-accounting-tab="lunch" onclick="showAccountingTab('lunch')">Lunch</button>
+      </div>
+      <div class="accounting-subtabs" data-group="data" hidden>
+        <button type="button" class="accounting-subtab" data-accounting-tab="analytics" onclick="showAccountingTab('analytics'); showAccountingDashboard();">Analytics</button>
+        <button type="button" class="accounting-subtab" data-accounting-tab="ls-recipes" onclick="showAccountingTab('ls-recipes'); ensureAccountingLsRecipesUI();">LS Recipes</button>
+      </div>
+      <div class="accounting-subtabs" data-group="items" hidden>
+        <button type="button" class="accounting-subtab" data-accounting-tab="ingredients" onclick="showAccountingTab('ingredients')">Ingredients</button>
+        <button type="button" class="accounting-subtab" data-accounting-tab="uom" onclick="showAccountingTab('uom')">UOM</button>
+        <button type="button" class="accounting-subtab" data-accounting-tab="recipes" onclick="showAccountingTab('recipes')">Recipes &amp; Pars</button>
+      </div>
     </div>
 
     <!-- Production Section -->
@@ -1704,6 +1714,49 @@ Step 3: …"></textarea>
       </div>
     </div>
     <!-- [ACCOUNTING] END ingredients -->
+
+    <!-- [ACCOUNTING] START uom -->
+    <div id="accountingUomTab" class="accounting-section accounting-section--table" data-sec="uom" style="display:none;">
+      <div class="accounting-shell">
+        <div class="accounting-controls" role="toolbar">
+          <div class="accounting-controls__info">
+            <h3 class="accounting-controls__title">Units of Measure</h3>
+            <p class="accounting-controls__hint">Maintain UOM codes and quantities.</p>
+          </div>
+          <div class="accounting-controls__actions">
+            <button type="button" class="ghost-btn" id="accountingUomRefresh">Refresh</button>
+            <button type="button" class="save-btn" id="accountingUomAdd">Add</button>
+            <label class="accounting-controls__search">
+              <span class="visually-hidden">Search UOM</span>
+              <input type="search" id="accountingUomSearch" placeholder="Search UOM…" autocomplete="off" />
+            </label>
+          </div>
+        </div>
+        <div class="table-wrap accounting-table">
+          <table id="accountingUomTable">
+            <colgroup>
+              <col class="col-ing-itemno" />
+              <col class="col-ing-name" />
+              <col class="col-ing-name" />
+              <col class="col-ing-number" />
+              <col class="col-ing-actions" />
+            </colgroup>
+            <thead>
+              <tr>
+                <th scope="col">Item No.</th>
+                <th scope="col">Item Name</th>
+                <th scope="col">UOM</th>
+                <th scope="col">Qty / UOM</th>
+                <th scope="col" class="actions-header">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="accountingUomTbody"></tbody>
+          </table>
+        </div>
+        <p id="accountingUomEmpty" class="accounting-empty" hidden>No UOM records found.</p>
+      </div>
+    </div>
+    <!-- [ACCOUNTING] END uom -->
 
     <!-- [ACCOUNTING] START recipes -->
     <div id="accountingRecipesTab" class="accounting-section accounting-section--table" data-sec="recipes" style="display:none;">
