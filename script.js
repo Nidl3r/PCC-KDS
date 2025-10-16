@@ -8341,7 +8341,9 @@ function getTransferOrderState() {
       eomRows: [],
       eomDom: new Map(),
       nextEomId: 1,
-      eomStatusTimer: null
+      eomStatusTimer: null,
+      eomLoaded: false,
+      eomLoading: null
     };
   }
   return window.__transferOrderState;
@@ -8403,6 +8405,12 @@ function setTransferOrderTab(tabId) {
   });
 
   state.activeTab = finalTab;
+
+  if (finalTab === "eom") {
+    ensureTransferEomLoaded().catch((err) => {
+      console.debug("EOM load skipped:", err);
+    });
+  }
 }
 
 function initTransferEomUI() {
@@ -8421,6 +8429,7 @@ function initTransferEomUI() {
   renderTransferEomRows(state);
   renderTransferEomRecipeOptions();
   syncTransferEomRowsFromRecipes(state);
+  ensureTransferEomLoaded().catch(() => {});
 }
 
 function setTransferEomStatus(message = "", tone = "muted", options = {}) {
@@ -8456,6 +8465,44 @@ function setTransferEomStatus(message = "", tone = "muted", options = {}) {
   }
 }
 
+function ensureTransferEomLoaded(options = {}) {
+  const state = getTransferOrderState();
+  const { force = false } = options || {};
+
+  if (state.eomLoading) return state.eomLoading;
+  if (state.eomLoaded && !force) return Promise.resolve();
+
+  const loadPromise = (async () => {
+    try {
+      const snap = await getDoc(getTransferEomDocRef());
+      const data = snap?.exists?.() ? (snap.data() || {}) : {};
+      const items = Array.isArray(data.items)
+        ? data.items
+        : (data.items && typeof data.items === "object")
+          ? Object.values(data.items)
+          : Array.isArray(data)
+            ? data
+            : [];
+      hydrateTransferEomRows(state, items);
+      state.eomLoaded = true;
+    } catch (err) {
+      console.error("Failed to load EOM counts", err);
+      setTransferEomStatus("Failed to load saved EOM.", "error", { persist: true });
+      // fall back to blank rows
+      if (!state.eomRows.length) {
+        state.eomRows = [];
+        state.nextEomId = 1;
+        renderTransferEomRows(state);
+      }
+    } finally {
+      state.eomLoading = null;
+    }
+  })();
+
+  state.eomLoading = loadPromise;
+  return loadPromise;
+}
+
 function getTransferEomDocRef() {
   const serviceDate = getTodayDate();
   return doc(db, EOM_COUNT_COLLECTION, `${EOM_DOC_PREFIX}|${serviceDate}`);
@@ -8476,6 +8523,8 @@ async function handleTransferEomSaveClick() {
       serviceDate: getTodayDate(),
       updatedAt: serverTimestamp()
     });
+    hydrateTransferEomRows(state, payload);
+    state.eomLoaded = true;
     setTransferEomStatus("EOM saved.", "success");
   } catch (err) {
     console.error("Failed to save EOM counts", err);
@@ -8497,6 +8546,7 @@ async function handleTransferEomResetClick() {
   try {
     await deleteDoc(getTransferEomDocRef());
     resetTransferEomRows();
+    state.eomLoaded = true;
     setTransferEomStatus("EOM cleared.", "success");
   } catch (err) {
     console.error("Failed to clear EOM counts", err);
@@ -8777,6 +8827,43 @@ function syncTransferEomRowsFromRecipes(state) {
 
 function getRecipeCacheForEom() {
   return Array.isArray(window._recipesCache) ? window._recipesCache : [];
+}
+
+function hydrateTransferEomRows(state, items = []) {
+  const list = Array.isArray(items)
+    ? items
+    : (items && typeof items === "object")
+      ? Object.values(items)
+      : [];
+  state.eomRows = [];
+  state.nextEomId = 1;
+
+  list.forEach((item) => {
+    if (!item) return;
+    const row = createTransferEomRow(state);
+    row.description = (item.description ?? item.name ?? "").toString().trim();
+    row.recipeId = item.recipeId || "";
+
+    const qtyRaw = item.qty ?? item.quantity ?? "";
+    if (qtyRaw === "" || qtyRaw === null || qtyRaw === undefined) {
+      row.qty = "";
+    } else if (typeof qtyRaw === "number" && Number.isFinite(qtyRaw)) {
+      row.qty = qtyRaw;
+    } else {
+      const parsed = Number(qtyRaw);
+      row.qty = Number.isFinite(parsed) ? parsed : String(qtyRaw);
+    }
+
+    row.uom = (item.uom || "").toString().trim().toUpperCase();
+    state.eomRows.push(row);
+  });
+
+  const hasBlankRow = state.eomRows.some((r) => !(r.description || "").trim() && (r.qty === "" || r.qty === null || r.qty === undefined));
+  if (!hasBlankRow) {
+    state.eomRows.push(createTransferEomRow(state));
+  }
+
+  renderTransferEomRows(state);
 }
 
 function buildTransferEomSavePayload(state) {
