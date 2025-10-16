@@ -2727,6 +2727,8 @@ function getAccountingRecipesState() {
       parsDisplayCount: 0,
       pendingGuestCountsByVenue: new Map(),
       isSavingAllPars: false,
+      lastParsVenue: "",
+      lastParsColumnCount: 0,
       initialized: false,
       isLoaded: false,
       loading: null
@@ -3942,7 +3944,8 @@ function renderRecipesParsGrid(rows = [], activeVenue = ACCOUNTING_VENUES[0], mo
   const tbody = document.getElementById("accountingRecipesParsBody");
   const headerRow = document.getElementById("accountingRecipesParsHeader");
   const colgroup = document.getElementById("accountingRecipesParsCols");
-  if (!tbody || !headerRow || !colgroup) return 0;
+  const wrap = document.getElementById("accountingRecipesParsWrap");
+  if (!tbody || !headerRow || !colgroup || !wrap) return 0;
 
   const venue = canonicalizeVenueName(activeVenue) || activeVenue;
   const state = getAccountingRecipesState();
@@ -3953,6 +3956,12 @@ function renderRecipesParsGrid(rows = [], activeVenue = ACCOUNTING_VENUES[0], mo
   const isRecipeMode = mode !== "prep";
   const eligible = [];
   const countsSet = new Set();
+
+  if (venue) {
+    wrap.dataset.venue = venue;
+  } else {
+    delete wrap.dataset.venue;
+  }
 
   rows.forEach((row) => {
     const recipeMap = row.pars?.[venue] || {};
@@ -3972,6 +3981,10 @@ function renderRecipesParsGrid(rows = [], activeVenue = ACCOUNTING_VENUES[0], mo
     tbody.innerHTML = "";
     headerRow.innerHTML = "";
     colgroup.innerHTML = "";
+    delete wrap.dataset.columns;
+    state.lastParsVenue = venue;
+    state.lastParsColumnCount = 0;
+    scheduleAccountingParsAutosize();
     return 0;
   }
 
@@ -3990,8 +4003,16 @@ function renderRecipesParsGrid(rows = [], activeVenue = ACCOUNTING_VENUES[0], mo
     tbody.innerHTML = "";
     headerRow.innerHTML = "";
     colgroup.innerHTML = "";
+    delete wrap.dataset.columns;
+    state.lastParsVenue = venue;
+    state.lastParsColumnCount = 0;
+    scheduleAccountingParsAutosize();
     return 0;
   }
+
+  wrap.dataset.columns = String(counts.length);
+  state.lastParsVenue = venue;
+  state.lastParsColumnCount = counts.length;
 
   const headerCells = counts.map((count) => {
     const label = escapeHtml(accountingString(count));
@@ -4077,9 +4098,61 @@ function renderRecipesParsGrid(rows = [], activeVenue = ACCOUNTING_VENUES[0], mo
   }).join("");
 
   tbody.innerHTML = rowsHtml;
+  scheduleAccountingParsAutosize();
   requestAnimationFrame(updateParsConsistencyHighlights);
   return eligible.length;
 }
+
+let accountingParsResizeFrame = 0;
+let accountingParsResizeTimer = null;
+
+function scheduleAccountingParsAutosize() {
+  const state = getAccountingRecipesState();
+  if (!state) return;
+  if (accountingParsResizeFrame) {
+    cancelAnimationFrame(accountingParsResizeFrame);
+  }
+  accountingParsResizeFrame = requestAnimationFrame(runAccountingParsAutosize);
+}
+
+function runAccountingParsAutosize() {
+  accountingParsResizeFrame = 0;
+  const state = getAccountingRecipesState();
+  if (!state || state.activeView !== "pars") return;
+  const wrap = document.getElementById("accountingRecipesParsWrap");
+  const table = document.getElementById("accountingRecipesParsTable");
+  if (!wrap || !table || wrap.hidden) return;
+
+  if (state.lastParsVenue) {
+    wrap.dataset.venue = state.lastParsVenue;
+  } else {
+    delete wrap.dataset.venue;
+  }
+
+  if (state.lastParsColumnCount) {
+    wrap.dataset.columns = String(state.lastParsColumnCount);
+  } else {
+    delete wrap.dataset.columns;
+  }
+
+  wrap.style.setProperty("--pars-scale", "1");
+  const available = wrap.clientWidth;
+  const required = table.scrollWidth;
+  if (!available || !required) return;
+  const rawScale = available / required;
+  const scale = Math.min(1, Math.max(rawScale, 0.78));
+  wrap.style.setProperty("--pars-scale", scale.toFixed(3));
+}
+
+window.addEventListener("resize", () => {
+  if (accountingParsResizeTimer) {
+    clearTimeout(accountingParsResizeTimer);
+  }
+  accountingParsResizeTimer = setTimeout(() => {
+    accountingParsResizeTimer = null;
+    scheduleAccountingParsAutosize();
+  }, 140);
+});
 
 function updateParsConsistencyHighlights() {
   const state = getAccountingRecipesState();

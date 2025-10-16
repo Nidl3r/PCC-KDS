@@ -1656,16 +1656,24 @@ table {
 .col-ing-number { width: 11%; min-width: 110px; }
 .col-ing-actions { width: 16%; min-width: 140px; }
 
-.col-recipes-number { width: 8%; min-width: 84px; }
-.col-recipes-desc   { width: 26%; min-width: 220px; }
+.col-recipes-number { width: 7%; min-width: 72px; }
+.col-recipes-desc   { width: 22%; min-width: 160px; }
 .col-recipes-meta   { width: 11%; min-width: 96px; }
-.col-recipes-actions { width: 11%; min-width: 120px; }
+.col-recipes-actions { width: 10%; min-width: 108px; }
 
 #accountingRecipesParsWrap {
   overflow-x: auto;
   overflow-y: hidden;
   max-width: 100%;
   -webkit-overflow-scrolling: touch;
+  --pars-scale: 1;
+  --pars-scale-clamped: clamp(0.78, var(--pars-scale), 1);
+  --pars-font-size: calc(1rem * var(--pars-scale-clamped));
+}
+
+#accountingRecipesParsWrap table {
+  min-width: 100%;
+  font-size: var(--pars-font-size);
 }
 
 #accountingRecipesParsTable th {
@@ -1685,6 +1693,12 @@ table {
 
 #accountingRecipesParsTable col {
   width: auto !important;
+}
+
+#accountingRecipesParsTable td[data-label="Description"] {
+  text-align: left;
+  white-space: normal;
+  word-break: break-word;
 }
 
 .pars-cell {
@@ -1728,6 +1742,41 @@ table {
   border-color: rgba(37, 99, 235, 0.5);
 }
 
+#accountingRecipesParsWrap th,
+#accountingRecipesParsWrap td {
+  padding: calc(5px * var(--pars-scale-clamped)) calc(7px * var(--pars-scale-clamped));
+}
+
+#accountingRecipesParsWrap .pars-cell {
+  gap: calc(4px * var(--pars-scale-clamped));
+}
+
+#accountingRecipesParsWrap .pars-cell input {
+  padding: calc(6px * var(--pars-scale-clamped));
+  min-height: calc(32px * var(--pars-scale-clamped));
+  font-size: var(--pars-font-size);
+}
+
+#accountingRecipesParsWrap .pars-cell__prep {
+  font-size: calc(0.68rem * var(--pars-scale-clamped));
+}
+
+#accountingRecipesParsWrap .row-actions {
+  gap: calc(6px * var(--pars-scale-clamped));
+  flex-wrap: nowrap;
+}
+
+#accountingRecipesParsWrap .row-actions .save-btn {
+  padding: calc(4px * var(--pars-scale-clamped) + 2px) calc(10px * var(--pars-scale-clamped));
+  font-size: calc(0.9rem * var(--pars-scale-clamped) + 0.05rem);
+  min-height: calc(32px * var(--pars-scale-clamped));
+}
+
+#accountingRecipesParsWrap[data-venue="Gateway"] .col-recipes-desc {
+  width: 20%;
+}
+
+
 .accounting-pars-toolbar {
   display: flex;
   justify-content: flex-end;
@@ -1765,7 +1814,7 @@ table {
   display: inline-flex;
   align-items: center;
   font-weight: 600;
-  gap: 6px;
+  gap: 4px;
 }
 
 .pars-header-add {
