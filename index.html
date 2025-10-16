@@ -1493,12 +1493,15 @@ Step 3: …"></textarea>
       <button id="applyAnalyticsFilters">Apply Filters</button>
       <span id="analyticsLoading" style="display:none;">⏳ loading…</span>
 
-      <!-- Tabs -->
-      <div id="analytics-nav" style="margin-left:auto; display:flex; gap:6px;">
-        <button class="an-tab active" data-analytics="cogs">Food Item COGS</button>
-        <button class="an-tab" data-analytics="timing">Food Timing</button>
-        <button class="an-tab" data-analytics="qty-per-guest">Qty per Guest</button>
-        <button class="an-tab" data-analytics="pan-weight">Pan Weight</button>
+      <div style="margin-left:auto; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+        <div id="analytics-nav" style="display:flex; gap:6px;">
+          <button class="an-tab active" data-analytics="cogs">Food Item COGS</button>
+          <button class="an-tab" data-analytics="timing">Food Timing</button>
+          <button class="an-tab" data-analytics="qty-per-guest">Qty per Guest</button>
+          <button class="an-tab" data-analytics="pan-weight">Pan Weight</button>
+        </div>
+        <button type="button" id="copyAnalyticsTableBtn" class="ghost-btn" style="padding:6px 12px;">Copy Table</button>
+        <span id="copyAnalyticsStatus" role="status" aria-live="polite" style="display:none; font-size:0.85rem; color:#9ca3af;"></span>
       </div>
     </div>
 
@@ -1932,6 +1935,9 @@ Step 3: …"></textarea>
   const tabs = nav?.querySelectorAll('.an-tab') || [];
   const sections = document.querySelectorAll('.analytics-section');
   const cogsOnly = document.querySelectorAll('.side-cogs-only');
+  const copyTableBtn = document.getElementById('copyAnalyticsTableBtn');
+  const copyStatusEl = document.getElementById('copyAnalyticsStatus');
+  let copyStatusTimer = null;
 
   function show(tab){
     sections.forEach(s => s.style.display = (s.dataset.analytics === tab) ? 'block' : 'none');
@@ -1975,6 +1981,64 @@ Step 3: …"></textarea>
       }
     } finally {
       document.getElementById('analyticsLoading').style.display = 'none';
+    }
+  });
+
+  function showCopyStatus(message, isError){
+    if (!copyStatusEl) return;
+    copyStatusEl.textContent = message;
+    copyStatusEl.style.display = 'inline';
+    copyStatusEl.style.color = isError ? '#f87171' : '#9ca3af';
+    if (copyStatusTimer) clearTimeout(copyStatusTimer);
+    copyStatusTimer = setTimeout(() => {
+      copyStatusEl.style.display = 'none';
+      copyStatusEl.textContent = '';
+    }, 3000);
+  }
+
+  function collectActiveTableData(section){
+    if (!section) return '';
+    const tables = Array.from(section.querySelectorAll('table')).filter(table => table.offsetParent !== null);
+    if (!tables.length) return '';
+
+    const sanitize = (value) => value.replace(/\s+/g, ' ').trim();
+
+    return tables.map(table => {
+      const rows = Array.from(table.querySelectorAll('tr'));
+      const tableLines = rows.map(row => {
+        const cells = Array.from(row.querySelectorAll('th,td')).map(cell => sanitize(cell.textContent || ''));
+        if (cells.every(cell => cell.length === 0)) return '';
+        return cells.join('\t');
+      }).filter(line => line.length > 0);
+      return tableLines.join('\n');
+    }).filter(block => block.length > 0).join('\n\n');
+  }
+
+  copyTableBtn?.addEventListener('click', async () => {
+    const activeTab = [...tabs].find(t => t.classList.contains('active'))?.dataset.analytics || 'cogs';
+    const section = document.querySelector(`.analytics-section[data-analytics="${activeTab}"]`);
+
+    if (!section || section.style.display === 'none'){
+      showCopyStatus('No visible table to copy.', true);
+      return;
+    }
+    if (!navigator?.clipboard?.writeText){
+      showCopyStatus('Clipboard not supported in this browser.', true);
+      return;
+    }
+
+    const text = collectActiveTableData(section);
+    if (!text){
+      showCopyStatus('Nothing to copy for this tab.', true);
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(text);
+      showCopyStatus('Table copied to clipboard.', false);
+    } catch (err){
+      console.error('Failed to copy analytics table', err);
+      showCopyStatus('Unable to copy table.', true);
     }
   });
 
