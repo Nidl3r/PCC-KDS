@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="app-build-id" content="2025.0013" />
+  <meta name="app-build-id" content="2025.0014" />
   <title>PCC KDS</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
@@ -1789,11 +1789,6 @@ Step 3: …"></textarea>
           <button type="button" class="accounting-venue-tab" data-venue="Concessions">Concessions</button>
         </div>
 
-        <div class="accounting-pars-toggle" id="accountingRecipesParsMode" role="group" aria-label="Pars data source" hidden>
-          <button type="button" class="accounting-pars-toggle__btn accounting-pars-toggle__btn--active" data-pars-mode="recipe">Recipe Pars</button>
-          <button type="button" class="accounting-pars-toggle__btn" data-pars-mode="prep">Prep Pars</button>
-        </div>
-
         <form id="accountingRecipeAddForm" class="accounting-add-form" autocomplete="off" hidden>
           <fieldset class="accounting-add-fieldset">
             <legend class="accounting-add-legend">Add New Recipe</legend>
@@ -1912,8 +1907,21 @@ Step 3: …"></textarea>
 
         <div class="table-wrap accounting-table" id="accountingRecipesParsWrap" hidden>
           <div class="accounting-pars-toolbar">
-            <button type="button" class="save-btn accounting-pars-save-all" id="accountingRecipesSaveAll" hidden>Save All Pars</button>
-            <span id="accountingRecipesSaveAllStatus" class="accounting-pars-status" role="status" aria-live="polite"></span>
+            <div class="accounting-pars-toolbar__left">
+              <div class="accounting-pars-toggle" id="accountingRecipesParsMode" role="group" aria-label="Pars data source" data-mode="recipe" hidden>
+                <button type="button" class="accounting-pars-toggle__btn accounting-pars-toggle__btn--active" data-pars-mode="recipe">Recipe Pars</button>
+                <button type="button" class="accounting-pars-toggle__btn" data-pars-mode="prep">Prep Pars</button>
+                <span class="accounting-pars-toggle__thumb" aria-hidden="true"></span>
+              </div>
+            </div>
+            <div class="accounting-pars-toolbar__right">
+              <div class="accounting-pars-loading" id="accountingParsSuggestionLoading" hidden aria-live="polite">
+                <span class="accounting-pars-loading__dot" aria-hidden="true"></span>
+                <span class="accounting-pars-loading__text">Loading suggestions…</span>
+              </div>
+              <button type="button" class="save-btn accounting-pars-save-all" id="accountingRecipesSaveAll" hidden>Save All Pars</button>
+              <span id="accountingRecipesSaveAllStatus" class="accounting-pars-status" role="status" aria-live="polite"></span>
+            </div>
           </div>
           <table id="accountingRecipesParsTable">
             <colgroup id="accountingRecipesParsCols"></colgroup>

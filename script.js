@@ -950,6 +950,12 @@ function paintGuestCountsScreenFromCache() {
   // 🔄 Hydrate guest count selects/notes from Firestore and keep them live
   // (uses the loadGuestCounts() and listenToGuestCountsLive() you added earlier)
   try {
+    ensureGuestCountSelectsFromRecipePars();
+  } catch (e) {
+    console.debug("guest count option preload skipped:", e);
+  }
+
+  try {
     typeof loadGuestCounts === "function" && loadGuestCounts();
     typeof listenToGuestCountsLive === "function" && listenToGuestCountsLive();
   } catch (e) {
@@ -2208,6 +2214,7 @@ const ACCOUNTING_UOM_QTY_KEYS = ["qtyPerUnitOfMeasure", "qtyPerUnit", "qtyPerUOM
 const ACCOUNTING_RECIPE_NUMERIC_FIELDS = ["panWeight", "cookTime", "cost"];
 const ACCOUNTING_RECIPE_VENUES = ["Aloha", "Ohana", "Gateway", "Concessions"];
 const ACCOUNTING_RECIPE_PAR_GUEST_COUNTS = ["200", "250", "300", "350"];
+const GUEST_COUNT_SCREEN_VENUES = ["Aloha", "Ohana", "Gateway"];
 
 function buildVenueMapFromForm(form, prefix, errors) {
   const map = {};
@@ -3866,6 +3873,13 @@ async function loadAccountingRecipesPars(options = {}) {
       syncAccountingRecipesMap();
       state.isLoaded = true;
 
+      try {
+        const optionSets = buildGuestCountOptionSetsFromRows(rows);
+        applyGuestCountOptionSets(optionSets);
+      } catch (err) {
+        console.debug("Guest count select sync skipped:", err);
+      }
+
       await loadPrepParsOnce().catch((err) => {
         console.debug("Prep pars preload skipped", err);
       });
@@ -3982,6 +3996,7 @@ function renderRecipesParsGrid(rows = [], activeVenue = ACCOUNTING_VENUES[0], mo
     headerRow.innerHTML = "";
     colgroup.innerHTML = "";
     delete wrap.dataset.columns;
+    setAccountingParsSuggestionLoading(false);
     state.lastParsVenue = venue;
     state.lastParsColumnCount = 0;
     scheduleAccountingParsAutosize();
@@ -4010,12 +4025,22 @@ function renderRecipesParsGrid(rows = [], activeVenue = ACCOUNTING_VENUES[0], mo
     return 0;
   }
 
-  wrap.dataset.columns = String(counts.length);
-  state.lastParsVenue = venue;
-  state.lastParsColumnCount = counts.length;
+  const countInfos = counts.map((count) => {
+    const key = accountingString(count);
+    const numericCandidate = Number(key);
+    return {
+      raw: count,
+      key,
+      numeric: Number.isFinite(numericCandidate) ? numericCandidate : null,
+    };
+  });
 
-  const headerCells = counts.map((count) => {
-    const label = escapeHtml(accountingString(count));
+  wrap.dataset.columns = String(countInfos.length);
+  state.lastParsVenue = venue;
+  state.lastParsColumnCount = countInfos.length;
+
+  const headerCells = countInfos.map(({ key }) => {
+    const label = escapeHtml(key);
     if (!isRecipeMode) {
       return `<th scope="col" data-count="${label}">${label}</th>`;
     }
@@ -4040,20 +4065,34 @@ function renderRecipesParsGrid(rows = [], activeVenue = ACCOUNTING_VENUES[0], mo
   const colParts = [
     '<col class="col-recipes-number" />',
     '<col class="col-recipes-desc" />',
-    ...counts.map(() => '<col />')
+    ...countInfos.map(() => '<col />')
   ];
   colParts.push('<col class="col-recipes-actions" />');
   colgroup.innerHTML = colParts.join("");
+
+  const suggestionContext = !isRecipeMode ? {
+    venue,
+    counts: countInfos,
+    rows: [],
+  } : null;
 
   const rowsHtml = eligible.map(({ row, recipeMap, prepEntry }) => {
     const key = accountingString(row._key);
     const recipeNo = accountingString(row.recipeNo);
     const description = accountingString(row.description);
+    const normalizedRecipeNo = normalizeRecipeNo(recipeNo);
     const venueMap = recipeMap || {};
     const prepCounts = prepEntry?.counts || {};
 
-    const cellsHtml = counts.map((count) => {
-      const countKey = accountingString(count);
+    if (suggestionContext && normalizedRecipeNo) {
+      suggestionContext.rows.push({
+        rowKey: key,
+        recipeNo,
+        normalizedRecipeNo,
+      });
+    }
+
+    const cellsHtml = countInfos.map(({ key: countKey }) => {
       const recipeValueRaw = venueMap?.[countKey];
       const prepValueRaw = prepCounts?.[countKey];
       const recipeValue = accountingString(recipeValueRaw ?? "");
@@ -4064,6 +4103,15 @@ function renderRecipesParsGrid(rows = [], activeVenue = ACCOUNTING_VENUES[0], mo
       const subLabelValue = mode === "prep"
         ? (recipeDisplay ? `Recipe: ${escapeHtml(recipeDisplay)}` : "Recipe: —")
         : (prepDisplay ? `Prep: ${escapeHtml(prepDisplay)}` : "Prep: —");
+      const suggestionHtml = mode === "prep" && normalizedRecipeNo
+        ? `<div class="pars-cell__suggested" data-suggest-row="${escapeHtml(normalizedRecipeNo)}" data-suggest-count="${escapeHtml(countKey)}">Suggested: —</div>`
+        : "";
+      const metaHtml = mode === "prep"
+        ? `<div class="pars-cell__meta">
+            <div class="pars-cell__prep">${subLabelValue}</div>
+            ${suggestionHtml}
+          </div>`
+        : `<div class="pars-cell__prep">${subLabelValue}</div>`;
       const isPending = isRecipeMode && pendingSet.has(countKey);
       const requiresValue = isPending && !accountingHasValue(recipeValueRaw);
       const cellClasses = ["pars-cell"];
@@ -4076,7 +4124,7 @@ function renderRecipesParsGrid(rows = [], activeVenue = ACCOUNTING_VENUES[0], mo
                    data-row-key="${escapeHtml(key)}"
                    data-count="${escapeHtml(countKey)}"
                    value="${escapeHtml(accountingString(inputValue))}"${ariaRequired} />
-            <div class="pars-cell__prep">${subLabelValue}</div>
+            ${metaHtml}
           </div>
         </td>`;
     }).join("");
@@ -4098,9 +4146,127 @@ function renderRecipesParsGrid(rows = [], activeVenue = ACCOUNTING_VENUES[0], mo
   }).join("");
 
   tbody.innerHTML = rowsHtml;
+  if (suggestionContext && suggestionContext.rows.length && countInfos.length) {
+    requestAccountingPrepSuggestions({
+      tbody,
+      venue,
+      counts: countInfos,
+      rows: suggestionContext.rows,
+    });
+  } else {
+    setAccountingParsSuggestionLoading(false);
+  }
   scheduleAccountingParsAutosize();
   requestAnimationFrame(updateParsConsistencyHighlights);
   return eligible.length;
+}
+
+let accountingPrepSuggestionRequestId = 0;
+const ACCOUNTING_PREP_SUGGESTION_MIN_DATE = "2025-09-01";
+
+function isSuggestionDateEligible(dateStr) {
+  if (!dateStr) return false;
+  const normalized = String(dateStr).slice(0, 10);
+  return normalized >= ACCOUNTING_PREP_SUGGESTION_MIN_DATE;
+}
+
+function resetAccountingPrepSuggestionElements(tbody) {
+  if (!tbody) return;
+  tbody.querySelectorAll(".pars-cell__suggested").forEach((el) => {
+    el.textContent = "Suggested: —";
+    el.removeAttribute("title");
+    delete el.dataset.hasSuggestion;
+  });
+}
+
+function setAccountingParsSuggestionLoading(isLoading) {
+  const indicator = document.getElementById("accountingParsSuggestionLoading");
+  if (!indicator) return;
+  indicator.hidden = !isLoading;
+}
+
+function requestAccountingPrepSuggestions(context = {}) {
+  const { tbody, venue, counts, rows } = context;
+  if (!tbody || !Array.isArray(counts) || !Array.isArray(rows) || !rows.length) {
+    resetAccountingPrepSuggestionElements(tbody);
+    setAccountingParsSuggestionLoading(false);
+    return;
+  }
+
+  const recipeSet = new Set();
+  rows.forEach((row) => {
+    const key = normalizeRecipeNo(row?.normalizedRecipeNo || row?.recipeNo);
+    if (key) recipeSet.add(key);
+  });
+
+  resetAccountingPrepSuggestionElements(tbody);
+
+  if (!recipeSet.size) {
+    setAccountingParsSuggestionLoading(false);
+    return;
+  }
+
+  const numericCounts = counts.filter((info) => info && Number.isFinite(info.numeric));
+  if (!numericCounts.length) {
+    setAccountingParsSuggestionLoading(false);
+    return;
+  }
+
+  const requestId = ++accountingPrepSuggestionRequestId;
+  const today = getTodayDate();
+  setAccountingParsSuggestionLoading(true);
+
+  (async () => {
+    const suggestions = new Map();
+    for (const info of numericCounts) {
+      try {
+        const statsMap = await fetchRecipeHistoryForGuestCount(venue, info.numeric, recipeSet, {
+          excludeDates: [today],
+        });
+        if (requestId !== accountingPrepSuggestionRequestId) return;
+        statsMap.forEach((stats, recipeKey) => {
+          if (!suggestions.has(recipeKey)) {
+            suggestions.set(recipeKey, {});
+          }
+          suggestions.get(recipeKey)[info.key] = stats;
+        });
+      } catch (err) {
+        console.warn("requestAccountingPrepSuggestions query failed:", err);
+      }
+    }
+
+    if (requestId !== accountingPrepSuggestionRequestId) {
+      return;
+    }
+
+    tbody.querySelectorAll(".pars-cell__suggested").forEach((el) => {
+      const recipeKey = normalizeRecipeNo(el.dataset.suggestRow);
+      const countKey = accountingString(el.dataset.suggestCount);
+      const stats = recipeKey ? suggestions.get(recipeKey)?.[countKey] : null;
+      if (stats && Number.isFinite(stats.suggested)) {
+        const suggestedWhole = Math.ceil(Number(stats.suggested));
+        const suggestedLabel = String(suggestedWhole);
+        const meanLabel = formatPrepNumber(stats.mean);
+        const stdLabel = formatPrepNumber(stats.stdDev);
+        el.textContent = `Suggested: ${suggestedLabel}`;
+        el.title = `Average ${meanLabel}, std dev ${stdLabel}, n=${stats.sampleSize}`;
+        el.dataset.hasSuggestion = "true";
+      } else {
+        el.textContent = "Suggested: —";
+        el.removeAttribute("title");
+        delete el.dataset.hasSuggestion;
+      }
+    });
+
+    if (requestId === accountingPrepSuggestionRequestId) {
+      setAccountingParsSuggestionLoading(false);
+    }
+  })().catch((err) => {
+    if (requestId === accountingPrepSuggestionRequestId) {
+      setAccountingParsSuggestionLoading(false);
+    }
+    console.warn("requestAccountingPrepSuggestions failed:", err);
+  });
 }
 
 let accountingParsResizeFrame = 0;
@@ -4708,6 +4874,190 @@ function removeGuestCountOptionFromSelects(countValue) {
   });
 }
 
+function sortGuestCountValues(values = []) {
+  return values
+    .map((val) => accountingString(val))
+    .filter((val) => val.length > 0)
+    .sort((a, b) => {
+      const an = Number(a);
+      const bn = Number(b);
+      if (Number.isFinite(an) && Number.isFinite(bn)) {
+        return an - bn;
+      }
+      return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+    });
+}
+
+function buildGuestCountOptionSetsFromRows(rows = []) {
+  const optionSets = new Map();
+  GUEST_COUNT_SCREEN_VENUES.forEach((venue) => optionSets.set(venue, new Set()));
+
+  rows.forEach((row) => {
+    const pars = row?.pars;
+    if (!pars || typeof pars !== "object") return;
+    Object.entries(pars).forEach(([venueName, countsObj]) => {
+      const canonicalVenue = canonicalizeVenueName(venueName) || accountingString(venueName);
+      if (!canonicalVenue || !optionSets.has(canonicalVenue)) return;
+      const set = optionSets.get(canonicalVenue);
+      Object.keys(countsObj || {}).forEach((guestKey) => {
+        const normalized = accountingString(guestKey);
+        if (normalized) set.add(normalized);
+      });
+    });
+  });
+
+  return optionSets;
+}
+
+function applyGuestCountOptionSets(optionSets) {
+  if (!(optionSets instanceof Map)) return;
+
+  const selectsByVenue = {
+    Aloha: document.getElementById("count-Aloha"),
+    Ohana: document.getElementById("count-Ohana"),
+    Gateway: document.getElementById("count-Gateway")
+  };
+
+  GUEST_COUNT_SCREEN_VENUES.forEach((venue) => {
+    const select = selectsByVenue[venue];
+    if (!select) return;
+
+    const baseSet = optionSets.get(venue) instanceof Set ? optionSets.get(venue) : new Set();
+    const combined = new Set(baseSet);
+
+    const saved = window?.guestCountsSaved?.[venue];
+    if (Number.isFinite(saved)) {
+      combined.add(accountingString(saved));
+    }
+
+    const currentValue = accountingString(select.value);
+    if (currentValue) {
+      combined.add(currentValue);
+    }
+
+    if (!combined.size) {
+      Array.from(select.options || []).forEach((opt) => {
+        const normalized = accountingString(opt.value);
+        if (normalized) combined.add(normalized);
+      });
+    }
+
+    const values = sortGuestCountValues(Array.from(combined));
+    const doc = select.ownerDocument || document;
+    const fragment = doc.createDocumentFragment();
+    const seen = new Set();
+
+    values.forEach((value) => {
+      const normalized = accountingString(value);
+      if (!normalized || seen.has(normalized)) return;
+      seen.add(normalized);
+      const option = doc.createElement("option");
+      option.value = normalized;
+      option.textContent = normalized;
+      fragment.appendChild(option);
+    });
+
+    const previous = select.value;
+    select.innerHTML = "";
+    select.appendChild(fragment);
+
+    const match = values.find((val) => accountingString(val) === currentValue);
+    if (match) {
+      select.value = match;
+    } else if (values.length) {
+      const prevNormalized = accountingString(previous);
+      const fallback = values.find((val) => accountingString(val) === prevNormalized);
+      select.value = fallback || values[0];
+    } else {
+      select.value = "";
+    }
+  });
+
+  const union = new Set(ACCOUNTING_RECIPE_PAR_GUEST_COUNTS.map((val) => accountingString(val)));
+  optionSets.forEach((set) => {
+    if (!(set instanceof Set)) return;
+    set.forEach((value) => {
+      const normalized = accountingString(value);
+      if (normalized) union.add(normalized);
+    });
+  });
+  const merged = sortGuestCountValues(Array.from(union));
+  ACCOUNTING_RECIPE_PAR_GUEST_COUNTS.length = 0;
+  merged.forEach((value) => ACCOUNTING_RECIPE_PAR_GUEST_COUNTS.push(value));
+
+  const snapshot = {};
+  optionSets.forEach((set, venue) => {
+    if (!(set instanceof Set)) return;
+    snapshot[venue] = sortGuestCountValues(Array.from(set));
+  });
+  window.__guestCountOptionsByVenue = snapshot;
+}
+
+let guestCountParsPromise = null;
+
+async function ensureGuestCountSelectsFromRecipePars(options = {}) {
+  if (guestCountParsPromise && !options?.force) {
+    return guestCountParsPromise;
+  }
+
+  guestCountParsPromise = (async () => {
+    const state = typeof getAccountingRecipesState === "function" ? getAccountingRecipesState() : null;
+    if (!options?.force && state?.rows?.length) {
+      const optionSets = buildGuestCountOptionSetsFromRows(state.rows);
+      applyGuestCountOptionSets(optionSets);
+      return optionSets;
+    }
+
+    const optionSets = new Map();
+    GUEST_COUNT_SCREEN_VENUES.forEach((venue) => optionSets.set(venue, new Set()));
+
+    const processDocData = (data) => {
+      if (!data || typeof data !== "object") return;
+      const pars = data.pars;
+      if (!pars || typeof pars !== "object") return;
+      Object.entries(pars).forEach(([venueName, countsObj]) => {
+        const canonicalVenue = canonicalizeVenueName(venueName) || accountingString(venueName);
+        if (!canonicalVenue || !optionSets.has(canonicalVenue)) return;
+        const set = optionSets.get(canonicalVenue);
+        Object.keys(countsObj || {}).forEach((guestKey) => {
+          const normalized = accountingString(guestKey);
+          if (normalized) set.add(normalized);
+        });
+      });
+    };
+
+    try {
+      const [primarySnap, legacySnap] = await Promise.all([
+        getDocs(recipesCollection()).catch((err) => {
+          console.warn("Failed to load recipes for guest count options (primary):", err);
+          return null;
+        }),
+        getDocs(legacyRecipesCollection()).catch((err) => {
+          console.debug("Legacy recipes unavailable for guest count options:", err);
+          return null;
+        })
+      ]);
+
+      if (primarySnap) {
+        primarySnap.forEach((docSnap) => processDocData(docSnap.data() || {}));
+      }
+      if (legacySnap) {
+        legacySnap.forEach((docSnap) => processDocData(docSnap.data() || {}));
+      }
+
+      applyGuestCountOptionSets(optionSets);
+      return optionSets;
+    } catch (err) {
+      console.warn("Failed to refresh guest count options from recipes:", err);
+      return null;
+    } finally {
+      guestCountParsPromise = null;
+    }
+  })();
+
+  return guestCountParsPromise;
+}
+
 function updatePendingGuestCountCompletion(venue, countKey) {
   const state = getAccountingRecipesState();
   const pendingMap = state.pendingGuestCountsByVenue;
@@ -5045,6 +5395,9 @@ function setAccountingRecipesActiveView(view) {
   if (infoWrap) infoWrap.hidden = normalized !== "info";
   if (parsWrap) parsWrap.hidden = normalized !== "pars";
   if (venueTabs) venueTabs.hidden = normalized !== "pars";
+  if (normalized !== "pars") {
+    setAccountingParsSuggestionLoading(false);
+  }
 
   updateAccountingRecipeSubtabs();
   updateAccountingVenueTabs();
@@ -5078,6 +5431,7 @@ function updateAccountingParsModeToggle() {
   if (!wrap) return;
   const isParsView = state.activeView === "pars";
   wrap.hidden = !isParsView;
+  wrap.dataset.mode = state.parsMode;
   wrap.querySelectorAll(".accounting-pars-toggle__btn").forEach((btn) => {
     const mode = btn.getAttribute("data-pars-mode") === "prep" ? "prep" : "recipe";
     const isActive = mode === state.parsMode;
@@ -5445,6 +5799,7 @@ window.mergeRecipeDocs = mergeRecipeDocs;
 window.loadPrepParsOnce = loadPrepParsOnce;
 window.getPrepRecipeKey = getPrepRecipeKey;
 window.getPrepVenueKey = getPrepVenueKey;
+window.ensureGuestCountSelectsFromRecipePars = ensureGuestCountSelectsFromRecipePars;
 // [ACCOUNTING] END Accounting Ingredients & Recipes/Pars
 
 
@@ -5769,7 +6124,9 @@ async function fetchCurrentLeftovers(serviceDate) {
   return leftovers;
 }
 
-function extractOrderPans(order) {
+function extractOrderPans(order, options = {}) {
+  const { treatAddonLbAsOne = false } = options || {};
+  const orderType = String(order?.type || "").toLowerCase();
   const candidates = [
     order.pansSent,
     order.pans,
@@ -5784,9 +6141,22 @@ function extractOrderPans(order) {
 
   const qtyCandidate = Number(order.qty ?? order.sendQty ?? 0);
   const uom = String(order.uom || order.unit || "").toLowerCase();
+
+  if (treatAddonLbAsOne && orderType === "addon") {
+    if (/(^|\s)(lb|lbs|pound|pounds)(\b|s)/.test(uom)) {
+      return qtyCandidate > 0 ? 1 : 0;
+    }
+    if (/(^|\s)(ea|each)(\b|s)/.test(uom)) {
+      return Number.isFinite(qtyCandidate) && qtyCandidate > 0 ? qtyCandidate : 0;
+    }
+  }
+
   if (Number.isFinite(qtyCandidate) && qtyCandidate > 0) {
     if (!uom || /(pan|pans|tray|ea|each|ct)/.test(uom)) {
       return qtyCandidate;
+    }
+    if (treatAddonLbAsOne && orderType === "addon" && !uom) {
+      return 1;
     }
   }
 
@@ -5841,7 +6211,7 @@ async function fetchSentTotalsForPrepPars(dateStr, recipeIndex = {}) {
         const data = docSnap.data() || {};
         const prepId = matchPrepId(data);
         if (!prepId) return;
-        const qty = extractOrderPans(data);
+        const qty = extractOrderPans(data, { treatAddonLbAsOne: true });
         if (!(qty > 0)) return;
         const venue = canonicalizeVenueName(data.venue);
         const entry = ensureEntry(prepId);
@@ -5870,7 +6240,7 @@ async function fetchSentTotalsForPrepPars(dateStr, recipeIndex = {}) {
           const data = docSnap.data() || {};
           const prepId = matchPrepId(data);
           if (!prepId) return;
-          const qty = extractOrderPans(data);
+          const qty = extractOrderPans(data, { treatAddonLbAsOne: true });
           if (!(qty > 0)) return;
           const venue = canonicalizeVenueName(data.venue);
           const entry = ensureEntry(prepId);
@@ -5885,6 +6255,129 @@ async function fetchSentTotalsForPrepPars(dateStr, recipeIndex = {}) {
   }
 
   return totals;
+}
+
+function computeMeanAndStd(values) {
+  if (!Array.isArray(values) || values.length === 0) return null;
+  const count = values.length;
+  if (count === 0) return null;
+  const mean = values.reduce((sum, value) => sum + Number(value || 0), 0) / count;
+  let variance = 0;
+  for (const value of values) {
+    const num = Number(value || 0);
+    variance += Math.pow(num - mean, 2);
+  }
+  variance /= count;
+  const stdDev = Math.sqrt(variance);
+  return {
+    mean,
+    stdDev,
+    suggested: mean + stdDev,
+    sampleSize: count,
+  };
+}
+
+async function fetchRecipeHistoryForGuestCount(venue, guestCount, recipeNos, options = {}) {
+  const results = new Map();
+  const venueField = typeof venue === "string" ? venue.trim() : "";
+  const countNum = Number(guestCount);
+  if (!venueField || !Number.isFinite(countNum) || countNum <= 0) {
+    return results;
+  }
+
+  const normalizedRecipeNos = new Set();
+  if (recipeNos && typeof recipeNos.forEach === "function") {
+    recipeNos.forEach((recipeNo) => {
+      const normalized = normalizeRecipeNo(recipeNo);
+      if (normalized) {
+        normalizedRecipeNos.add(normalized);
+      }
+    });
+  }
+  if (!normalizedRecipeNos.size) return results;
+
+  const excludeDates = new Set();
+  const rawExclude = Array.isArray(options.excludeDates) ? options.excludeDates : [];
+  rawExclude.forEach((d) => {
+    if (d) excludeDates.add(String(d));
+  });
+
+  try {
+    const guestQuery = query(
+      collection(db, "guestCounts"),
+      where(venueField, "==", countNum)
+    );
+    const guestSnap = await getDocs(guestQuery);
+    const matchingDates = [];
+    guestSnap.forEach((docSnap) => {
+      const dateId = String(docSnap.id || "");
+      if (!dateId || !isSuggestionDateEligible(dateId)) return;
+      if (excludeDates.has(dateId)) return;
+      matchingDates.push(dateId);
+    });
+
+    if (!matchingDates.length) return results;
+
+    const perRecipeValues = new Map();
+    normalizedRecipeNos.forEach((recipeNo) => perRecipeValues.set(recipeNo, []));
+
+    const dateChunks = chunkArray(matchingDates, 10);
+    const typeFilters = ["starting-par", "addon"];
+    const ordersRef = collection(db, "orders");
+
+    for (const chunk of dateChunks) {
+      if (!chunk.length) continue;
+      let orderSnap;
+      try {
+        orderSnap = await getDocs(query(
+          ordersRef,
+          where("venue", "==", venueField),
+          where("date", "in", chunk),
+          where("type", "in", typeFilters)
+        ));
+      } catch (err) {
+        console.warn("fetchRecipeHistoryForGuestCount orders query failed:", err);
+        continue;
+      }
+
+      const perDateRecipeTotals = new Map();
+      orderSnap.forEach((docSnap) => {
+        const data = docSnap.data() || {};
+        const recipeKey = normalizeRecipeNo(data.recipeNo);
+        if (!recipeKey || !normalizedRecipeNos.has(recipeKey)) return;
+        const orderDate = String(data.date || "");
+        if (!orderDate || !isSuggestionDateEligible(orderDate)) return;
+        const amount = extractOrderPans(data, { treatAddonLbAsOne: true });
+        if (!Number.isFinite(amount) || amount < 0) return;
+        const mapKey = `${orderDate}|${recipeKey}`;
+        perDateRecipeTotals.set(mapKey, (perDateRecipeTotals.get(mapKey) || 0) + amount);
+      });
+
+      chunk.forEach((dateStr) => {
+        normalizedRecipeNos.forEach((recipeKey) => {
+          const total = perDateRecipeTotals.get(`${dateStr}|${recipeKey}`) || 0;
+          perRecipeValues.get(recipeKey).push(total);
+        });
+      });
+    }
+
+    perRecipeValues.forEach((values, recipeKey) => {
+      const stats = computeMeanAndStd(values);
+      if (!stats) return;
+      results.set(recipeKey, {
+        mean: stats.mean,
+        stdDev: stats.stdDev,
+        suggested: stats.suggested,
+        sampleSize: stats.sampleSize,
+        guestCount: countNum,
+        venue: venueField,
+      });
+    });
+  } catch (err) {
+    console.warn("fetchRecipeHistoryForGuestCount failed:", err);
+  }
+
+  return results;
 }
 
 function parsePrepNumber(value) {
@@ -6067,7 +6560,7 @@ async function fetchSentTotalsForSinglePrep(dateStr, { recipeId, recipeNo } = {}
 
   const ordersRef = collection(db, "orders");
   const addOrder = (data, key) => {
-    const qty = extractOrderPans(data);
+    const qty = extractOrderPans(data, { treatAddonLbAsOne: true });
     if (!(qty > 0)) return;
     const venue = canonicalizeVenueName(data.venue);
     totals.total += qty;
@@ -6126,7 +6619,6 @@ function renderPrepParsTable(items, tbody) {
       : Array.isArray(it.venues) ? it.venues : [];
     const leftoverValue = Number.isFinite(Number(it.leftover)) ? String(Number(it.leftover)) : "";
     const needPlaceholder = Number.isFinite(Number(it.needToPrep)) ? formatPrepNumber(it.needToPrep) : "0";
-
     tr.innerHTML = `
       <td data-label="Venue">${escapeHtml(it.venueLabel || "")}</td>
       <td data-label="Area">${titleCase(it.category)}</td>
