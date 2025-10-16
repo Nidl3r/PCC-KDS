@@ -801,7 +801,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const setState = (collapsed) => {
       btn.setAttribute("aria-expanded", String(!collapsed));
-      btn.textContent = collapsed ? "Show" : "Hide";
+      btn.textContent = collapsed ? "+" : "-";
+      const actionLabel = collapsed ? "Expand section" : "Collapse section";
+      btn.setAttribute("aria-label", actionLabel);
+      btn.setAttribute("title", actionLabel);
     };
 
     setState(screen.classList.contains("collapsed"));
@@ -8405,6 +8408,12 @@ function setTransferOrderTab(tabId) {
   });
 
   state.activeTab = finalTab;
+
+  const resetBtn = document.getElementById("transferOrderResetBtn");
+  if (resetBtn) {
+    const show = finalTab === "order";
+    resetBtn.hidden = !show;
+  }
 
   if (finalTab === "eom") {
     ensureTransferEomLoaded().catch((err) => {

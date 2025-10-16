@@ -164,7 +164,7 @@
       <!--<button class="area-tab" data-area="aloha" data-sec="waste" onclick="showAreaSection('aloha','waste')">Waste</button> -->
       <button class="area-tab" data-area="aloha" data-sec="returns" onclick="showAreaSection('aloha','returns')">Returns</button>
     </div>
-    <button type="button" class="collapse-toggle" data-target="aloha" aria-expanded="true">Hide</button>
+    <button type="button" class="collapse-toggle" data-target="aloha" aria-expanded="true" aria-label="Collapse section" title="Collapse section">-</button>
   </div>
 
 <div class="collapsible-content" data-screen="aloha">
@@ -336,7 +336,7 @@
       <!--<button class="area-tab" data-area="ohana" data-sec="waste" onclick="showAreaSection('ohana','waste')">Waste</button> -->
       <button class="area-tab" data-area="ohana" data-sec="returns" onclick="showAreaSection('ohana','returns')">Returns</button>
     </div>
-    <button type="button" class="collapse-toggle" data-target="ohana" aria-expanded="true">Hide</button>
+    <button type="button" class="collapse-toggle" data-target="ohana" aria-expanded="true" aria-label="Collapse section" title="Collapse section">-</button>
   </div>
 
 <div class="collapsible-content" data-screen="ohana">
@@ -499,7 +499,7 @@
      <!-- <button class="area-tab" data-area="gateway" data-sec="waste" onclick="showAreaSection('gateway','waste')">Waste</button> -->
       <button class="area-tab" data-area="gateway" data-sec="returns" onclick="showAreaSection('gateway','returns')">Returns</button>
     </div>
-    <button type="button" class="collapse-toggle" data-target="gateway" aria-expanded="true">Hide</button>
+    <button type="button" class="collapse-toggle" data-target="gateway" aria-expanded="true" aria-label="Collapse section" title="Collapse section">-</button>
   </div>
 
 <div class="collapsible-content" data-screen="gateway">
@@ -661,7 +661,7 @@
       <button class="area-tab" data-area="concession" data-sec="order" onclick="showAreaSection('concession','order')">Add-ons</button>
       <button class="area-tab" data-area="concession" data-sec="starting" onclick="showAreaSection('concession','starting')">Starting Par</button>
     </div>
-    <button type="button" class="collapse-toggle" data-target="concession" aria-expanded="true">Hide</button>
+    <button type="button" class="collapse-toggle" data-target="concession" aria-expanded="true" aria-label="Collapse section" title="Collapse section">-</button>
   </div>
 
   <div class="collapsible-content" data-screen="concession">
@@ -744,7 +744,7 @@
       <button class="area-tab" data-area="mainkitchen" data-sec="returns" onclick="showKitchenSection('returns')">Returns</button>
       <button class="area-tab" data-area="mainkitchen" data-sec="lunch" onclick="showKitchenSection('lunch')">Lunch</button>
     </div>
-    <button type="button" class="collapse-toggle" data-target="main-kitchen" aria-expanded="true">Hide</button>
+    <button type="button" class="collapse-toggle" data-target="main-kitchen" aria-expanded="true" aria-label="Collapse section" title="Collapse section">-</button>
   </div>
 
   <div class="collapsible-content" data-screen="main-kitchen">
@@ -885,9 +885,6 @@
         <option value="BAKERY">Bakery</option>
       </select>
     </label>
-  </div>
-
-  <div class="prep-toolbar">
     <button type="button" id="resetLeftoversBtn" class="ghost-btn" onclick="resetPrepLeftovers()">Reset Leftovers</button>
   </div>
 
@@ -914,23 +911,13 @@
 
 <!-- Transfer Order Section -->
 <div class="main-kitchen-section transfer-section" data-sec="transfer" style="display:none;">
-  <div class="transfer-order-header">
-    <div class="transfer-order-title">
-      <h3>Transfer Order</h3>
-      <p class="transfer-order-subtext">
-        Update on-hand counts to see case needs. Items requiring transfer appear in the pick list.
-      </p>
+  <div class="transfer-tabs-row">
+    <div class="transfer-tabs" role="tablist">
+      <button type="button" class="transfer-tab active" data-transfer-tab="order" aria-selected="true">Transfer Order</button>
+      <button type="button" class="transfer-tab" data-transfer-tab="picklist" aria-selected="false">Current Order</button>
+      <button type="button" class="transfer-tab" data-transfer-tab="eom" aria-selected="false">EOM</button>
     </div>
-    <div class="transfer-order-actions">
-      <button type="button" id="transferOrderResetBtn" class="ghost-btn">Reset On-Hand</button>
-      <span id="transferOrderStatus" class="transfer-order-status" role="status" aria-live="polite"></span>
-    </div>
-  </div>
-
-  <div class="transfer-tabs" role="tablist">
-    <button type="button" class="transfer-tab active" data-transfer-tab="order" aria-selected="true">Transfer Order</button>
-    <button type="button" class="transfer-tab" data-transfer-tab="picklist" aria-selected="false">Current Order</button>
-    <button type="button" class="transfer-tab" data-transfer-tab="eom" aria-selected="false">EOM</button>
+    <button type="button" id="transferOrderResetBtn" class="ghost-btn transfer-reset-btn" hidden>Reset On-Hand</button>
   </div>
 
   <div class="transfer-pane transfer-order-inventory" data-transfer-pane="order">
@@ -1022,20 +1009,16 @@
 
 <!-- ===================== Main Kitchen ▸ Recipes ===================== -->
 <div class="main-kitchen-section recipes-section" data-sec="recipes" style="display:none;">
-  <div class="header-container">
-    <h3>Recipes</h3>
+  <div class="order-controls">
+    <input id="recipeSearch" type="text" placeholder="Search recipes by name or number…" oninput="renderRecipesList()" />
+    <select id="recipeCategoryFilter" onchange="renderRecipesList()">
+      <option value="">All Categories</option>
+      <option value="HOTFOODS">HOTFOODS</option>
+      <option value="PANTRY">PANTRY</option>
+      <option value="BAKERY">BAKERY</option>
+    </select>
+    <button type="button" onclick="openAddRecipeDialog()">Add Recipe</button>
   </div>
-
- <div class="order-controls">
-  <input id="recipeSearch" type="text" placeholder="Search recipes by name or number…" oninput="renderRecipesList()" />
-  <select id="recipeCategoryFilter" onchange="renderRecipesList()">
-    <option value="">All Categories</option>
-    <option value="HOTFOODS">HOTFOODS</option>
-    <option value="PANTRY">PANTRY</option>
-    <option value="BAKERY">BAKERY</option>
-  </select>
-  <button type="button" onclick="openAddRecipeDialog()">Add Recipe</button>
-</div>
 
 
   <!-- List of recipes -->
@@ -1189,7 +1172,7 @@ Step 3: …"></textarea>
       <button onclick="showStationTab('Pantry')">Pantry</button>
       <button onclick="showStationTab('Pastry')">Pastry</button>
     </div>
-    <button type="button" class="collapse-toggle" data-target="stations" aria-expanded="true">Hide</button>
+    <button type="button" class="collapse-toggle" data-target="stations" aria-expanded="true" aria-label="Collapse section" title="Collapse section">-</button>
   </div>
 
   <div class="collapsible-content" data-screen="stations">
