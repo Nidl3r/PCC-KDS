@@ -929,6 +929,7 @@
 
   <div class="transfer-tabs" role="tablist">
     <button type="button" class="transfer-tab active" data-transfer-tab="order" aria-selected="true">Transfer Order</button>
+    <button type="button" class="transfer-tab" data-transfer-tab="eom" aria-selected="false">EOM</button>
     <button type="button" class="transfer-tab" data-transfer-tab="picklist" aria-selected="false">Current Order</button>
   </div>
 
@@ -953,6 +954,38 @@
         </tbody>
       </table>
     </div>
+  </div>
+
+  <div class="transfer-pane transfer-order-eom" data-transfer-pane="eom" hidden>
+    <section class="transfer-eom" aria-labelledby="transferEomHeading">
+      <div class="transfer-eom__header">
+        <div class="transfer-eom__title">
+          <h4 id="transferEomHeading">EOM</h4>
+          <span id="transferEomStatus" class="transfer-eom-status" role="status" aria-live="polite"></span>
+        </div>
+        <div class="transfer-eom__actions">
+          <button type="button" id="transferEomSaveBtn" class="save-btn">Save EOM</button>
+          <button type="button" id="transferEomAddRowBtn" class="ghost-btn">Add Line</button>
+          <button type="button" id="transferEomResetBtn" class="ghost-btn">Reset EOM</button>
+        </div>
+      </div>
+      <div class="table-wrap table-wrap--transfer-eom">
+        <table id="transferEomTable">
+          <thead>
+            <tr>
+              <th>Description</th>
+              <th>Qty</th>
+              <th>UOM</th>
+            </tr>
+          </thead>
+          <tbody id="transferEomTableBody">
+            <tr>
+              <td colspan="3" class="transfer-eom-empty">Add items to build your EOM list.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
   </div>
 
   <div class="transfer-pane transfer-order-picklist" data-transfer-pane="picklist" hidden>
@@ -984,6 +1017,8 @@
     </div>
   </div>
 </div>
+
+<datalist id="transferEomRecipeOptions"></datalist>
 
 <!-- ===================== Main Kitchen ▸ Recipes ===================== -->
 <div class="main-kitchen-section recipes-section" data-sec="recipes" style="display:none;">

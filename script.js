@@ -8287,6 +8287,9 @@ const TRANSFER_ORDER_DOC_PREFIX = "mainKitchen";
 const TRANSFER_ORDER_SAVE_DELAY_MS = 650;
 const TRANSFER_ORDER_STATUS_CLEAR_DELAY_MS = 4200;
 
+const EOM_COUNT_COLLECTION = "eomCount";
+const EOM_DOC_PREFIX = "mainKitchen";
+
 const TRANSFER_SHELF_ORDER = [
   "1", "2", "3", "4", "48", "47", "46", "37", "36", "34", "33", "32", "S",
   "30", "29", "28", "27", "26", "25", "22", "21", "20", "19", "18", "17", "16", "15", "14", "13", "12", "9"
@@ -8333,7 +8336,12 @@ function getTransferOrderState() {
       pendingSaveTimers: new Map(),
       statusTimer: null,
       activeEditKey: null,
-      activeTab: "order"
+      activeTab: "order",
+      eomInitialized: false,
+      eomRows: [],
+      eomDom: new Map(),
+      nextEomId: 1,
+      eomStatusTimer: null
     };
   }
   return window.__transferOrderState;
@@ -8364,6 +8372,7 @@ function initTransferOrderOnce() {
     copyBtn.addEventListener("click", copyTransferOrderToClipboard);
   }
 
+  initTransferEomUI();
   setTransferOrderTab(state.activeTab || "order");
 }
 
@@ -8394,6 +8403,414 @@ function setTransferOrderTab(tabId) {
   });
 
   state.activeTab = finalTab;
+}
+
+function initTransferEomUI() {
+  const state = getTransferOrderState();
+  const addBtn = document.getElementById("transferEomAddRowBtn");
+  const resetBtn = document.getElementById("transferEomResetBtn");
+  const saveBtn = document.getElementById("transferEomSaveBtn");
+
+  if (!state.eomInitialized) {
+    if (addBtn) addBtn.addEventListener("click", () => addTransferEomRow({ focus: true }));
+    if (resetBtn) resetBtn.addEventListener("click", handleTransferEomResetClick);
+    if (saveBtn) saveBtn.addEventListener("click", handleTransferEomSaveClick);
+    state.eomInitialized = true;
+  }
+
+  renderTransferEomRows(state);
+  renderTransferEomRecipeOptions();
+  syncTransferEomRowsFromRecipes(state);
+}
+
+function setTransferEomStatus(message = "", tone = "muted", options = {}) {
+  const { persist = false } = options || {};
+  const state = getTransferOrderState();
+  const el = document.getElementById("transferEomStatus");
+
+  if (state.eomStatusTimer) {
+    clearTimeout(state.eomStatusTimer);
+    state.eomStatusTimer = null;
+  }
+
+  if (!el) return;
+
+  if (!message) {
+    el.textContent = "";
+    el.removeAttribute("data-tone");
+    return;
+  }
+
+  el.textContent = message;
+  el.dataset.tone = tone;
+
+  if (!persist) {
+    state.eomStatusTimer = setTimeout(() => {
+      const statusEl = document.getElementById("transferEomStatus");
+      if (statusEl) {
+        statusEl.textContent = "";
+        statusEl.removeAttribute("data-tone");
+      }
+      state.eomStatusTimer = null;
+    }, 4000);
+  }
+}
+
+function getTransferEomDocRef() {
+  const serviceDate = getTodayDate();
+  return doc(db, EOM_COUNT_COLLECTION, `${EOM_DOC_PREFIX}|${serviceDate}`);
+}
+
+async function handleTransferEomSaveClick() {
+  const state = getTransferOrderState();
+  const saveBtn = document.getElementById("transferEomSaveBtn");
+
+  if (saveBtn) saveBtn.disabled = true;
+  setTransferEomStatus("Saving…", "muted", { persist: true });
+
+  try {
+    const payload = buildTransferEomSavePayload(state);
+    const docRef = getTransferEomDocRef();
+    await setDoc(docRef, {
+      items: payload,
+      serviceDate: getTodayDate(),
+      updatedAt: serverTimestamp()
+    });
+    setTransferEomStatus("EOM saved.", "success");
+  } catch (err) {
+    console.error("Failed to save EOM counts", err);
+    setTransferEomStatus("Failed to save EOM.", "error", { persist: true });
+  } finally {
+    if (saveBtn) saveBtn.disabled = false;
+  }
+}
+
+async function handleTransferEomResetClick() {
+  const state = getTransferOrderState();
+  const resetBtn = document.getElementById("transferEomResetBtn");
+  const saveBtn = document.getElementById("transferEomSaveBtn");
+
+  if (resetBtn) resetBtn.disabled = true;
+  if (saveBtn) saveBtn.disabled = true;
+  setTransferEomStatus("Clearing…", "muted", { persist: true });
+
+  try {
+    await deleteDoc(getTransferEomDocRef());
+    resetTransferEomRows();
+    setTransferEomStatus("EOM cleared.", "success");
+  } catch (err) {
+    console.error("Failed to clear EOM counts", err);
+    setTransferEomStatus("Failed to clear EOM.", "error", { persist: true });
+  } finally {
+    if (resetBtn) resetBtn.disabled = false;
+    if (saveBtn) saveBtn.disabled = false;
+  }
+}
+
+function createTransferEomRow(state) {
+  const base = Number(state.nextEomId) || 1;
+  const id = `eom-${base}`;
+  state.nextEomId = base + 1;
+  return {
+    id,
+    recipeId: "",
+    description: "",
+    qty: "",
+    uom: ""
+  };
+}
+
+function renderTransferEomRows(state) {
+  const tbody = document.getElementById("transferEomTableBody");
+  if (!tbody) return;
+
+  if (!Array.isArray(state.eomRows)) {
+    state.eomRows = [];
+  }
+  if (state.eomRows.length === 0) {
+    state.eomRows.push(createTransferEomRow(state));
+  }
+
+  const rowsHtml = state.eomRows.map((row) => {
+    const desc = escapeHtml(row.description || "");
+    const qtyVal = row.qty !== "" && row.qty !== null && row.qty !== undefined
+      ? escapeHtml(String(row.qty))
+      : "";
+    const uomDisplay = row.uom ? escapeHtml(row.uom) : "&mdash;";
+    return `
+      <tr data-eom-row-id="${escapeHtml(row.id)}">
+        <td>
+          <input
+            type="text"
+            class="transfer-eom-description"
+            data-eom-row-id="${escapeHtml(row.id)}"
+            list="transferEomRecipeOptions"
+            placeholder="Search recipes…"
+            autocomplete="off"
+            value="${desc}"
+          />
+        </td>
+        <td>
+          <input
+            type="number"
+            class="transfer-eom-qty"
+            data-eom-row-id="${escapeHtml(row.id)}"
+            min="0"
+            step="0.01"
+            placeholder="0"
+            value="${qtyVal}"
+          />
+        </td>
+        <td>
+          <span class="transfer-eom-uom" data-eom-row-id="${escapeHtml(row.id)}">${uomDisplay}</span>
+        </td>
+      </tr>
+    `;
+  }).join("");
+
+  tbody.innerHTML = rowsHtml;
+
+  const domMap = new Map();
+  state.eomRows.forEach((row) => {
+    const safeId = (typeof CSS !== "undefined" && typeof CSS.escape === "function")
+      ? CSS.escape(row.id)
+      : row.id.replace(/"/g, '\\"');
+    const rowEl = tbody.querySelector(`[data-eom-row-id="${safeId}"]`);
+    const descriptionInput = rowEl?.querySelector(".transfer-eom-description") || null;
+    const qtyInput = rowEl?.querySelector(".transfer-eom-qty") || null;
+    const uomEl = rowEl?.querySelector(".transfer-eom-uom") || null;
+
+    if (descriptionInput) {
+      descriptionInput.addEventListener("input", handleTransferEomDescriptionInput);
+      descriptionInput.addEventListener("change", handleTransferEomDescriptionInput);
+      descriptionInput.addEventListener("blur", handleTransferEomDescriptionInput);
+    }
+
+    if (qtyInput) {
+      qtyInput.addEventListener("input", handleTransferEomQtyInput);
+      qtyInput.addEventListener("change", handleTransferEomQtyInput);
+    }
+
+    domMap.set(row.id, {
+      rowEl,
+      descriptionInput,
+      qtyInput,
+      uomEl
+    });
+  });
+
+  state.eomDom = domMap;
+}
+
+function updateTransferEomRowDom(row, refs, options = {}) {
+  if (!refs) return;
+  const {
+    skipDescription = false,
+    skipQty = false
+  } = options || {};
+
+  if (!skipDescription && refs.descriptionInput) {
+    refs.descriptionInput.value = row.description || "";
+  }
+  if (!skipQty && refs.qtyInput) {
+    const val = row.qty !== "" && row.qty !== null && row.qty !== undefined ? String(row.qty) : "";
+    refs.qtyInput.value = val;
+  }
+  if (refs.uomEl) {
+    refs.uomEl.textContent = row.uom ? row.uom : "—";
+  }
+}
+
+function addTransferEomRow(options = {}) {
+  const { focus = true } = options || {};
+  const state = getTransferOrderState();
+  const row = createTransferEomRow(state);
+  state.eomRows.push(row);
+  renderTransferEomRows(state);
+  const refs = state.eomDom.get(row.id);
+  if (focus && refs?.descriptionInput) {
+    refs.descriptionInput.focus();
+  }
+  return row;
+}
+
+function resetTransferEomRows() {
+  const state = getTransferOrderState();
+  state.eomRows = [];
+  state.nextEomId = 1;
+  renderTransferEomRows(state);
+}
+
+function handleTransferEomDescriptionInput(event) {
+  const input = event.currentTarget;
+  const rowId = input?.dataset?.eomRowId;
+  if (!rowId) return;
+
+  const state = getTransferOrderState();
+  const row = state.eomRows.find((r) => r.id === rowId);
+  if (!row) return;
+
+  const rawValue = (input.value || "").trim();
+  const match = resolveRecipeForEomValue(rawValue, input);
+
+  if (match) {
+    row.recipeId = match.id || "";
+    row.description = match.description || rawValue;
+    row.uom = (match.uom || "").toUpperCase();
+  } else {
+    row.recipeId = "";
+    row.description = rawValue;
+    row.uom = "";
+  }
+
+  const refs = state.eomDom.get(rowId);
+  const skipDescription = event.type === "input";
+  updateTransferEomRowDom(row, refs, { skipDescription });
+  if ((row.description || "").trim()) {
+    ensureTransferEomTrailingRow(state, { focusNewRow: false });
+  }
+}
+
+function handleTransferEomQtyInput(event) {
+  const input = event.currentTarget;
+  const rowId = input?.dataset?.eomRowId;
+  if (!rowId) return;
+
+  const state = getTransferOrderState();
+  const row = state.eomRows.find((r) => r.id === rowId);
+  if (!row) return;
+
+  const rawValue = input.value;
+  row.qty = rawValue === "" ? "" : rawValue;
+  if (event.type !== "input" && isTransferEomRowComplete(row)) {
+    ensureTransferEomTrailingRow(state, { focusNewRow: false });
+  }
+}
+
+function renderTransferEomRecipeOptions() {
+  const list = document.getElementById("transferEomRecipeOptions");
+  if (!list) return;
+
+  const recipes = getRecipeCacheForEom();
+  if (!recipes.length) {
+    list.innerHTML = "";
+    return;
+  }
+
+  const sorted = [...recipes].sort((a, b) => {
+    const descA = (a.description || "").toLowerCase();
+    const descB = (b.description || "").toLowerCase();
+    if (descA === descB) return 0;
+    return descA > descB ? 1 : -1;
+  });
+
+  const optionsHtml = sorted.map((recipe) => {
+    const desc = recipe.description || "";
+    const recipeNo = recipe.recipeNo || "";
+    const label = recipeNo ? `${recipeNo} — ${desc}` : desc;
+    const uom = recipe.uom || "";
+    return `<option value="${escapeHtml(desc)}"
+                    label="${escapeHtml(label)}"
+                    data-recipe-id="${escapeHtml(recipe.id)}"
+                    data-description="${escapeHtml(desc)}"
+                    data-uom="${escapeHtml(uom)}"></option>`;
+  }).join("");
+
+  list.innerHTML = optionsHtml;
+}
+
+function resolveRecipeForEomValue(value, inputEl) {
+  if (!value) return null;
+
+  const listId = inputEl?.getAttribute("list");
+  if (listId) {
+    const list = document.getElementById(listId);
+    if (list) {
+      const option = Array.from(list.options).find((opt) => opt.value === value);
+      const recipeId = option?.dataset?.recipeId;
+      if (recipeId) {
+        const existing = getRecipeCacheForEom().find((r) => r.id === recipeId);
+        if (existing) return existing;
+        return {
+          id: recipeId,
+          description: option.dataset?.description || value,
+          uom: option.dataset?.uom || ""
+        };
+      }
+    }
+  }
+
+  const normalized = value.toLowerCase();
+  return getRecipeCacheForEom().find((recipe) => (recipe.description || "").toLowerCase() === normalized) || null;
+}
+
+function syncTransferEomRowsFromRecipes(state) {
+  const recipes = getRecipeCacheForEom();
+  if (!recipes.length || !Array.isArray(state.eomRows) || !state.eomRows.length) return;
+
+  let changed = false;
+  state.eomRows.forEach((row) => {
+    if (!row.recipeId) return;
+    const match = recipes.find((recipe) => recipe.id === row.recipeId);
+    if (!match) return;
+
+    const nextDesc = match.description || row.description;
+    const nextUom = (match.uom || "").toUpperCase();
+    if (nextDesc && nextDesc !== row.description) {
+      row.description = nextDesc;
+      changed = true;
+    }
+    if (nextUom !== (row.uom || "")) {
+      row.uom = nextUom;
+      changed = true;
+    }
+  });
+
+  if (changed) {
+    state.eomRows.forEach((row) => {
+      const refs = state.eomDom.get(row.id);
+      const skipDescription = refs?.descriptionInput && document.activeElement === refs.descriptionInput;
+      updateTransferEomRowDom(row, refs, { skipQty: true, skipDescription });
+    });
+  }
+}
+
+function getRecipeCacheForEom() {
+  return Array.isArray(window._recipesCache) ? window._recipesCache : [];
+}
+
+function buildTransferEomSavePayload(state) {
+  if (!state || !Array.isArray(state.eomRows)) return [];
+
+  return state.eomRows
+    .map((row) => {
+      if (!isTransferEomRowComplete(row)) return null;
+      const qtyNum = Number(row.qty);
+      if (!Number.isFinite(qtyNum)) return null;
+      return {
+        description: (row.description || "").trim(),
+        qty: qtyNum,
+        uom: (row.uom || "").trim().toUpperCase(),
+        recipeId: row.recipeId || ""
+      };
+    })
+    .filter(Boolean);
+}
+
+function isTransferEomRowComplete(row) {
+  if (!row) return false;
+  const hasDescription = Boolean((row.description || "").trim());
+  const qty = row.qty;
+  const hasQty = !(qty === "" || qty === null || qty === undefined);
+  return hasDescription && hasQty;
+}
+
+function ensureTransferEomTrailingRow(state, options = {}) {
+  const { focusNewRow = false } = options || {};
+  if (!state || !Array.isArray(state.eomRows) || !state.eomRows.length) return;
+  const hasEmptyRow = state.eomRows.some((r) => !(r.description || "").trim() && (r.qty === "" || r.qty === null || r.qty === undefined));
+  if (hasEmptyRow) return;
+  addTransferEomRow({ focus: focusNewRow });
 }
 
 function parseTransferNumber(value) {
@@ -18835,6 +19252,7 @@ function _normalizeRecipeRecord(id, data = {}) {
     methodology: v.methodology || "",
     ingredients: Array.isArray(v.ingredients) ? v.ingredients : [],
     category: (v.category || v.Category || "UNCATEGORIZED"),
+    uom: v.uom || v.UOM || ""
   };
 }
 
@@ -18886,6 +19304,12 @@ function startRecipesListener() {
     window._recipesCache = _mergeRecipeLists(rows, window._legacyRecipesCache);
     renderRecipesList();
     _paintRecipeSelect();
+    try {
+      renderTransferEomRecipeOptions();
+      syncTransferEomRowsFromRecipes(getTransferOrderState());
+    } catch (err) {
+      console.debug("EOM recipe refresh skipped:", err);
+    }
   });
 }
 
@@ -18932,6 +19356,12 @@ async function _ensureRecipesPrimed() {
     }
 
     window._paintRecipeSelect?.();
+    try {
+      renderTransferEomRecipeOptions();
+      syncTransferEomRowsFromRecipes(getTransferOrderState());
+    } catch (err) {
+      console.debug("EOM recipe prime refresh skipped:", err);
+    }
   })();
 
   try {
