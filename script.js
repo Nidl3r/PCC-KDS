@@ -22,6 +22,8 @@ import {
   arrayRemove,
   increment,
   runTransaction,   // ⬅️ add this line
+  deleteField,
+  FieldPath,
   enableNetwork,
   waitForPendingWrites,
 } from "./firebaseConfig.js";
@@ -1150,6 +1152,7 @@ function updateAccountingGroupButtons(activeGroup) {
     const group = btn.getAttribute("data-group");
     const isActive = group === activeGroup;
     btn.classList.toggle("accounting-group-btn--active", isActive);
+    btn.classList.toggle("active", isActive);
     btn.setAttribute("aria-pressed", isActive ? "true" : "false");
   });
 }
@@ -2722,6 +2725,8 @@ function getAccountingRecipesState() {
       activeVenue: ACCOUNTING_VENUES[0],
       parsMode: "recipe",
       parsDisplayCount: 0,
+      pendingGuestCountsByVenue: new Map(),
+      isSavingAllPars: false,
       initialized: false,
       isLoaded: false,
       loading: null
@@ -3783,7 +3788,8 @@ function buildAccountingRecipeRow(recipeKey, merged, cookingId, legacyId) {
     venueCodes: Array.isArray(merged.venueCodes) ? merged.venueCodes.slice() : [],
     source: cookingId ? "cookingrecipes" : "legacy",
     infoDirty: false,
-    parsDirtyByVenue: {}
+    parsDirtyByVenue: {},
+    parsRemovedByVenue: {}
   };
 
   if (!row.description) {
@@ -3939,6 +3945,12 @@ function renderRecipesParsGrid(rows = [], activeVenue = ACCOUNTING_VENUES[0], mo
   if (!tbody || !headerRow || !colgroup) return 0;
 
   const venue = canonicalizeVenueName(activeVenue) || activeVenue;
+  const state = getAccountingRecipesState();
+  const pendingMap = state.pendingGuestCountsByVenue;
+  const pendingSet = (pendingMap instanceof Map && pendingMap.get(venue) instanceof Set)
+    ? pendingMap.get(venue)
+    : new Set();
+  const isRecipeMode = mode !== "prep";
   const eligible = [];
   const countsSet = new Set();
 
@@ -3981,19 +3993,36 @@ function renderRecipesParsGrid(rows = [], activeVenue = ACCOUNTING_VENUES[0], mo
     return 0;
   }
 
-  headerRow.innerHTML = [
+  const headerCells = counts.map((count) => {
+    const label = escapeHtml(accountingString(count));
+    if (!isRecipeMode) {
+      return `<th scope="col" data-count="${label}">${label}</th>`;
+    }
+    return `<th scope="col" data-count="${label}">
+      <span class="pars-header-label">${label}
+        <button type="button" class="pars-header-btn pars-header-btn--delete" data-action="delete-par" data-count="${label}" aria-label="Delete guest count ${label}">×</button>
+      </span>
+    </th>`;
+  });
+
+  const headerParts = [
     '<th scope="col">Recipe No.</th>',
     '<th scope="col">Description</th>',
-    ...counts.map((count) => `<th scope="col" data-count="${escapeHtml(accountingString(count))}">${escapeHtml(accountingString(count))}</th>`),
-    '<th scope="col" class="actions-header">Actions</th>'
-  ].join("");
+    ...headerCells,
+    `<th scope="col" class="actions-header">
+      <span>Actions</span>
+      ${isRecipeMode ? '<button type="button" class="pars-header-btn pars-header-btn--add" data-action="add-par" aria-label="Add guest count"><span aria-hidden="true">+</span><span class="visually-hidden">Add guest count</span></button>' : ""}
+    </th>`
+  ];
+  headerRow.innerHTML = headerParts.join("");
 
-  colgroup.innerHTML = [
+  const colParts = [
     '<col class="col-recipes-number" />',
     '<col class="col-recipes-desc" />',
-    ...counts.map(() => '<col />'),
-    '<col class="col-recipes-actions" />'
-  ].join("");
+    ...counts.map(() => '<col />')
+  ];
+  colParts.push('<col class="col-recipes-actions" />');
+  colgroup.innerHTML = colParts.join("");
 
   const rowsHtml = eligible.map(({ row, recipeMap, prepEntry }) => {
     const key = accountingString(row._key);
@@ -4003,8 +4032,9 @@ function renderRecipesParsGrid(rows = [], activeVenue = ACCOUNTING_VENUES[0], mo
     const prepCounts = prepEntry?.counts || {};
 
     const cellsHtml = counts.map((count) => {
-      const recipeValueRaw = venueMap?.[count];
-      const prepValueRaw = prepCounts?.[count];
+      const countKey = accountingString(count);
+      const recipeValueRaw = venueMap?.[countKey];
+      const prepValueRaw = prepCounts?.[countKey];
       const recipeValue = accountingString(recipeValueRaw ?? "");
       const prepValue = accountingString(prepValueRaw ?? "");
       const inputValue = mode === "prep" ? prepValue : recipeValue;
@@ -4013,13 +4043,18 @@ function renderRecipesParsGrid(rows = [], activeVenue = ACCOUNTING_VENUES[0], mo
       const subLabelValue = mode === "prep"
         ? (recipeDisplay ? `Recipe: ${escapeHtml(recipeDisplay)}` : "Recipe: —")
         : (prepDisplay ? `Prep: ${escapeHtml(prepDisplay)}` : "Prep: —");
+      const isPending = isRecipeMode && pendingSet.has(countKey);
+      const requiresValue = isPending && !accountingHasValue(recipeValueRaw);
+      const cellClasses = ["pars-cell"];
+      if (requiresValue) cellClasses.push("pars-cell--required");
+      const ariaRequired = requiresValue ? ' aria-required="true"' : "";
       return `
-        <td data-count="${escapeHtml(accountingString(count))}">
-          <div class="pars-cell">
+        <td data-count="${escapeHtml(countKey)}">
+          <div class="${cellClasses.join(" ")}">
             <input type="number" step="0.01" inputmode="decimal"
                    data-row-key="${escapeHtml(key)}"
-                   data-count="${escapeHtml(accountingString(count))}"
-                   value="${escapeHtml(accountingString(inputValue))}" />
+                   data-count="${escapeHtml(countKey)}"
+                   value="${escapeHtml(accountingString(inputValue))}"${ariaRequired} />
             <div class="pars-cell__prep">${subLabelValue}</div>
           </div>
         </td>`;
@@ -4130,8 +4165,20 @@ function applyAccountingRecipesFilter() {
     const mode = state.parsMode || "recipe";
     displayed = renderRecipesParsGrid(infoRows, canonicalActiveVenue, mode) || 0;
   }
+  if (state.activeView === "pars" && state.parsMode === "recipe") {
+    const pendingMap = state.pendingGuestCountsByVenue;
+    if (pendingMap instanceof Map) {
+      const pendingSet = pendingMap.get(canonicalActiveVenue);
+      if (pendingSet instanceof Set) {
+        pendingSet.forEach((countKey) => {
+          requestAnimationFrame(() => updatePendingGuestCountCompletion(canonicalActiveVenue, countKey));
+        });
+      }
+    }
+  }
   state.parsDisplayCount = displayed;
   toggleAccountingRecipesEmpty(state.activeView);
+  updateAccountingSaveAllButton();
 }
 
 function resolveRecipeDocRef(row) {
@@ -4206,7 +4253,7 @@ async function saveRecipeInfo(rowKey) {
   }
 }
 
-async function saveRecipePars(rowKey) {
+async function saveRecipePars(rowKey, options = {}) {
   const state = getAccountingRecipesState();
   const row = state.byKey.get(rowKey);
   if (!row) return;
@@ -4239,18 +4286,41 @@ async function saveRecipePars(rowKey) {
     payload.migratedAt = serverTimestamp();
   }
 
+  const removalSet = row.parsRemovedByVenue?.[venue];
+  const removedKeys = removalSet instanceof Set
+    ? Array.from(removalSet)
+    : Array.isArray(removalSet)
+      ? removalSet.slice()
+      : [];
+
   try {
     await setDoc(docRef, payload, { merge: true });
+    if (removedKeys.length) {
+      const updateArgs = [docRef];
+      removedKeys.forEach((key) => {
+        updateArgs.push(new FieldPath("pars", venue, key), deleteField());
+      });
+      await updateDoc(...updateArgs);
+      if (removalSet instanceof Set) {
+        removalSet.clear();
+      } else if (row.parsRemovedByVenue) {
+        row.parsRemovedByVenue[venue] = new Set();
+      }
+    }
     row.source = "cookingrecipes";
     row.parsDirtyByVenue[venue] = false;
-    applyAccountingRecipesFilter();
+    if (!options.skipFilter) {
+      applyAccountingRecipesFilter();
+    } else {
+      updateAccountingSaveAllButton();
+    }
   } catch (err) {
     console.warn("Failed to save recipe pars", err);
     alert("Unable to save recipe pars. Check console for details.");
   }
 }
 
-async function savePrepPars(rowKey) {
+async function savePrepPars(rowKey, options = {}) {
   const state = getAccountingRecipesState();
   const row = state.byKey.get(rowKey);
   if (!row) return;
@@ -4281,14 +4351,36 @@ async function savePrepPars(rowKey) {
 
   try {
     const docRef = doc(db, PREP_PARS_COLL, prepEntry.docId);
+    const venueField = prepEntry.venueField || venue;
     await setDoc(docRef, {
       pars: {
-        [prepEntry.venueField || venue]: sanitized
+        [venueField]: sanitized
       },
       updatedAt: serverTimestamp()
     }, { merge: true });
+    const removedPrep = prepEntry.removedCounts instanceof Set
+      ? Array.from(prepEntry.removedCounts)
+      : Array.isArray(prepEntry.removedCounts)
+        ? prepEntry.removedCounts.slice()
+        : [];
+    if (removedPrep.length) {
+      const updateArgs = [docRef];
+      removedPrep.forEach((key) => {
+        updateArgs.push(new FieldPath("pars", venueField, key), deleteField());
+      });
+      await updateDoc(...updateArgs);
+      if (prepEntry.removedCounts instanceof Set) {
+        prepEntry.removedCounts.clear();
+      } else {
+        prepEntry.removedCounts = new Set();
+      }
+    }
     prepEntry.dirty = false;
-    applyAccountingRecipesFilter();
+    if (!options.skipFilter) {
+      applyAccountingRecipesFilter();
+    } else {
+      updateAccountingSaveAllButton();
+    }
   } catch (err) {
     console.warn("Failed to save prep pars", err);
     alert("Unable to save prep pars. Check console for details.");
@@ -4381,7 +4473,19 @@ function handleAccountingRecipesInput(event) {
       }
       row.pars[canonicalVenue][countKey] = target.value;
       row.parsDirtyByVenue[canonicalVenue] = true;
+
+      const isPending = state.pendingGuestCountsByVenue instanceof Map
+        ? state.pendingGuestCountsByVenue.get(canonicalVenue)?.has(countKey)
+        : false;
+      const cell = target.closest(".pars-cell");
+      if (cell && isPending) {
+        const trimmedValue = accountingTrim(target.value || "");
+        cell.classList.toggle("pars-cell--required", trimmedValue === "");
+      }
+      requestAnimationFrame(() => updatePendingGuestCountCompletion(canonicalVenue, countKey));
     }
+
+    updateAccountingSaveAllButton();
   }
 
   if (getAccountingRecipesState().activeView === "pars") {
@@ -4469,6 +4573,393 @@ function updateAccountingVenueTabs() {
   });
 }
 
+function addGuestCountOptionToSelects(countValue) {
+  const value = accountingString(countValue);
+  if (!value) return;
+
+  const selects = (Array.isArray(window.__guestCountSelects) && window.__guestCountSelects.length)
+    ? window.__guestCountSelects
+    : [
+        document.getElementById("count-Aloha"),
+        document.getElementById("count-Ohana"),
+        document.getElementById("count-Gateway")
+      ].filter(Boolean);
+
+  selects.forEach((select) => {
+    if (!select) return;
+    const exists = Array.from(select.options).some((opt) => accountingString(opt.value) === value);
+    if (!exists) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = value;
+      select.appendChild(option);
+    }
+  });
+}
+
+function isGuestCountValueInUse(countValue) {
+  const value = accountingString(countValue);
+  if (!value) return false;
+  const state = getAccountingRecipesState();
+  return state.rows.some((row) => {
+    const pars = row.pars || {};
+    return Object.values(pars).some((venueMap) => venueMap && Object.prototype.hasOwnProperty.call(venueMap, value));
+  });
+}
+
+function removeGuestCountOptionFromSelects(countValue) {
+  const value = accountingString(countValue);
+  if (!value) return;
+
+  const selects = (Array.isArray(window.__guestCountSelects) && window.__guestCountSelects.length)
+    ? window.__guestCountSelects
+    : [
+        document.getElementById("count-Aloha"),
+        document.getElementById("count-Ohana"),
+        document.getElementById("count-Gateway")
+      ].filter(Boolean);
+
+  selects.forEach((select) => {
+    if (!select) return;
+    let removed = false;
+    Array.from(select.options).forEach((option) => {
+      if (accountingString(option.value) === value) {
+        option.remove();
+        removed = true;
+      }
+    });
+    if (removed && accountingString(select.value) === value && select.options.length) {
+      select.selectedIndex = 0;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  });
+}
+
+function updatePendingGuestCountCompletion(venue, countKey) {
+  const state = getAccountingRecipesState();
+  const pendingMap = state.pendingGuestCountsByVenue;
+  if (!pendingMap || !(pendingMap instanceof Map)) return;
+  const pendingSet = pendingMap.get(venue);
+  if (!pendingSet || !pendingSet.has(countKey)) return;
+
+  let hasEmpty = false;
+  state.rows.forEach((row) => {
+    const venueMap = row.pars?.[venue];
+    if (!venueMap) return;
+    if (!Object.prototype.hasOwnProperty.call(venueMap, countKey)) return;
+    if (!accountingHasValue(venueMap[countKey])) {
+      hasEmpty = true;
+    }
+  });
+
+  const selector = `#accountingRecipesParsBody td[data-count="${accountingEscapeSelector(countKey)}"] .pars-cell`;
+  const cells = document.querySelectorAll(selector);
+  if (!hasEmpty) {
+    pendingSet.delete(countKey);
+    if (pendingSet.size === 0) {
+      pendingMap.delete(venue);
+    }
+    cells.forEach((cell) => cell.classList.remove("pars-cell--required"));
+    return;
+  }
+
+  cells.forEach((cell) => {
+    const input = cell.querySelector("input");
+    const hasValue = input ? accountingTrim(input.value || "") !== "" : false;
+    cell.classList.toggle("pars-cell--required", !hasValue);
+  });
+}
+
+function handleAccountingAddGuestCount() {
+  const state = getAccountingRecipesState();
+  const venue = canonicalizeVenueName(state.activeVenue) || ACCOUNTING_VENUES[0];
+  if (!venue) {
+    alert("Select a venue before adding a guest count.");
+    return;
+  }
+
+  const rowsForVenue = state.rows.filter((row) => row.pars && row.pars[venue]);
+  if (!rowsForVenue.length) {
+    alert(`No recipes currently track pars for ${venue}.`);
+    return;
+  }
+
+  const existingCounts = new Set();
+  rowsForVenue.forEach((row) => {
+    const map = row.pars?.[venue] || {};
+    Object.keys(map).forEach((key) => {
+      const normalized = accountingString(key);
+      if (normalized) existingCounts.add(normalized);
+    });
+  });
+
+  let suggested = "";
+  const numericCounts = Array.from(existingCounts)
+    .map((val) => Number(val))
+    .filter((num) => Number.isFinite(num))
+    .sort((a, b) => a - b);
+  if (numericCounts.length) {
+    const last = numericCounts[numericCounts.length - 1];
+    suggested = String(last + (last >= 400 ? 50 : 25));
+  }
+
+  const promptMessage = `Enter the guest count label for ${venue} (for example: 325).`;
+  const raw = window.prompt(promptMessage, suggested);
+  if (raw === null) return;
+
+  const trimmed = accountingTrim(raw);
+  if (!trimmed) {
+    alert("Guest count label cannot be blank.");
+    return;
+  }
+
+  const numeric = Number(trimmed.replace(/[^0-9.]/g, ""));
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    alert("Enter a positive number for the guest count header.");
+    return;
+  }
+
+  const normalized = String(Math.round(numeric));
+  if (existingCounts.has(normalized)) {
+    alert(`Guest count ${normalized} already exists for ${venue}.`);
+    return;
+  }
+
+  let touched = 0;
+  rowsForVenue.forEach((row) => {
+    if (!row.pars) row.pars = {};
+    const map = row.pars[venue];
+    if (!map) return;
+    map[normalized] = "";
+    row.parsDirtyByVenue[venue] = true;
+    touched += 1;
+  });
+
+  if (!touched) {
+    alert(`No pars entries found for ${venue}.`);
+    return;
+  }
+
+  if (!ACCOUNTING_RECIPE_PAR_GUEST_COUNTS.includes(normalized)) {
+    ACCOUNTING_RECIPE_PAR_GUEST_COUNTS.push(normalized);
+    ACCOUNTING_RECIPE_PAR_GUEST_COUNTS.sort((a, b) => {
+      const an = Number(a);
+      const bn = Number(b);
+      if (Number.isFinite(an) && Number.isFinite(bn)) return an - bn;
+      return accountingString(a).localeCompare(accountingString(b), undefined, { numeric: true, sensitivity: "base" });
+    });
+  }
+
+  const pendingMap = state.pendingGuestCountsByVenue;
+  if (pendingMap instanceof Map) {
+    const pendingSet = pendingMap.get(venue) || new Set();
+    pendingSet.add(normalized);
+    pendingMap.set(venue, pendingSet);
+  }
+
+  applyAccountingRecipesFilter();
+  requestAnimationFrame(() => updatePendingGuestCountCompletion(venue, normalized));
+
+  addGuestCountOptionToSelects(normalized);
+
+  alert(`Added guest count ${normalized} for ${venue}. Fill in the new column for each recipe, then save the pars to keep the change.`);
+}
+
+function handleAccountingDeleteGuestCount(countKey) {
+  const state = getAccountingRecipesState();
+  const venue = canonicalizeVenueName(state.activeVenue) || ACCOUNTING_VENUES[0];
+  if (!venue || !countKey) return;
+
+  const proceed = typeof window.confirm === "function"
+    ? window.confirm(`Remove guest count ${countKey}? This will clear that column for all ${venue} recipes. You will need to save the affected recipes to keep the change. Continue?`)
+    : true;
+  if (!proceed) return;
+
+  let touched = 0;
+  state.rows.forEach((row) => {
+    if (!row.pars) return;
+    const map = row.pars[venue];
+    if (!map || !Object.prototype.hasOwnProperty.call(map, countKey)) return;
+    delete map[countKey];
+    row.parsDirtyByVenue[venue] = true;
+    if (!row.parsRemovedByVenue || typeof row.parsRemovedByVenue !== "object") {
+      row.parsRemovedByVenue = {};
+    }
+    let removalSet = row.parsRemovedByVenue[venue];
+    if (!(removalSet instanceof Set)) {
+      removalSet = new Set(Array.isArray(removalSet) ? removalSet : []);
+      row.parsRemovedByVenue[venue] = removalSet;
+    }
+    removalSet.add(countKey);
+
+    const prepEntry = getPrepEntryForRow(row, venue);
+    if (prepEntry && prepEntry.counts && Object.prototype.hasOwnProperty.call(prepEntry.counts, countKey)) {
+      delete prepEntry.counts[countKey];
+      prepEntry.dirty = true;
+      if (!(prepEntry.removedCounts instanceof Set)) {
+        prepEntry.removedCounts = new Set(Array.isArray(prepEntry.removedCounts) ? prepEntry.removedCounts : []);
+      }
+      prepEntry.removedCounts.add(countKey);
+    }
+    touched += 1;
+  });
+
+  if (!touched) {
+    alert(`No recipes currently use guest count ${countKey} for ${venue}.`);
+    return;
+  }
+
+  const pendingMap = state.pendingGuestCountsByVenue;
+  if (pendingMap instanceof Map) {
+    const pendingSet = pendingMap.get(venue);
+    if (pendingSet instanceof Set) {
+      pendingSet.delete(countKey);
+      if (pendingSet.size === 0) {
+        pendingMap.delete(venue);
+      }
+    }
+  }
+
+  const stillUsed = isGuestCountValueInUse(countKey);
+  applyAccountingRecipesFilter();
+  if (!stillUsed) {
+    removeGuestCountOptionFromSelects(countKey);
+  }
+
+  updateAccountingSaveAllButton();
+}
+
+function getDirtyParsSummary() {
+  const state = getAccountingRecipesState();
+  const mode = state.parsMode || "recipe";
+  const venue = canonicalizeVenueName(state.activeVenue) || ACCOUNTING_VENUES[0];
+  const keys = [];
+  if (state.activeView !== "pars") {
+    return { mode, venue, keys };
+  }
+  if (mode === "recipe") {
+    state.rows.forEach((row) => {
+      if (row?.parsDirtyByVenue && row.parsDirtyByVenue[venue]) {
+        keys.push(row._key);
+      }
+    });
+  } else {
+    state.rows.forEach((row) => {
+      const entry = getPrepEntryForRow(row, venue);
+      if (entry?.dirty) {
+        keys.push(row._key);
+      }
+    });
+  }
+  return { mode, venue, keys };
+}
+
+function updateAccountingSaveAllButton() {
+  const button = document.getElementById("accountingRecipesSaveAll");
+  const statusEl = document.getElementById("accountingRecipesSaveAllStatus");
+  if (!button) return;
+  const state = getAccountingRecipesState();
+  if (state.activeView !== "pars") {
+    button.hidden = true;
+    button.disabled = true;
+    if (statusEl && !state.isSavingAllPars) {
+      statusEl.textContent = "";
+      statusEl.removeAttribute("data-tone");
+    }
+    return;
+  }
+
+  button.hidden = false;
+  const summary = getDirtyParsSummary();
+  const dirtyCount = summary.keys.length;
+  const labelBase = summary.mode === "prep" ? "Save All Prep Pars" : "Save All Pars";
+  if (state.isSavingAllPars) {
+    button.disabled = true;
+    button.textContent = "Saving…";
+  } else {
+    button.disabled = dirtyCount === 0;
+    button.textContent = dirtyCount > 0 ? `${labelBase} (${dirtyCount})` : labelBase;
+  }
+  button.dataset.mode = summary.mode;
+}
+
+async function handleAccountingSaveAllPars() {
+  const state = getAccountingRecipesState();
+  if (state.isSavingAllPars || state.activeView !== "pars") return;
+  const summary = getDirtyParsSummary();
+  const dirtyKeys = summary.keys;
+  if (!dirtyKeys.length) {
+    alert("No unsaved pars to save.");
+    return;
+  }
+
+  const statusEl = document.getElementById("accountingRecipesSaveAllStatus");
+  const dirtyRows = dirtyKeys
+    .map((key) => state.byKey.get(key))
+    .filter(Boolean);
+  const total = dirtyRows.length;
+  if (!total) {
+    alert("No unsaved pars to save.");
+    return;
+  }
+
+  state.isSavingAllPars = true;
+  if (statusEl) {
+    statusEl.textContent = `Saving ${total} ${summary.mode === "prep" ? "prep" : "recipe"} entr${total === 1 ? "y" : "ies"}…`;
+    statusEl.dataset.tone = "info";
+  }
+  updateAccountingSaveAllButton();
+
+  let failures = 0;
+  let successes = 0;
+  for (const row of dirtyRows) {
+    const key = row._key;
+    let failed = false;
+    try {
+      if (summary.mode === "prep") {
+        await savePrepPars(key, { skipFilter: true });
+      } else {
+        await saveRecipePars(key, { skipFilter: true });
+      }
+    } catch (err) {
+      failures += 1;
+      console.error("Failed to save pars for row", key, err);
+      failed = true;
+    }
+
+    if (!failed) {
+      const stillDirty = summary.mode === "prep"
+        ? (() => {
+            const entry = getPrepEntryForRow(row, summary.venue);
+            return !!(entry && entry.dirty);
+          })()
+        : !!(row.parsDirtyByVenue && row.parsDirtyByVenue[summary.venue]);
+      if (stillDirty) {
+        failures += 1;
+        failed = true;
+      }
+    }
+
+    if (!failed) {
+      successes += 1;
+    }
+  }
+
+  state.isSavingAllPars = false;
+  applyAccountingRecipesFilter();
+
+  if (statusEl) {
+    if (failures) {
+      statusEl.textContent = `Saved ${successes} of ${total}. Check console for errors.`;
+      statusEl.dataset.tone = "error";
+    } else {
+      statusEl.textContent = `Saved ${successes} entr${successes === 1 ? "y" : "ies"} successfully.`;
+      statusEl.dataset.tone = "success";
+    }
+  }
+  updateAccountingSaveAllButton();
+}
+
 function setAccountingRecipesActiveView(view) {
   const state = getAccountingRecipesState();
   const normalized = view === "pars" ? "pars" : "info";
@@ -4485,6 +4976,7 @@ function setAccountingRecipesActiveView(view) {
   updateAccountingRecipeSubtabs();
   updateAccountingVenueTabs();
   updateAccountingParsModeToggle();
+  updateAccountingSaveAllButton();
   applyAccountingRecipesFilter();
 }
 
@@ -4493,6 +4985,7 @@ function setAccountingRecipesVenue(venue) {
   const canonicalVenue = canonicalizeVenueName(venue) || ACCOUNTING_VENUES[0];
   state.activeVenue = canonicalVenue;
   updateAccountingVenueTabs();
+  updateAccountingSaveAllButton();
   applyAccountingRecipesFilter();
 }
 
@@ -4502,6 +4995,7 @@ function setAccountingParsMode(mode) {
   if (state.parsMode === normalized) return;
   state.parsMode = normalized;
   updateAccountingParsModeToggle();
+  updateAccountingSaveAllButton();
   applyAccountingRecipesFilter();
 }
 
@@ -4828,9 +5322,36 @@ function ensureAccountingRecipesUI() {
     });
   }
 
+  const parsHeaderRow = document.getElementById("accountingRecipesParsHeader");
+  if (parsHeaderRow && !parsHeaderRow.dataset.bound) {
+    parsHeaderRow.dataset.bound = "1";
+    parsHeaderRow.addEventListener("click", (event) => {
+      const control = event.target.closest("[data-action]");
+      if (!control) return;
+      const action = control.getAttribute("data-action");
+      if (action === "add-par") {
+        event.preventDefault();
+        handleAccountingAddGuestCount();
+      } else if (action === "delete-par") {
+        event.preventDefault();
+        const countKey = control.getAttribute("data-count");
+        if (countKey) {
+          handleAccountingDeleteGuestCount(countKey);
+        }
+      }
+    });
+  }
+
+  const saveAllBtn = document.getElementById("accountingRecipesSaveAll");
+  if (saveAllBtn && !saveAllBtn.dataset.bound) {
+    saveAllBtn.dataset.bound = "1";
+    saveAllBtn.addEventListener("click", handleAccountingSaveAllPars);
+  }
+
   updateAccountingRecipeSubtabs();
   updateAccountingVenueTabs();
   updateAccountingParsModeToggle();
+  updateAccountingSaveAllButton();
 
   state.initialized = true;
 }
@@ -6702,6 +7223,7 @@ const guestCountSelects = [
   document.getElementById("count-Ohana"),
   document.getElementById("count-Gateway")
 ].filter(Boolean);
+window.__guestCountSelects = guestCountSelects;
 const guestCountSaveButton = guestForm ? guestForm.querySelector(".save-btn") : null;
 
 if (guestCountSaveButton) {

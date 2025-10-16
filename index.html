@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="app-build-id" content="2025.0012" />
+  <meta name="app-build-id" content="2025.0013" />
   <title>PCC KDS</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
@@ -1263,9 +1263,9 @@ Step 3: …"></textarea>
 
   <div id="accounting-content" style="display:none;">
     <div class="area-tabs">
-      <button type="button" class="accounting-group-btn" data-group="meal-plan" onclick="showAccountingGroup('meal-plan')">Meal Plan</button>
-      <button type="button" class="accounting-group-btn" data-group="data" onclick="showAccountingGroup('data')">Data</button>
-      <button type="button" class="accounting-group-btn" data-group="items" onclick="showAccountingGroup('items')">Items</button>
+      <button type="button" class="area-tab accounting-group-btn" data-group="meal-plan" onclick="showAccountingGroup('meal-plan')">Meal Plan</button>
+      <button type="button" class="area-tab accounting-group-btn" data-group="data" onclick="showAccountingGroup('data')">Data</button>
+      <button type="button" class="area-tab accounting-group-btn" data-group="items" onclick="showAccountingGroup('items')">Items</button>
     </div>
 
     <div class="accounting-subtabs-wrapper">
@@ -1768,7 +1768,7 @@ Step 3: …"></textarea>
               <button type="button" class="accounting-subtab accounting-subtab--active" data-view="info">Recipe Info</button>
               <button type="button" class="accounting-subtab" data-view="pars">Recipe Pars</button>
             </div>
-          </div>
+        </div>
           <div class="accounting-controls__actions">
             <button type="button" class="ghost-btn" id="accountingRecipesRefresh">Refresh</button>
             <button type="button" class="save-btn" id="accountingRecipeAddToggle" aria-expanded="false">Add Recipe</button>
@@ -1908,6 +1908,10 @@ Step 3: …"></textarea>
         </div>
 
         <div class="table-wrap accounting-table" id="accountingRecipesParsWrap" hidden>
+          <div class="accounting-pars-toolbar">
+            <button type="button" class="save-btn accounting-pars-save-all" id="accountingRecipesSaveAll" hidden>Save All Pars</button>
+            <span id="accountingRecipesSaveAllStatus" class="accounting-pars-status" role="status" aria-live="polite"></span>
+          </div>
           <table id="accountingRecipesParsTable">
             <colgroup id="accountingRecipesParsCols"></colgroup>
             <thead>

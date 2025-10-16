@@ -794,6 +794,8 @@ input[type="number"]::-webkit-inner-spin-button { -webkit-appearance: none; marg
   border: 1px solid rgba(148, 163, 184, 0.35);
   box-shadow: 0 8px 18px rgba(14, 116, 144, 0.35);
 }
+
+.accounting-group-btn { letter-spacing: 0.02em; }
 .tab-button.active {
   border: 2px solid #8ab4f8;
   background-color: rgba(138, 180, 248, 0.12);
@@ -1618,7 +1620,10 @@ table {
 }
 
 .accounting-table .actions-header {
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
 }
 
 .accounting-table .row-actions {
@@ -1710,6 +1715,106 @@ table {
 .pars-cell--attention input {
   background: rgba(239, 68, 68, 0.12);
   border-color: rgba(239, 68, 68, 0.38);
+}
+
+.pars-cell--required {
+  background: rgba(59, 130, 246, 0.16);
+  border-radius: 12px;
+  box-shadow: inset 0 0 0 1px rgba(59, 130, 246, 0.32);
+}
+
+.pars-cell--required input {
+  background: rgba(59, 130, 246, 0.08);
+  border-color: rgba(37, 99, 235, 0.5);
+}
+
+.accounting-pars-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.accounting-pars-save-all {
+  min-width: 140px;
+}
+
+.accounting-pars-status {
+  font-size: 0.75rem;
+  opacity: 0.7;
+  transition: color 0.2s ease;
+}
+
+.accounting-pars-status[data-tone="success"] {
+  color: #86efac;
+  opacity: 0.9;
+}
+
+.accounting-pars-status[data-tone="error"] {
+  color: #fca5a5;
+  opacity: 0.9;
+}
+
+.accounting-pars-status[data-tone="info"] {
+  color: #bae6fd;
+  opacity: 0.9;
+}
+
+.pars-header-label {
+  display: inline-flex;
+  align-items: center;
+  font-weight: 600;
+  gap: 6px;
+}
+
+.pars-header-add {
+  text-align: center;
+}
+
+.pars-header-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  border: 1px solid var(--border, #444);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text, #f5f5f5);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.pars-header-btn:hover,
+.pars-header-btn:focus {
+  background: rgba(59, 130, 246, 0.25);
+  border-color: rgba(59, 130, 246, 0.45);
+  color: #fff;
+}
+
+.pars-header-btn--delete {
+  background: rgba(239, 68, 68, 0.18);
+  border-color: rgba(239, 68, 68, 0.45);
+}
+
+.pars-header-btn--delete:hover,
+.pars-header-btn--delete:focus {
+  background: rgba(239, 68, 68, 0.3);
+  border-color: rgba(239, 68, 68, 0.6);
+}
+
+.pars-header-btn--add {
+  background: rgba(59, 130, 246, 0.25);
+  border-color: rgba(37, 99, 235, 0.6);
+}
+
+.pars-header-btn--add:hover,
+.pars-header-btn--add:focus {
+  background: rgba(59, 130, 246, 0.35);
+  border-color: rgba(37, 99, 235, 0.8);
 }
 
 .pars-header--attention {

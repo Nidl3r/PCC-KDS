@@ -32,6 +32,8 @@ import {
   arrayUnion,
   arrayRemove,
   increment,
+  deleteField as deleteFieldDirect,
+  FieldPath,
   connectFirestoreEmulator,
   runTransaction as runTransactionDirect, // ⬅️ ADDED
   enableNetwork,
@@ -312,7 +314,7 @@ const addDoc = (...args) => addDocDirect(...args);
 const updateDoc = (...args) => updateDocDirect(...args);
 const deleteDoc = (...args) => deleteDocDirect(...args);
 const runTransaction = (...args) => runTransactionDirect(...args);
-
+const deleteField = (...args) => deleteFieldDirect(...args);
 // ✅ Export everything needed by your app (added runTransaction)
 export {
   db,
@@ -332,10 +334,12 @@ export {
   orderBy,
   limit,
   deleteDoc,
+  deleteField,
   arrayUnion,
   arrayRemove,
   increment,
   runTransaction, // ⬅️ ADDED
+  FieldPath,
   getDocResilient as getDoc,
   getDocsResilient as getDocs,
   getDocFromCache,
