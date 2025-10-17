@@ -1295,6 +1295,7 @@ Step 3: …"></textarea>
         <button type="button" class="accounting-subtab" data-accounting-tab="shipments" onclick="showAccountingTab('shipments'); loadProductionShipments([]);">Production Shipments</button>
         <button type="button" class="accounting-subtab" data-accounting-tab="waste" onclick="showAccountingTab('waste')">Waste</button>
         <button type="button" class="accounting-subtab" data-accounting-tab="lunch" onclick="showAccountingTab('lunch')">Lunch</button>
+        <button type="button" class="accounting-subtab" data-accounting-tab="kitchen-eom" onclick="showAccountingTab('kitchen-eom')">Kitchen EOM</button>
       </div>
       <div class="accounting-subtabs" data-group="data" hidden>
         <button type="button" class="accounting-subtab" data-accounting-tab="analytics" onclick="showAccountingTab('analytics'); showAccountingDashboard();">Analytics</button>
@@ -1372,6 +1373,42 @@ Step 3: …"></textarea>
         </thead>
         <tbody></tbody>
       </table>
+    </div>
+
+    <!-- Kitchen EOM Section -->
+    <div id="kitchenEomTab" class="accounting-section accounting-section--table" data-sec="kitchen-eom" style="display:none;">
+      <div class="accounting-shell">
+        <div class="accounting-controls" role="toolbar">
+          <div class="accounting-controls__info">
+            <h3 class="accounting-controls__title">Kitchen EOM</h3>
+            <p class="accounting-controls__hint">Paste item list to total inventory plus EOM counts.</p>
+          </div>
+          <div class="accounting-controls__actions">
+            <button type="button" class="ghost-btn" id="kitchenEomClearBtn">Clear</button>
+            <button type="button" class="save-btn" id="kitchenEomRefreshBtn">Refresh Totals</button>
+          </div>
+        </div>
+        <div class="kitchen-eom-input">
+          <label for="kitchenEomPasteArea" class="accounting-search-label">Item No. and Description</label>
+          <textarea id="kitchenEomPasteArea" rows="4" placeholder="Item No.&#9;Description&#10;5001&#9;SUGAR GRANULATED"></textarea>
+          <button type="button" id="kitchenEomApplyBtn" class="ghost-btn">Update Table</button>
+        </div>
+        <p id="kitchenEomStatus" role="status" aria-live="polite"></p>
+        <div class="table-wrap accounting-table">
+          <table id="kitchenEomTable">
+            <thead>
+              <tr>
+                <th scope="col">Item No.</th>
+                <th scope="col">Description</th>
+                <th scope="col">Total</th>
+                <th scope="col">UOM</th>
+              </tr>
+            </thead>
+            <tbody id="kitchenEomTbody"></tbody>
+          </table>
+        </div>
+        <p id="kitchenEomEmpty" class="accounting-empty">Paste item list above to begin.</p>
+      </div>
     </div>
 
     <!-- LS Recipes Section -->

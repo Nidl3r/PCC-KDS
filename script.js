@@ -1141,7 +1141,7 @@ try {
 //**accounting */
 
 const ACCOUNTING_GROUP_TABS = {
-  "meal-plan": ["production", "shipments", "waste", "lunch"],
+  "meal-plan": ["production", "shipments", "waste", "lunch", "kitchen-eom"],
   data: ["analytics", "ls-recipes"],
   items: ["ingredients", "uom", "recipes"]
 };
@@ -1248,6 +1248,13 @@ function showAccountingTab(tabName, options = {}) {
   }
 
   // [ACCOUNTING] START
+  if (tabName === "kitchen-eom") {
+    ensureKitchenEomUI();
+    refreshKitchenEomTotals().catch((err) => {
+      console.error("Kitchen EOM refresh failed", err);
+    });
+  }
+
   if (tabName === "ls-recipes") {
     ensureAccountingLsRecipesUI();
     loadAccountingLsRecipes();
@@ -18150,6 +18157,695 @@ let itemNo =
     `;
     tbody.appendChild(tr);
   }
+}
+
+
+
+const KITCHEN_EOM_STATUS_CLEAR_DELAY_MS = 4000;
+
+function getKitchenEomState() {
+  if (!window.__kitchenEomState) {
+    window.__kitchenEomState = {
+      initialized: false,
+      rows: [],
+      isLoading: false,
+      pendingRefresh: false,
+      statusTimer: null,
+      transfer: { serviceDate: null, map: new Map() },
+      eomTotals: new Map(),
+      eomTotalsServiceDate: null,
+      eomRaw: [],
+      ingredientCache: new Map(),
+      ingredientFetches: new Map(),
+      uomIndex: null,
+      powerbiByParent: new Map(),
+      powerbiFetches: new Map(),
+      recipeAggregateCache: new Map()
+    };
+  }
+  return window.__kitchenEomState;
+}
+
+function ensureKitchenEomUI() {
+  const state = getKitchenEomState();
+  if (state.initialized) return;
+  state.initialized = true;
+
+  const applyBtn = document.getElementById("kitchenEomApplyBtn");
+  if (applyBtn) {
+    applyBtn.addEventListener("click", handleKitchenEomApply);
+  }
+
+  const clearBtn = document.getElementById("kitchenEomClearBtn");
+  if (clearBtn) {
+    clearBtn.addEventListener("click", handleKitchenEomClear);
+  }
+
+  const refreshBtn = document.getElementById("kitchenEomRefreshBtn");
+  if (refreshBtn) {
+    refreshBtn.addEventListener("click", handleKitchenEomRefresh);
+  }
+
+  const textarea = document.getElementById("kitchenEomPasteArea");
+  if (textarea) {
+    textarea.addEventListener("keydown", (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "enter") {
+        event.preventDefault();
+        handleKitchenEomApply(event);
+      }
+    });
+  }
+
+  renderKitchenEomRows(state);
+}
+
+function handleKitchenEomApply(event) {
+  if (event && typeof event.preventDefault === "function") {
+    event.preventDefault();
+  }
+
+  const textarea = document.getElementById("kitchenEomPasteArea");
+  if (!textarea) return;
+
+  const parsed = parseKitchenEomInput(textarea.value || "");
+  const state = getKitchenEomState();
+  const dedup = new Map();
+
+  parsed.forEach((row) => {
+    const key = normalizeLsRecipeKey(row.itemNo);
+    if (!key) return;
+    const existing = dedup.get(key);
+    if (!existing) {
+      dedup.set(key, {
+        itemNo: row.itemNo,
+        description: row.description
+      });
+    } else if (!existing.description && row.description) {
+      existing.description = row.description;
+    }
+  });
+
+  state.rows = Array.from(dedup.values()).map((rowData) => ({
+    itemNo: normalizeLsRecipeDisplay(rowData.itemNo),
+    itemKey: normalizeLsRecipeKey(rowData.itemNo),
+    description: normalizeLsRecipeDisplay(rowData.description),
+    total: null,
+    uom: "",
+    transferQty: 0,
+    eomQty: 0,
+    issues: []
+  }));
+
+  renderKitchenEomRows(state);
+
+  if (state.rows.length) {
+    refreshKitchenEomTotals().catch((err) => {
+      console.error("Kitchen EOM apply refresh failed", err);
+    });
+  } else {
+    setKitchenEomStatus("Paste item list to calculate totals.", "muted");
+  }
+}
+
+function handleKitchenEomClear(event) {
+  if (event && typeof event.preventDefault === "function") {
+    event.preventDefault();
+  }
+
+  const state = getKitchenEomState();
+  state.rows = [];
+  renderKitchenEomRows(state);
+
+  const textarea = document.getElementById("kitchenEomPasteArea");
+  if (textarea) {
+    textarea.value = "";
+  }
+
+  setKitchenEomStatus("Kitchen EOM list cleared.", "success");
+}
+
+function handleKitchenEomRefresh(event) {
+  if (event && typeof event.preventDefault === "function") {
+    event.preventDefault();
+  }
+  refreshKitchenEomTotals({ forceData: true }).catch((err) => {
+    console.error("Kitchen EOM manual refresh failed", err);
+  });
+}
+
+function parseKitchenEomInput(raw) {
+  if (!raw) return [];
+  const rows = [];
+  raw.split(/\r?\n/).forEach((line) => {
+    if (!line) return;
+    const trimmed = line.trim();
+    if (!trimmed) return;
+
+    let cells = trimmed.split("\t");
+    if (cells.length < 2) {
+      if (trimmed.includes(",")) {
+        cells = trimmed.split(",");
+      } else {
+        cells = trimmed.split(/\s{2,}/);
+      }
+    }
+
+    const itemNo = (cells[0] ?? "").trim();
+    const description = (cells[1] ?? "").trim();
+    if (!itemNo) return;
+    const headerCheck = itemNo.replace(/[.\s]/g, "").toLowerCase();
+    if (headerCheck === "itemno" || headerCheck === "itemnumber") return;
+    rows.push({ itemNo, description });
+  });
+  return rows;
+}
+
+function renderKitchenEomRows(state) {
+  const tbody = document.getElementById("kitchenEomTbody");
+  const emptyEl = document.getElementById("kitchenEomEmpty");
+  if (!tbody) return;
+
+  tbody.innerHTML = "";
+
+  if (!state.rows.length) {
+    if (emptyEl) emptyEl.hidden = false;
+    return;
+  }
+
+  if (emptyEl) emptyEl.hidden = true;
+
+  const fragment = document.createDocumentFragment();
+
+  state.rows.forEach((row) => {
+    const totalDisplay = Number.isFinite(row.total) ? formatKitchenEomQty(row.total) : "—";
+    const uomDisplay = row.uom ? row.uom : "—";
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td data-label="Item No.">${escapeHtml(row.itemNo || "")}</td>
+      <td data-label="Description">${escapeHtml(row.description || "")}</td>
+      <td data-label="Total" data-col="total" style="text-align:right;">${escapeHtml(totalDisplay)}</td>
+      <td data-label="UOM">${escapeHtml(uomDisplay)}</td>
+    `;
+
+    const totalCell = tr.querySelector('[data-col="total"]');
+    if (totalCell) {
+      const parts = [];
+      if (Number.isFinite(row.transferQty) && !nearlyZero(row.transferQty)) {
+        parts.push(`Transfer: ${formatKitchenEomQty(row.transferQty)}`);
+      }
+      if (Number.isFinite(row.eomQty) && !nearlyZero(row.eomQty)) {
+        parts.push(`EOM: ${formatKitchenEomQty(row.eomQty)}`);
+      }
+      if (row.issues && row.issues.length) {
+        parts.push(`Issues: ${row.issues.join(", ")}`);
+      }
+      if (parts.length) {
+        totalCell.title = parts.join("\n");
+      } else {
+        totalCell.removeAttribute("title");
+      }
+    }
+
+    fragment.appendChild(tr);
+  });
+
+  tbody.appendChild(fragment);
+}
+
+function setKitchenEomStatus(message = "", tone = "muted", options = {}) {
+  const state = getKitchenEomState();
+  const el = document.getElementById("kitchenEomStatus");
+  if (state.statusTimer) {
+    clearTimeout(state.statusTimer);
+    state.statusTimer = null;
+  }
+
+  if (!el) return;
+
+  if (!message) {
+    el.textContent = "";
+    el.removeAttribute("data-tone");
+    return;
+  }
+
+  el.textContent = message;
+  el.dataset.tone = tone;
+
+  if (!options.persist) {
+    state.statusTimer = setTimeout(() => {
+      const statusEl = document.getElementById("kitchenEomStatus");
+      if (statusEl) {
+        statusEl.textContent = "";
+        statusEl.removeAttribute("data-tone");
+      }
+      state.statusTimer = null;
+    }, KITCHEN_EOM_STATUS_CLEAR_DELAY_MS);
+  }
+}
+
+function formatKitchenEomQty(value) {
+  if (!Number.isFinite(value)) return "—";
+  const rendered = formatLsRecipesQuantity(value);
+  return rendered !== "" ? rendered : "0";
+}
+
+async function refreshKitchenEomTotals(options = {}) {
+  const state = getKitchenEomState();
+
+  if (!state.rows.length) {
+    renderKitchenEomRows(state);
+    return;
+  }
+
+  if (state.isLoading) {
+    state.pendingRefresh = true;
+    return;
+  }
+
+  state.isLoading = true;
+  setKitchenEomStatus("Calculating totals…", "muted", { persist: true });
+
+  const refreshBtn = document.getElementById("kitchenEomRefreshBtn");
+  const applyBtn = document.getElementById("kitchenEomApplyBtn");
+  if (refreshBtn) refreshBtn.disabled = true;
+  if (applyBtn) applyBtn.disabled = true;
+
+  try {
+    await ensureKitchenEomUomIndex(options);
+    await loadKitchenEomTransferData(options);
+    await loadKitchenEomEomData(options);
+    await ensureKitchenEomIngredientsForRows(state.rows);
+    computeKitchenEomTotals(state);
+    renderKitchenEomRows(state);
+    setKitchenEomStatus("Totals updated.", "success");
+  } catch (error) {
+    console.error("Kitchen EOM refresh failed", error);
+    setKitchenEomStatus("Failed to calculate Kitchen EOM totals.", "error", { persist: true });
+  } finally {
+    state.isLoading = false;
+    if (refreshBtn) refreshBtn.disabled = false;
+    if (applyBtn) applyBtn.disabled = false;
+    if (state.pendingRefresh) {
+      state.pendingRefresh = false;
+      refreshKitchenEomTotals(options).catch((err) => {
+        console.error("Kitchen EOM follow-up refresh failed", err);
+      });
+    }
+  }
+}
+
+async function ensureKitchenEomUomIndex(options = {}) {
+  const state = getKitchenEomState();
+  if (!options.forceData && state.uomIndex instanceof Map && state.uomIndex.size > 0) {
+    return state.uomIndex;
+  }
+
+  const snap = await getDocs(collection(db, UOM_COLLECTION));
+  state.uomIndex = buildLsRecipesUomIndex(snap);
+  return state.uomIndex;
+}
+
+async function loadKitchenEomTransferData(options = {}) {
+  const state = getKitchenEomState();
+  const serviceDate = typeof getTodayDate === "function" ? getTodayDate() : "";
+
+  if (!options.forceData && state.transfer && state.transfer.serviceDate === serviceDate) {
+    return state.transfer;
+  }
+
+  const docRef = doc(db, TRANSFER_ORDER_COLLECTION, `${TRANSFER_ORDER_DOC_PREFIX}|${serviceDate}`);
+  let data = {};
+
+  try {
+    const snap = await getDoc(docRef);
+    data = snap?.exists?.() ? (snap.data() || {}) : {};
+  } catch (err) {
+    console.warn("Kitchen EOM: failed to load transfer order doc", err);
+  }
+
+  const items = data && typeof data.items === "object" ? data.items : {};
+  const map = new Map();
+
+  Object.entries(items).forEach(([rawKey, payload]) => {
+    const itemNoRaw = payload?.itemNo ?? payload?.Item_No ?? payload?.item_no ?? rawKey;
+    const displayNo = normalizeLsRecipeDisplay(itemNoRaw) || rawKey;
+    const key = normalizeLsRecipeKey(itemNoRaw);
+    if (!key) return;
+
+    const inventoryValue = parseTransferNumber(payload?.inventory ?? payload?.invAmount ?? payload?.onHand ?? 0);
+    const qty = Number.isFinite(inventoryValue) ? inventoryValue : 0;
+    const uom = normalizeLsRecipeDisplay(payload?.uom ?? payload?.baseUOM ?? payload?.baseUom ?? payload?.orderingUOM ?? payload?.orderingUom ?? "");
+    const description = normalizeLsRecipeDisplay(payload?.description ?? payload?.itemName ?? payload?.item ?? "");
+
+    const existing = map.get(key) || {
+      itemNo: displayNo,
+      inventory: 0,
+      uom: uom || "",
+      description: description || "",
+      docIds: new Set()
+    };
+
+    existing.inventory = roundLsRecipesQuantity(existing.inventory + qty, LS_RECIPES_DISPLAY_PRECISION);
+    if (!existing.uom && uom) {
+      existing.uom = uom;
+    }
+    if (!existing.description && description) {
+      existing.description = description;
+    }
+    existing.docIds.add(rawKey);
+    map.set(key, existing);
+
+    const digitsKey = stripLeadingZeros(key);
+    if (digitsKey && digitsKey !== key) {
+      map.set(digitsKey, existing);
+    }
+  });
+
+  state.transfer = {
+    serviceDate,
+    map
+  };
+
+  return state.transfer;
+}
+
+async function loadKitchenEomEomData(options = {}) {
+  const state = getKitchenEomState();
+  const serviceDate = typeof getTodayDate === "function" ? getTodayDate() : "";
+
+  if (!options.forceData && state.eomTotalsServiceDate === serviceDate && state.eomTotals instanceof Map) {
+    return state.eomTotals;
+  }
+
+  const docRef = doc(db, EOM_COUNT_COLLECTION, `${EOM_DOC_PREFIX}|${serviceDate}`);
+  let items = [];
+
+  try {
+    const snap = await getDoc(docRef);
+    const data = snap?.exists?.() ? (snap.data() || {}) : {};
+    items = Array.isArray(data.items)
+      ? data.items
+      : Array.isArray(data)
+        ? data
+        : [];
+    state.eomRaw = items;
+  } catch (err) {
+    console.warn("Kitchen EOM: failed to load eomCount doc", err);
+    items = [];
+  }
+
+  state.eomTotals = new Map();
+  state.eomTotalsServiceDate = serviceDate;
+
+  if (!items.length) {
+    return state.eomTotals;
+  }
+
+  const recipeAggregateCache = state.recipeAggregateCache || new Map();
+  state.recipeAggregateCache = recipeAggregateCache;
+
+  for (const raw of items) {
+    const qty = parseTransferNumber(raw?.qty ?? raw?.quantity ?? raw?.count ?? raw?.value);
+    if (!Number.isFinite(qty) || qty <= 0) continue;
+
+    const recipeKeyRaw =
+      raw?.recipeId ??
+      raw?.recipeID ??
+      raw?.RecipeId ??
+      raw?.RecipeID ??
+      raw?.recipeNo ??
+      raw?.Recipe_No ??
+      "";
+    const recipeKey = normalizeLsRecipeKey(recipeKeyRaw);
+    if (!recipeKey) continue;
+
+    await ensureKitchenEomRecipeTree(recipeKey);
+    const entry = state.powerbiByParent.get(recipeKey);
+    if (!entry) {
+      console.warn("Kitchen EOM: recipe missing from powerbiDaily", recipeKey);
+      continue;
+    }
+
+    let recipeAggregate = recipeAggregateCache.get(recipeKey);
+    if (!recipeAggregate) {
+      recipeAggregate = aggregateLsRecipeItems(entry, {
+        powerbiByParent: state.powerbiByParent,
+        uomIndex: state.uomIndex
+      });
+      recipeAggregateCache.set(recipeKey, recipeAggregate);
+    }
+
+    recipeAggregate.forEach((ingredient) => {
+      const itemKey = normalizeLsRecipeKey(ingredient.ingredientNo ?? ingredient.ingredientKey);
+      if (!itemKey) return;
+      const qtyBase = Number(ingredient.qtyBase) || 0;
+      if (!Number.isFinite(qtyBase) || nearlyZero(qtyBase)) return;
+      const totalContribution = qtyBase * qty;
+      if (nearlyZero(totalContribution)) return;
+
+      const existing = state.eomTotals.get(itemKey) || {
+        qty: 0,
+        uom: ingredient.uom || "",
+        description: ingredient.description || "",
+        sources: []
+      };
+
+      existing.qty = roundLsRecipesQuantity(existing.qty + totalContribution, LS_RECIPES_DISPLAY_PRECISION);
+      if (!existing.uom && ingredient.uom) {
+        existing.uom = ingredient.uom;
+      }
+      if (!existing.description && ingredient.description) {
+        existing.description = ingredient.description;
+      }
+      existing.sources.push({
+        recipeId: recipeKey,
+        qty: totalContribution
+      });
+
+      state.eomTotals.set(itemKey, existing);
+      const digitsKey = stripLeadingZeros(itemKey);
+      if (digitsKey && digitsKey !== itemKey) {
+        state.eomTotals.set(digitsKey, existing);
+      }
+    });
+  }
+
+  return state.eomTotals;
+}
+
+function computeKitchenEomTotals(state) {
+  const transferMap = state.transfer?.map instanceof Map ? state.transfer.map : new Map();
+  const eomMap = state.eomTotals instanceof Map ? state.eomTotals : new Map();
+
+  state.rows.forEach((row) => {
+    const key = row.itemKey;
+    const transferEntry = getKitchenEomMapEntry(transferMap, key);
+    const eomEntry = getKitchenEomMapEntry(eomMap, key);
+    const ingredient = getKitchenEomMapEntry(state.ingredientCache, key);
+
+    const transferQty = transferEntry ? Number(transferEntry.inventory) || 0 : 0;
+    const eomQty = eomEntry ? Number(eomEntry.qty) || 0 : 0;
+
+    row.transferQty = roundLsRecipesQuantity(transferQty, LS_RECIPES_DISPLAY_PRECISION);
+    row.eomQty = roundLsRecipesQuantity(eomQty, LS_RECIPES_DISPLAY_PRECISION);
+    row.total = roundLsRecipesQuantity(row.transferQty + row.eomQty, LS_RECIPES_DISPLAY_PRECISION);
+
+    const baseUom =
+      (ingredient && normalizeLsRecipeDisplay(ingredient.baseUOM)) ||
+      (eomEntry && normalizeLsRecipeDisplay(eomEntry.uom)) ||
+      (transferEntry && normalizeLsRecipeDisplay(transferEntry.uom)) ||
+      "";
+
+    row.uom = baseUom;
+
+    if (!row.description) {
+      row.description =
+        (transferEntry && normalizeLsRecipeDisplay(transferEntry.description)) ||
+        (eomEntry && normalizeLsRecipeDisplay(eomEntry.description)) ||
+        (ingredient && normalizeLsRecipeDisplay(ingredient.itemName)) ||
+        row.description ||
+        "";
+    }
+
+    row.issues = [];
+    if (!Number.isFinite(row.total)) {
+      row.total = null;
+      row.issues.push("Invalid total");
+    }
+    if (!row.uom) {
+      row.issues.push("Missing UOM");
+    }
+  });
+}
+
+async function ensureKitchenEomIngredientsForRows(rows) {
+  await Promise.all(rows.map((row) => ensureKitchenEomIngredient(row.itemKey)));
+}
+
+async function ensureKitchenEomIngredient(itemKey) {
+  const state = getKitchenEomState();
+  const key = normalizeLsRecipeKey(itemKey);
+  if (!key) return null;
+
+  if (state.ingredientCache.has(key)) {
+    return state.ingredientCache.get(key);
+  }
+  if (state.ingredientFetches.has(key)) {
+    return state.ingredientFetches.get(key);
+  }
+
+  const fetchPromise = (async () => {
+    const cacheData = await fetchKitchenEomIngredientDoc(key);
+    const digitsKey = stripLeadingZeros(key);
+    state.ingredientCache.set(key, cacheData);
+    if (digitsKey && digitsKey !== key) {
+      state.ingredientCache.set(digitsKey, cacheData);
+    }
+    return cacheData;
+  })();
+
+  state.ingredientFetches.set(key, fetchPromise);
+  try {
+    return await fetchPromise;
+  } finally {
+    state.ingredientFetches.delete(key);
+  }
+}
+
+async function fetchKitchenEomIngredientDoc(itemKey) {
+  const trimmed = normalizeLsRecipeDisplay(itemKey);
+  if (!trimmed) return null;
+
+  const candidates = [trimmed];
+  const digitsKey = stripLeadingZeros(trimmed);
+  if (digitsKey && digitsKey !== trimmed) {
+    candidates.push(digitsKey);
+  }
+
+  for (const id of candidates) {
+    try {
+      const snap = await getDoc(doc(db, "ingredients", id));
+      if (snap?.exists?.()) {
+        return snap.data() || {};
+      }
+    } catch (err) {
+      console.debug("Kitchen EOM ingredient doc lookup failed", id, err);
+    }
+  }
+
+  const lookups = [];
+  const numeric = Number(digitsKey);
+  const collRef = collection(db, "ingredients");
+
+  if (Number.isFinite(numeric)) {
+    lookups.push(query(collRef, where("itemNo", "==", numeric), limit(1)));
+  }
+  lookups.push(query(collRef, where("itemNo", "==", trimmed), limit(1)));
+
+  for (const q of lookups) {
+    try {
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        const docSnap = snap.docs[0];
+        return docSnap.data() || {};
+      }
+    } catch (err) {
+      console.debug("Kitchen EOM ingredient query failed", err);
+    }
+  }
+
+  return null;
+}
+
+async function ensureKitchenEomRecipeTree(rootKey) {
+  const normalizedRoot = normalizeLsRecipeKey(rootKey);
+  if (!normalizedRoot) return;
+
+  const queue = [normalizedRoot];
+  const visited = new Set();
+
+  while (queue.length) {
+    const currentKey = queue.shift();
+    if (visited.has(currentKey)) continue;
+    visited.add(currentKey);
+
+    const entry = await ensureKitchenEomRecipeEntry(currentKey);
+    if (!entry || !Array.isArray(entry.items)) continue;
+
+    entry.items.forEach((item) => {
+      const childKey = normalizeLsRecipeKey(
+        item?.Item_No ?? item?.itemNo ?? item?.item_no ?? item?.itemNumber ?? ""
+      );
+      if (!childKey || !childKey.startsWith("R")) return;
+      if (!visited.has(childKey)) queue.push(childKey);
+    });
+  }
+}
+
+async function ensureKitchenEomRecipeEntry(recipeKey) {
+  const state = getKitchenEomState();
+  const key = normalizeLsRecipeKey(recipeKey);
+  if (!key) return null;
+
+  if (state.powerbiByParent.has(key)) {
+    return state.powerbiByParent.get(key);
+  }
+
+  if (state.powerbiFetches.has(key)) {
+    return state.powerbiFetches.get(key);
+  }
+
+  const fetchPromise = (async () => {
+    try {
+      const snap = await getDoc(doc(db, LS_RECIPES_COLL, key));
+      if (!snap?.exists?.()) {
+        state.powerbiByParent.set(key, null);
+        return null;
+      }
+
+      const data = snap.data() || {};
+      const rawParent =
+        data.Parent_Item_No ?? data.parentItemNo ?? data.parent_item_no ?? snap.id;
+      const entry = {
+        key,
+        parentNo: normalizeLsRecipeDisplay(rawParent) || key,
+        data,
+        items: Array.isArray(data.items) ? data.items : [],
+        ingestedAt: parseLsRecipeTimestamp(data._ingestedAt ?? data.ingestedAt)
+      };
+      state.powerbiByParent.set(key, entry);
+      return entry;
+    } catch (err) {
+      console.error("Kitchen EOM: failed to fetch powerbiDaily doc", recipeKey, err);
+      state.powerbiByParent.set(key, null);
+      return null;
+    }
+  })();
+
+  state.powerbiFetches.set(key, fetchPromise);
+  try {
+    return await fetchPromise;
+  } finally {
+    state.powerbiFetches.delete(key);
+  }
+}
+
+function getKitchenEomMapEntry(map, key) {
+  if (!map) return null;
+  const normalized = normalizeLsRecipeKey(key);
+  if (!normalized) return null;
+  if (map instanceof Map) {
+    if (map.has(normalized)) return map.get(normalized);
+    const digits = stripLeadingZeros(normalized);
+    if (digits && map.has(digits)) return map.get(digits);
+    return null;
+  }
+  if (map instanceof Map === false) {
+    if (Object.prototype.hasOwnProperty.call(map, normalized)) return map[normalized];
+    const digits = stripLeadingZeros(normalized);
+    if (digits && Object.prototype.hasOwnProperty.call(map, digits)) return map[digits];
+  }
+  return null;
 }
 
 

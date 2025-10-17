@@ -32,7 +32,7 @@ exports.clearPowerbiDaily = onSchedule(
     timeZone: "Pacific/Honolulu",
   },
   async () => {
-    await deleteCollectionContents("powerbiDaily", "powerbiDaily documents");
+    await archivePowerbiDaily();
   }
 );
 
@@ -142,6 +142,80 @@ async function deleteCollectionContents(collectionName, logLabel) {
   }
 
   console.log(`✅ Deleted ${deleted} ${logLabel}.`);
+}
+
+async function archivePowerbiDaily() {
+  const sourceSnap = await db.collection("powerbiDaily").get();
+
+  if (sourceSnap.empty) {
+    console.log("No powerbiDaily documents to archive.");
+    return;
+  }
+
+  const archiveDate = formatHawaiiArchiveDate();
+  const usedIds = new Set();
+  const docs = sourceSnap.docs;
+  const batchSize = 200; // 200 docs × (set+delete) = 400 ops ≤ 500
+  let processed = 0;
+
+  for (let i = 0; i < docs.length; i += batchSize) {
+    const batch = db.batch();
+    const slice = docs.slice(i, i + batchSize);
+
+    slice.forEach((docSnap) => {
+      const data = docSnap.data() || {};
+      const parentRaw =
+        data.Parent_Item_No ??
+        data.parentItemNo ??
+        data.parent_item_no ??
+        docSnap.id;
+      const parentStr = String(parentRaw ?? "").trim() || "powerbi";
+      const safeParent = parentStr.replace(/[^A-Za-z0-9_-]+/g, "_") || "powerbi";
+
+      let targetIdBase = `${safeParent}_${archiveDate}`;
+      let targetId = targetIdBase;
+      let dedupe = 2;
+      while (usedIds.has(targetId)) {
+        targetId = `${targetIdBase}_${dedupe}`;
+        dedupe += 1;
+      }
+      usedIds.add(targetId);
+
+      const destRef = db.collection("Pastrecipebom").doc(targetId);
+      batch.set(destRef, {
+        ...data,
+        archivedAt: FieldValue.serverTimestamp(),
+        archivedFromId: docSnap.id
+      });
+      batch.delete(docSnap.ref);
+      processed += 1;
+    });
+
+    await batch.commit();
+  }
+
+  console.log(`✅ Archived and cleared ${processed} powerbiDaily documents for ${archiveDate}.`);
+}
+
+function formatHawaiiArchiveDate(date = new Date()) {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Pacific/Honolulu",
+    month: "2-digit",
+    day: "2-digit",
+    year: "numeric"
+  });
+
+  const parts = formatter.formatToParts(date).reduce((acc, part) => {
+    if (part.type !== "literal") {
+      acc[part.type] = part.value;
+    }
+    return acc;
+  }, {});
+
+  const month = parts.month || "01";
+  const day = parts.day || "01";
+  const year = parts.year || "1970";
+  return `${month}-${day}-${year}`;
 }
 
 // ======================================
