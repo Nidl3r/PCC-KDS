@@ -3501,9 +3501,16 @@ table button {
   outline-offset: 2px;
 }
 
+.transfer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.transfer-save-btn,
 .transfer-reset-btn {
   align-self: center;
-  margin-left: auto;
 }
 
 .transfer-pane {

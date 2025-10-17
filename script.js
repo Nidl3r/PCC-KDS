@@ -8285,7 +8285,7 @@ window.showKitchenSection = function (sectionId) {
 };
 
 
-const TRANSFER_ORDER_COLLECTION = "transferOrders";
+const TRANSFER_ORDER_COLLECTION = "transferorder";
 const TRANSFER_ORDER_DOC_PREFIX = "mainKitchen";
 const TRANSFER_ORDER_SAVE_DELAY_MS = 650;
 const TRANSFER_ORDER_STATUS_CLEAR_DELAY_MS = 4200;
@@ -8357,6 +8357,11 @@ function initTransferOrderOnce() {
   if (state.initialized) return;
   state.initialized = true;
 
+  const saveBtn = document.getElementById("transferOrderSaveBtn");
+  if (saveBtn) {
+    saveBtn.addEventListener("click", handleTransferOrderSave);
+  }
+
   const resetBtn = document.getElementById("transferOrderResetBtn");
   if (resetBtn) {
     resetBtn.addEventListener("click", handleTransferOrderReset);
@@ -8409,10 +8414,14 @@ function setTransferOrderTab(tabId) {
 
   state.activeTab = finalTab;
 
+  const showActions = finalTab === "order";
+  const saveBtn = document.getElementById("transferOrderSaveBtn");
+  if (saveBtn) {
+    saveBtn.hidden = !showActions;
+  }
   const resetBtn = document.getElementById("transferOrderResetBtn");
   if (resetBtn) {
-    const show = finalTab === "order";
-    resetBtn.hidden = !show;
+    resetBtn.hidden = !showActions;
   }
 
   if (finalTab === "eom") {
@@ -8978,15 +8987,15 @@ function computeTransferRowMetrics(row) {
   row.onHandLabel = formatTransferDecimal(onHand, 2, { stripZeros: true });
 
   const invRaw = perCase > 0 ? onHand / perCase : 0;
-  const invRounded = Math.round(invRaw * 100) / 100;
-  row.invAmount = invRounded;
-  row.invDisplay = formatTransferDecimal(invRounded, 2, { stripZeros: false });
+  const invTruncated = Math.trunc(invRaw * 100) / 100;
+  row.invAmount = invTruncated;
+  row.invDisplay = formatTransferDecimal(invTruncated, 2, { stripZeros: false });
 
   const minCases = Number.isFinite(row.minCases) ? row.minCases : 0;
   row.minCases = minCases;
   row.minDisplay = formatTransferDecimal(minCases, 2, { stripZeros: true });
 
-  const deficit = minCases - invRounded;
+  const deficit = minCases - invTruncated;
   const epsilon = 1e-6;
   row.needed = deficit > epsilon ? Math.ceil(deficit - epsilon) : 0;
   return row;
@@ -9354,13 +9363,25 @@ async function persistTransferOrderValue(state, key) {
   if (!row || !state.docRef) return;
 
   const onHandValue = Number.isFinite(row.onHand) ? Number(row.onHand) : 0;
+  const inventoryAmount = Number.isFinite(row.invAmount) ? Number(row.invAmount) : 0;
+  const totalInventoryScaled = state.rows.reduce((sum, current) => {
+    const val = Number.isFinite(current.invAmount) ? Math.trunc(Number(current.invAmount) * 100) : 0;
+    return sum + val;
+  }, 0);
+  const totalInventory = totalInventoryScaled / 100;
   const payload = {
     serviceDate: getTodayDate(),
     venue: "Main Kitchen",
     updatedAt: serverTimestamp(),
+    totalInventory,
     items: {
       [row.saveKey]: {
+        itemNo: row.itemNoDisplay,
+        description: row.itemName,
         onHand: onHandValue,
+        inventory: inventoryAmount,
+        perCase: Number.isFinite(row.perCase) ? Number(row.perCase) : 0,
+        uom: row.uomDisplay || row.uom || "",
         updatedAt: serverTimestamp()
       }
     }
@@ -9437,6 +9458,59 @@ function handleTransferOnHandBlur(event) {
   scheduleTransferOrderSave(state, key);
 }
 
+async function handleTransferOrderSave() {
+  const state = getTransferOrderState();
+  if (!state.docRef) {
+    setTransferOrderStatus("Still loading inventory.", "muted");
+    return;
+  }
+
+  const saveBtn = document.getElementById("transferOrderSaveBtn");
+  if (saveBtn) saveBtn.disabled = true;
+
+  state.pendingSaveTimers.forEach((timer) => clearTimeout(timer));
+  state.pendingSaveTimers.clear();
+
+  try {
+    setTransferOrderStatus("Saving…", "muted");
+    const items = {};
+    const docTimestamp = serverTimestamp();
+    let totalInventoryScaled = 0;
+    state.rows.forEach((row) => {
+      const onHand = Number.isFinite(row.onHand) ? Number(row.onHand) : 0;
+      const inventoryAmount = Number.isFinite(row.invAmount) ? Number(row.invAmount) : 0;
+      totalInventoryScaled += Math.trunc(inventoryAmount * 100);
+      items[row.saveKey] = {
+        itemNo: row.itemNoDisplay,
+        description: row.itemName,
+        onHand,
+        inventory: inventoryAmount,
+        perCase: Number.isFinite(row.perCase) ? Number(row.perCase) : 0,
+        uom: row.uomDisplay || row.uom || "",
+        updatedAt: serverTimestamp()
+      };
+    });
+
+    const totalInventory = totalInventoryScaled / 100;
+
+    await setDoc(state.docRef, {
+      serviceDate: getTodayDate(),
+      venue: "Main Kitchen",
+      updatedAt: docTimestamp,
+      totalInventory,
+      items
+    });
+
+    state.counts = buildTransferCountsMap(items);
+    setTransferOrderStatus("Transfer order saved.", "success");
+  } catch (err) {
+    console.error("handleTransferOrderSave failed", err);
+    setTransferOrderStatus("Save failed.", "error");
+  } finally {
+    if (saveBtn) saveBtn.disabled = false;
+  }
+}
+
 async function handleTransferOrderReset() {
   const state = getTransferOrderState();
   if (!state.docRef) {
@@ -9449,14 +9523,22 @@ async function handleTransferOrderReset() {
   state.pendingSaveTimers.forEach((timer) => clearTimeout(timer));
   state.pendingSaveTimers.clear();
 
+  const resetBtn = document.getElementById("transferOrderResetBtn");
+  const saveBtn = document.getElementById("transferOrderSaveBtn");
+  if (resetBtn) resetBtn.disabled = true;
+  if (saveBtn) saveBtn.disabled = true;
+
   try {
-    const payload = {
-      serviceDate: getTodayDate(),
-      venue: "Main Kitchen",
-      items: {},
-      updatedAt: serverTimestamp()
-    };
-    await setDoc(state.docRef, payload, { merge: true });
+    setTransferOrderStatus("Clearing…", "muted");
+    const collRef = collection(db, TRANSFER_ORDER_COLLECTION);
+    const snapshot = await getDocs(collRef);
+
+    if (!snapshot.empty) {
+      await Promise.all(snapshot.docs.map((docSnap) => deleteDoc(docSnap.ref)));
+    } else {
+      await deleteDoc(state.docRef).catch(() => {});
+    }
+
     state.counts = new Map();
     state.rows.forEach((row) => {
       row.onHand = 0;
@@ -9464,10 +9546,13 @@ async function handleTransferOrderReset() {
       updateTransferRowDom(row, state.dom.get(row.key));
     });
     refreshTransferOrderPickList(state);
-    setTransferOrderStatus("On-hand reset.", "success");
+    setTransferOrderStatus("Inventory reset.", "success");
   } catch (err) {
     console.error("handleTransferOrderReset failed", err);
     setTransferOrderStatus("Reset failed.", "error");
+  } finally {
+    if (resetBtn) resetBtn.disabled = false;
+    if (saveBtn) saveBtn.disabled = false;
   }
 }
 
