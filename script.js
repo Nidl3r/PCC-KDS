@@ -96,8 +96,8 @@ const networkInformation =
   null;
 
 // === Collection config ===
-const RECIPES_COLL = "recipes";   // primary writable collection
-const LEGACY_RECIPES_COLL = "cookingrecipes";   // secondary/legacy mirror
+const RECIPES_COLL = "cookingrecipes";   // primary writable collection
+const LEGACY_RECIPES_COLL = "recipes";   // secondary/legacy mirror
 
 // Live version control (auto-refresh)
 const APP_VERSION_COLLECTION = "appMeta";
@@ -20118,7 +20118,7 @@ window._recipesUnsub = null;
 let _recipesPrimePromise = null;
 let _legacyRecipesPrimed = false;
 
-function _normalizeRecipeRecord(id, data = {}) {
+function _normalizeRecipeRecord(id, data = {}, source = RECIPES_COLL) {
   if (!id) return null;
   const v = data || {};
   return {
@@ -20129,7 +20129,8 @@ function _normalizeRecipeRecord(id, data = {}) {
     methodology: v.methodology || "",
     ingredients: Array.isArray(v.ingredients) ? v.ingredients : [],
     category: (v.category || v.Category || "UNCATEGORIZED"),
-    uom: v.uom || v.UOM || ""
+    uom: v.uom || v.UOM || "",
+    source: source || RECIPES_COLL
   };
 }
 
@@ -20175,7 +20176,7 @@ function startRecipesListener() {
   window._recipesUnsub = onSnapshot(q, (snap) => {
     const rows = [];
     snap.forEach((d) => {
-      const normalized = _normalizeRecipeRecord(d.id, d.data());
+      const normalized = _normalizeRecipeRecord(d.id, d.data(), RECIPES_COLL);
       if (normalized) rows.push(normalized);
     });
     window._recipesCache = _mergeRecipeLists(rows, window._legacyRecipesCache);
@@ -20203,7 +20204,7 @@ async function _ensureRecipesPrimed() {
       try {
         const snap = await getDocs(recipesCollection());
         snap.forEach((d) => {
-          const row = _normalizeRecipeRecord(d.id, d.data());
+          const row = _normalizeRecipeRecord(d.id, d.data(), RECIPES_COLL);
           if (row) newRows.push(row);
         });
       } catch (e) {
@@ -20216,7 +20217,7 @@ async function _ensureRecipesPrimed() {
         const legacySnap = await getDocs(legacyRecipesCollection());
         const legacyRows = [];
         legacySnap.forEach((d) => {
-          const row = _normalizeRecipeRecord(d.id, d.data());
+          const row = _normalizeRecipeRecord(d.id, d.data(), LEGACY_RECIPES_COLL);
           if (row) legacyRows.push(row);
         });
         window._legacyRecipesCache = legacyRows;
@@ -20269,6 +20270,7 @@ async function renderRecipesList() {
     ...r,
     category: (r.category || r.Category || "UNCATEGORIZED")
   }));
+  const primaryRecipes = all.filter((r) => (r.source || "") === RECIPES_COLL);
 
   const search = (document.getElementById("recipeSearch")?.value || "")
     .trim()
@@ -20277,8 +20279,10 @@ async function renderRecipesList() {
   // NEW: read selected category from the filter ('' means All)
   const selectedCat = (document.getElementById("recipeCategoryFilter")?.value || "").toUpperCase();
 
+  const filteredSource = primaryRecipes;
+
   const filtered = (search || selectedCat)
-    ? all.filter((r) => {
+    ? filteredSource.filter((r) => {
         const name = (r.description || "").toLowerCase();
         const num  = (r.recipeNo || "").toLowerCase();
         const cat  = (r.category || "").toString().toUpperCase();
@@ -20287,12 +20291,12 @@ async function renderRecipesList() {
         const matchesCat    = !selectedCat || cat === selectedCat;
         return matchesSearch && matchesCat;
       })
-    : all;
+    : filteredSource;
 
   // Build markup
   if (!filtered.length) {
     wrap.innerHTML = `<p style="opacity:.7;">${
-      all.length > 0 ? "No recipes match your search." : "No recipes found in Firestore (checked 'recipes' and 'Recipes')."
+      filteredSource.length > 0 ? "No recipes match your search." : "No recipes found in Firestore (checked 'cookingrecipes' and 'recipes')."
     }</p>`;
     return;
   }
@@ -20301,6 +20305,17 @@ const html = filtered
   .map((r) => {
     const base = Number(r.portions || 0);
     const ingredients = Array.isArray(r.ingredients) ? r.ingredients : [];
+    const methodologySteps = typeof r.methodology === "string"
+      ? r.methodology
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .filter((line) => line.length > 0)
+      : [];
+    const methodologyHtml = methodologySteps.length
+      ? `<ol style="padding-left:18px; margin: 0; display:flex; flex-direction:column; gap:4px;">${
+          methodologySteps.map((step) => `<li>${escapeHtml(step)}</li>`).join("")
+        }</ol>`
+      : `<p style="opacity:.7;">No steps added yet.</p>`;
     const catChip = r.category && r.category !== "UNCATEGORIZED"
       ? `<span class="badge" style="font-size:12px; background:#3a3d4a; color:#e8eaed; border-radius:8px; padding:2px 8px;">${escapeHtml(r.category)}</span>`
       : "";
@@ -20356,13 +20371,7 @@ const html = filtered
                   <td colspan="3">
                     <div class="methodology-block">
                       <h4 style="margin:0 0 6px 0;">Methodology</h4>
-                      ${
-                        r.methodology
-                          ? `<ol style="padding-left:18px; margin: 0; display:flex; flex-direction:column; gap:4px;">${
-                              escapeHtml(r.methodology).split("\\n").map(s => `<li>${s}</li>`).join("")
-                            }</ol>`
-                          : `<p style="opacity:.7;">No steps added yet.</p>`
-                      }
+                      ${methodologyHtml}
                     </div>
                   </td>
                 </tr>
