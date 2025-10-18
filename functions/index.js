@@ -6,8 +6,16 @@ const { initializeApp } = require("firebase-admin/app");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
 
 // --- Init ---
-initializeApp();
-const db = getFirestore();
+const app = initializeApp();
+const db = getFirestore(app);
+
+let ingestKitchenInventory;
+try {
+  ({ ingestKitchenInventory } = require("./lib/index"));
+} catch (err) {
+  console.warn("ingestKitchenInventory not yet built; run `npm run build` before deploying.", err);
+  ingestKitchenInventory = undefined;
+}
 
 // --- Secrets ---
 const SHOWWARE_WEBHOOK_SECRET = defineSecret("SHOWWARE_WEBHOOK_SECRET");
@@ -146,13 +154,14 @@ async function deleteCollectionContents(collectionName, logLabel) {
 
 async function archivePowerbiDaily() {
   const sourceSnap = await db.collection("powerbiDaily").get();
+  const archiveDate = formatHawaiiArchiveDate();
 
   if (sourceSnap.empty) {
     console.log("No powerbiDaily documents to archive.");
+    await archiveKitchenInventory(archiveDate);
     return;
   }
 
-  const archiveDate = formatHawaiiArchiveDate();
   const usedIds = new Set();
   const docs = sourceSnap.docs;
   const batchSize = 200; // 200 docs × (set+delete) = 400 ops ≤ 500
@@ -195,6 +204,53 @@ async function archivePowerbiDaily() {
   }
 
   console.log(`✅ Archived and cleared ${processed} powerbiDaily documents for ${archiveDate}.`);
+  await archiveKitchenInventory(archiveDate);
+}
+
+async function archiveKitchenInventory(archiveDate) {
+  const sourceSnap = await db.collection("kitchen inventory").get();
+
+  if (sourceSnap.empty) {
+    console.log("No kitchen inventory documents to archive.");
+    return;
+  }
+
+  const usedIds = new Set();
+  const docs = sourceSnap.docs;
+  const batchSize = 200;
+  let processed = 0;
+
+  for (let i = 0; i < docs.length; i += batchSize) {
+    const batch = db.batch();
+    const slice = docs.slice(i, i + batchSize);
+
+    slice.forEach((docSnap) => {
+      const data = docSnap.data() || {};
+      const baseId = String(docSnap.id || "kitchen").replace(/[^A-Za-z0-9_-]+/g, "_") || "kitchen";
+
+      let targetIdBase = `${baseId}_${archiveDate}`;
+      let targetId = targetIdBase;
+      let dedupe = 2;
+      while (usedIds.has(targetId)) {
+        targetId = `${targetIdBase}_${dedupe}`;
+        dedupe += 1;
+      }
+      usedIds.add(targetId);
+
+      const destRef = db.collection("pastkitcheninventory").doc(targetId);
+      batch.set(destRef, {
+        ...data,
+        archivedAt: FieldValue.serverTimestamp(),
+        archivedFromId: docSnap.id
+      });
+      batch.delete(docSnap.ref);
+      processed += 1;
+    });
+
+    await batch.commit();
+  }
+
+  console.log(`✅ Archived and cleared ${processed} kitchen inventory documents for ${archiveDate}.`);
 }
 
 function formatHawaiiArchiveDate(date = new Date()) {
@@ -309,3 +365,7 @@ exports.ingestPowerBI = onRequest(
     }
   }
 );
+
+if (ingestKitchenInventory) {
+  exports.ingestKitchenInventory = ingestKitchenInventory;
+}

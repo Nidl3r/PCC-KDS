@@ -146,6 +146,9 @@ const LS_RECIPES_DISPLAY_PRECISION = 4;
 const LS_RECIPES_QTY_FORMAT = (typeof Intl !== "undefined" && Intl.NumberFormat)
   ? new Intl.NumberFormat("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 4 })
   : null;
+const KITCHEN_INVENTORY_COLL = "kitchen inventory";
+const PAST_KITCHEN_INVENTORY_COLL = "pastkitcheninventory";
+const KITCHEN_INVENTORY_HISTORY_LIMIT = 1000;
 
 const recipeDocFallbackOrder = [recipeDoc, legacyRecipeDoc];
 const recipeCollectionFallbackOrder = [recipesCollection, legacyRecipesCollection];
@@ -1160,7 +1163,7 @@ try {
 
 const ACCOUNTING_GROUP_TABS = {
   "meal-plan": ["production", "shipments", "waste", "lunch", "kitchen-eom"],
-  data: ["analytics", "ls-recipes"],
+  data: ["analytics", "ls-recipes", "kitchen-inventory"],
   items: ["ingredients", "uom", "recipes"]
 };
 
@@ -1276,6 +1279,11 @@ function showAccountingTab(tabName, options = {}) {
   if (tabName === "ls-recipes") {
     ensureAccountingLsRecipesUI();
     loadAccountingLsRecipes();
+  }
+
+  if (tabName === "kitchen-inventory") {
+    ensureAccountingKitchenInventoryUI();
+    loadAccountingKitchenInventory();
   }
 
   if (tabName === "ingredients") {
@@ -2228,6 +2236,624 @@ async function copyLsRecipesTableToClipboard() {
 
 window.ensureAccountingLsRecipesUI = ensureAccountingLsRecipesUI;
 window.loadAccountingLsRecipes = loadAccountingLsRecipes;
+
+// [ACCOUNTING] Kitchen Inventory
+function getAccountingKitchenInventoryState() {
+  if (!window.__accountingKitchenInventoryState) {
+    const endDate = getTodayDate();
+    const startDate = shiftDateString(endDate, -30);
+    window.__accountingKitchenInventoryState = {
+      initialized: false,
+      isLoading: false,
+      currentRows: [],
+      historyRows: [],
+      descriptionOptions: [],
+      chartInstance: null,
+      filters: {
+        description: "",
+        startDate,
+        endDate
+      },
+      sort: {
+        current: { column: "description", direction: "asc" },
+        history: { column: "date", direction: "desc" }
+      }
+    };
+  }
+  return window.__accountingKitchenInventoryState;
+}
+
+function ensureAccountingKitchenInventoryUI() {
+  const state = getAccountingKitchenInventoryState();
+  if (state.initialized) return;
+
+  ensureKitchenInventorySortState();
+
+  const refreshBtn = document.getElementById("kitchenInventoryRefreshBtn");
+  if (refreshBtn) {
+    refreshBtn.addEventListener("click", () => loadAccountingKitchenInventory({ force: true }));
+  }
+
+  const startInput = document.getElementById("kitchenInventoryStartDate");
+  const endInput = document.getElementById("kitchenInventoryEndDate");
+  const descriptionSelect = document.getElementById("kitchenInventoryDescriptionSelect");
+
+  if (startInput) {
+    startInput.value = state.filters.startDate;
+    startInput.addEventListener("change", (event) => {
+      const value = event.target.value;
+      if (!value) return;
+      state.filters.startDate = value;
+      if (state.filters.endDate && state.filters.endDate < value) {
+        state.filters.endDate = value;
+        if (endInput) endInput.value = value;
+      }
+      updateAccountingKitchenInventoryChart();
+    });
+  }
+
+  if (endInput) {
+    endInput.value = state.filters.endDate;
+    endInput.addEventListener("change", (event) => {
+      const value = event.target.value;
+      if (!value) return;
+      if (state.filters.startDate && state.filters.startDate > value) {
+        state.filters.startDate = value;
+        if (startInput) startInput.value = value;
+      }
+      state.filters.endDate = value;
+      updateAccountingKitchenInventoryChart();
+    });
+  }
+
+  if (descriptionSelect) {
+    descriptionSelect.addEventListener("change", (event) => {
+      state.filters.description = event.target.value;
+      updateAccountingKitchenInventoryChart();
+    });
+  }
+
+  const tab = document.getElementById("kitchenInventoryTab");
+  if (tab && !tab.dataset.sortBound) {
+    tab.addEventListener("click", handleKitchenInventorySortClick);
+    tab.dataset.sortBound = "1";
+  }
+
+  updateAccountingKitchenInventorySortIndicators();
+  state.initialized = true;
+}
+
+async function loadAccountingKitchenInventory(options = {}) {
+  const state = getAccountingKitchenInventoryState();
+  if (state.isLoading && !options.force) return;
+
+  updateAccountingKitchenInventoryLoading(true);
+  state.isLoading = true;
+
+  try {
+    const [currentSnap, historySnap] = await Promise.all([
+      getDocs(collection(db, KITCHEN_INVENTORY_COLL)),
+      getDocs(
+        query(
+          collection(db, PAST_KITCHEN_INVENTORY_COLL),
+          orderBy("archivedAt", "desc"),
+          limit(KITCHEN_INVENTORY_HISTORY_LIMIT)
+        )
+      )
+    ]);
+
+    state.currentRows = currentSnap.docs
+      .map((docSnap) => mapCurrentKitchenInventoryDoc(docSnap))
+      .filter(Boolean)
+      .sort((a, b) => a.description.localeCompare(b.description) || a.no.localeCompare(b.no));
+
+    state.historyRows = historySnap.docs
+      .map((docSnap) => mapHistoricalKitchenInventoryDoc(docSnap))
+      .filter(Boolean)
+      .sort((a, b) => {
+        if (a.date === b.date) {
+          return a.description.localeCompare(b.description) || a.no.localeCompare(b.no);
+        }
+        return a.date > b.date ? -1 : 1;
+      });
+
+    populateAccountingKitchenInventoryDescriptions();
+    renderAccountingKitchenInventoryCurrentRows(state.currentRows);
+    renderAccountingKitchenInventoryHistoryRows(state.historyRows);
+    updateAccountingKitchenInventoryChart();
+  } catch (error) {
+    console.error("Failed to load kitchen inventory data", error);
+  } finally {
+    state.isLoading = false;
+    updateAccountingKitchenInventoryLoading(false);
+  }
+}
+
+function updateAccountingKitchenInventoryLoading(isLoading) {
+  const loader = document.getElementById("kitchenInventoryLoading");
+  if (loader) loader.hidden = !isLoading;
+  const refreshBtn = document.getElementById("kitchenInventoryRefreshBtn");
+  if (refreshBtn) refreshBtn.disabled = !!isLoading;
+}
+
+function handleKitchenInventorySortClick(event) {
+  const target = event.target instanceof HTMLElement ? event.target : null;
+  if (!target) return;
+  const button = target.closest(".inventory-sort-btn");
+  if (!button) return;
+  const tableType = button.getAttribute("data-inventory-table") || "";
+  const column = button.getAttribute("data-column") || "";
+  const direction = button.getAttribute("data-direction") || "";
+  if (!column || !direction) return;
+  event.preventDefault();
+  setKitchenInventorySort(tableType, column, direction);
+}
+
+function ensureKitchenInventorySortState() {
+  const state = getAccountingKitchenInventoryState();
+  if (!state.sort || typeof state.sort !== "object") {
+    state.sort = {};
+  }
+  if (!state.sort.current) {
+    state.sort.current = { column: "description", direction: "asc" };
+  }
+  if (!state.sort.history) {
+    state.sort.history = { column: "date", direction: "desc" };
+  }
+  return state.sort;
+}
+
+function setKitchenInventorySort(tableType, column, direction) {
+  const sortState = ensureKitchenInventorySortState();
+  const normalizedTable = tableType === "history" ? "history" : "current";
+  const normalizedColumn = normalizeKitchenInventorySortColumn(normalizedTable, column);
+  if (!normalizedColumn) return;
+  const normalizedDirection = direction === "desc" ? "desc" : "asc";
+
+  sortState[normalizedTable] = {
+    column: normalizedColumn,
+    direction: normalizedDirection
+  };
+
+  const state = getAccountingKitchenInventoryState();
+  if (normalizedTable === "history") {
+    renderAccountingKitchenInventoryHistoryRows(state.historyRows);
+  } else {
+    renderAccountingKitchenInventoryCurrentRows(state.currentRows);
+  }
+}
+
+function normalizeKitchenInventorySortColumn(tableType, column) {
+  const key = String(column || "").trim();
+  if (!key) return "";
+  const allowedCurrent = new Set(["no", "description", "quantity", "baseUOM"]);
+  const allowedHistory = new Set(["date", "no", "description", "quantity", "baseUOM"]);
+  if (tableType === "history") {
+    return allowedHistory.has(key) ? key : "";
+  }
+  return allowedCurrent.has(key) ? key : "";
+}
+
+function getSortedKitchenInventoryRows(rows, tableType) {
+  if (!Array.isArray(rows) || rows.length === 0) return [];
+  const sortState = ensureKitchenInventorySortState();
+  const config = sortState[tableType === "history" ? "history" : "current"];
+  if (!config || !config.column) {
+    return rows.slice();
+  }
+
+  const { column, direction } = config;
+  const multiplier = direction === "desc" ? -1 : 1;
+  const fallbackMap = {
+    current: ["description", "no", "baseUOM"],
+    history: ["date", "description", "no", "baseUOM"]
+  };
+  const fallbackColumns = fallbackMap[tableType === "history" ? "history" : "current"];
+
+  return rows.slice().sort((a, b) => {
+    const primary = compareKitchenInventoryValue(a, b, column);
+    if (primary !== 0) {
+      return primary * multiplier;
+    }
+    for (const fallbackColumn of fallbackColumns) {
+      if (fallbackColumn === column) continue;
+      const fallbackCompare = compareKitchenInventoryValue(a, b, fallbackColumn);
+      if (fallbackCompare !== 0) {
+        return fallbackCompare;
+      }
+    }
+    return 0;
+  });
+}
+
+function compareKitchenInventoryValue(a, b, column) {
+  const stringCompare = (left, right) =>
+    String(left || "").localeCompare(String(right || ""), undefined, {
+      numeric: true,
+      sensitivity: "base"
+    });
+
+  switch (column) {
+    case "quantity": {
+      const aNum = Number(a?.quantity ?? 0);
+      const bNum = Number(b?.quantity ?? 0);
+      if (Number.isFinite(aNum) && Number.isFinite(bNum)) {
+        if (aNum === bNum) return 0;
+        return aNum - bNum;
+      }
+      return 0;
+    }
+    case "date":
+      return stringCompare(a?.date, b?.date);
+    case "no":
+      return stringCompare(a?.no, b?.no);
+    case "description":
+      return stringCompare(a?.description, b?.description);
+    case "baseUOM":
+      return stringCompare(a?.baseUOM, b?.baseUOM);
+    default:
+      return 0;
+  }
+}
+
+function updateAccountingKitchenInventorySortIndicators(targetTable) {
+  ensureKitchenInventorySortState();
+  const state = getAccountingKitchenInventoryState();
+  const tables = targetTable ? [targetTable === "history" ? "history" : "current"] : ["current", "history"];
+
+  document.querySelectorAll(".inventory-sort-btn").forEach((btn) => {
+    const tableType = btn.getAttribute("data-inventory-table") === "history" ? "history" : "current";
+    if (!tables.includes(tableType)) return;
+    const column = btn.getAttribute("data-column") || "";
+    const direction = btn.getAttribute("data-direction") || "";
+    const config = state.sort?.[tableType];
+    const isActive = Boolean(config && config.column === column && config.direction === direction);
+    btn.classList.toggle("inventory-sort-btn--active", isActive);
+  });
+}
+
+function mapCurrentKitchenInventoryDoc(docSnap) {
+  const data = docSnap?.data?.() || {};
+  const no = cleanInventoryText(data.No ?? data.no ?? docSnap.id ?? "");
+  const description = cleanInventoryText(data.Description ?? data.description ?? "");
+  const baseUOM = cleanInventoryText(data.BaseUOM ?? data.baseUOM ?? data.base_uom ?? "");
+  const quantity = coerceInventoryQuantity(data.Quantity ?? data.quantity);
+  if (!description && !no) return null;
+  if (!Number.isFinite(quantity)) return null;
+  const ingestedAt = typeof data._ingestedAt?.toDate === "function" ? data._ingestedAt.toDate() : null;
+  const date = formatInventoryDateHawaii(ingestedAt || new Date());
+  if (!date) return null;
+  return {
+    id: docSnap.id,
+    no: no || docSnap.id,
+    description,
+    baseUOM,
+    quantity,
+    date
+  };
+}
+
+function mapHistoricalKitchenInventoryDoc(docSnap) {
+  const data = docSnap?.data?.() || {};
+  const no = cleanInventoryText(data.No ?? data.no ?? docSnap.id ?? "");
+  const description = cleanInventoryText(data.Description ?? data.description ?? "");
+  const baseUOM = cleanInventoryText(data.BaseUOM ?? data.baseUOM ?? data.base_uom ?? "");
+  const quantity = coerceInventoryQuantity(data.Quantity ?? data.quantity);
+  if (!description && !no) return null;
+  if (!Number.isFinite(quantity)) return null;
+  const archivedAt = typeof data.archivedAt?.toDate === "function" ? data.archivedAt.toDate() : null;
+  const fallbackDate = parseDateFromInventoryDocId(docSnap.id);
+  const date = formatInventoryDateHawaii(archivedAt || fallbackDate || new Date());
+  if (!date) return null;
+  return {
+    id: docSnap.id,
+    no: no || docSnap.id,
+    description,
+    baseUOM,
+    quantity,
+    date
+  };
+}
+
+function renderAccountingKitchenInventoryCurrentRows(rows) {
+  const tbody = document.getElementById("kitchenInventoryCurrentBody");
+  const emptyEl = document.getElementById("kitchenInventoryCurrentEmpty");
+  if (!tbody || !emptyEl) return;
+
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const sortedRows = getSortedKitchenInventoryRows(safeRows, "current");
+
+  if (sortedRows.length === 0) {
+    tbody.innerHTML = "";
+    emptyEl.hidden = false;
+    updateAccountingKitchenInventorySortIndicators("current");
+    return;
+  }
+
+  const html = sortedRows
+    .map(
+      (row) => `<tr>
+        <td>${escapeHtml(row.no)}</td>
+        <td>${escapeHtml(row.description)}</td>
+        <td class="numeric-cell">${formatInventoryQuantity(row.quantity)}</td>
+        <td>${escapeHtml(row.baseUOM)}</td>
+      </tr>`
+    )
+    .join("");
+
+  tbody.innerHTML = html;
+  emptyEl.hidden = true;
+  updateAccountingKitchenInventorySortIndicators("current");
+}
+
+function renderAccountingKitchenInventoryHistoryRows(rows) {
+  const tbody = document.getElementById("kitchenInventoryHistoryBody");
+  const emptyEl = document.getElementById("kitchenInventoryHistoryEmpty");
+  if (!tbody || !emptyEl) return;
+
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const sortedRows = getSortedKitchenInventoryRows(safeRows, "history");
+
+  if (sortedRows.length === 0) {
+    tbody.innerHTML = "";
+    emptyEl.hidden = false;
+    updateAccountingKitchenInventorySortIndicators("history");
+    return;
+  }
+
+  const html = sortedRows
+    .map(
+      (row) => `<tr>
+        <td>${escapeHtml(row.date)}</td>
+        <td>${escapeHtml(row.no)}</td>
+        <td>${escapeHtml(row.description)}</td>
+        <td class="numeric-cell">${formatInventoryQuantity(row.quantity)}</td>
+        <td>${escapeHtml(row.baseUOM)}</td>
+      </tr>`
+    )
+    .join("");
+
+  tbody.innerHTML = html;
+  emptyEl.hidden = true;
+  updateAccountingKitchenInventorySortIndicators("history");
+}
+
+function populateAccountingKitchenInventoryDescriptions() {
+  const state = getAccountingKitchenInventoryState();
+  const select = document.getElementById("kitchenInventoryDescriptionSelect");
+  if (!select) return;
+
+  const descriptions = new Set();
+  state.currentRows.forEach((row) => {
+    if (row?.description) descriptions.add(row.description);
+  });
+  state.historyRows.forEach((row) => {
+    if (row?.description) descriptions.add(row.description);
+  });
+
+  const sorted = Array.from(descriptions).sort((a, b) => a.localeCompare(b));
+
+  const options = ['<option value="">Select an item…</option>']
+    .concat(sorted.map((desc) => {
+      const escaped = escapeHtml(desc);
+      return `<option value="${escaped}">${escaped}</option>`;
+    }))
+    .join("");
+
+  select.innerHTML = options;
+
+  state.descriptionOptions = sorted;
+
+  if (sorted.length === 0) {
+    state.filters.description = "";
+    select.value = "";
+  } else {
+    if (!state.filters.description || !sorted.includes(state.filters.description)) {
+      state.filters.description = sorted[0];
+    }
+    select.value = state.filters.description;
+  }
+
+  const startInput = document.getElementById("kitchenInventoryStartDate");
+  if (startInput && startInput.value !== state.filters.startDate) {
+    startInput.value = state.filters.startDate;
+  }
+  const endInput = document.getElementById("kitchenInventoryEndDate");
+  if (endInput && endInput.value !== state.filters.endDate) {
+    endInput.value = state.filters.endDate;
+  }
+}
+
+function updateAccountingKitchenInventoryChart() {
+  const state = getAccountingKitchenInventoryState();
+  const canvas = document.getElementById("kitchenInventoryChart");
+  const emptyEl = document.getElementById("kitchenInventoryChartEmpty");
+  if (!canvas) return;
+
+  if (!state.filters.description) {
+    if (state.chartInstance) {
+      state.chartInstance.destroy();
+      state.chartInstance = null;
+    }
+    if (emptyEl) emptyEl.hidden = false;
+    return;
+  }
+
+  const combinedRows = [
+    ...state.historyRows.map((row) => ({ ...row })),
+    ...state.currentRows.map((row) => ({ ...row }))
+  ];
+
+  const filtered = combinedRows.filter((row) => {
+    if (!row || !row.description || !row.date) return false;
+    if (row.description !== state.filters.description) return false;
+    if (state.filters.startDate && row.date < state.filters.startDate) return false;
+    if (state.filters.endDate && row.date > state.filters.endDate) return false;
+    return true;
+  });
+
+  const totals = new Map();
+  filtered.forEach((row) => {
+    if (!Number.isFinite(row.quantity)) return;
+    const key = row.date;
+    totals.set(key, (totals.get(key) || 0) + row.quantity);
+  });
+
+  const labels = Array.from(totals.keys()).sort();
+  const data = labels.map((label) => totals.get(label));
+
+  if (!labels.length) {
+    if (state.chartInstance) {
+      state.chartInstance.destroy();
+      state.chartInstance = null;
+    }
+    if (emptyEl) emptyEl.hidden = false;
+    return;
+  }
+
+  if (emptyEl) emptyEl.hidden = true;
+
+  if (typeof Chart === "undefined") {
+    console.warn("Chart.js not loaded; cannot render kitchen inventory chart.");
+    return;
+  }
+
+  const ctx = canvas.getContext ? canvas.getContext("2d") : null;
+  if (!ctx) {
+    console.warn("Unable to get canvas context for kitchen inventory chart.");
+    return;
+  }
+
+  if (state.chartInstance) {
+    state.chartInstance.destroy();
+  }
+
+  state.chartInstance = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels,
+      datasets: [
+        {
+          label: state.filters.description,
+          data,
+          borderColor: "#1f77b4",
+          backgroundColor: "rgba(31, 119, 180, 0.1)",
+          tension: 0.25,
+          pointRadius: 3
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: {
+        mode: "index",
+        intersect: false
+      },
+      plugins: {
+        legend: {
+          display: true
+        },
+        tooltip: {
+          callbacks: {
+            label: (context) => {
+              const qty = formatInventoryQuantity(context.parsed.y);
+              return `${context.dataset.label}: ${qty}`;
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          title: {
+            display: true,
+            text: "Date (HST)"
+          }
+        },
+        y: {
+          beginAtZero: true,
+          title: {
+            display: true,
+            text: "Quantity"
+          },
+          ticks: {
+            callback: (value) => formatInventoryQuantity(value)
+          }
+        }
+      }
+    }
+  });
+}
+
+function shiftDateString(dateStr, deltaDays) {
+  if (!dateStr) return dateStr;
+  const parts = dateStr.split("-");
+  if (parts.length !== 3) return dateStr;
+  const [yearStr, monthStr, dayStr] = parts;
+  const year = Number(yearStr);
+  const month = Number(monthStr);
+  const day = Number(dayStr);
+  if ([year, month, day].some((part) => Number.isNaN(part))) return dateStr;
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (Number.isNaN(date.getTime())) return dateStr;
+  date.setUTCDate(date.getUTCDate() + deltaDays);
+  const y = date.getUTCFullYear();
+  const m = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(date.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+function cleanInventoryText(value) {
+  if (value === null || value === undefined) return "";
+  return String(value).trim();
+}
+
+function coerceInventoryQuantity(value) {
+  if (value === null || value === undefined) return NaN;
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : NaN;
+  }
+  const str = String(value).replace(/,/g, "").trim();
+  if (!str) return NaN;
+  const parsed = Number(str);
+  return Number.isFinite(parsed) ? parsed : NaN;
+}
+
+function formatInventoryDateHawaii(date) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return "";
+  const offset = getHawaiiOffsetMs();
+  const hawaiiDate = new Date(date.getTime() + offset);
+  const year = hawaiiDate.getUTCFullYear();
+  const month = String(hawaiiDate.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(hawaiiDate.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function parseDateFromInventoryDocId(id) {
+  if (typeof id !== "string") return null;
+  const match = id.match(/(\d{2})-(\d{2})-(\d{4})$/);
+  if (!match) return null;
+  const [, monthStr, dayStr, yearStr] = match;
+  const month = Number(monthStr);
+  const day = Number(dayStr);
+  const year = Number(yearStr);
+  if ([month, day, year].some((part) => Number.isNaN(part))) return null;
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function formatInventoryQuantity(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return "";
+  return num.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 3 });
+}
+
+function getHawaiiOffsetMs() {
+  return typeof HAWAII_OFFSET_MS === "number" ? HAWAII_OFFSET_MS : -10 * 60 * 60 * 1000;
+}
+
+window.ensureAccountingKitchenInventoryUI = ensureAccountingKitchenInventoryUI;
+window.loadAccountingKitchenInventory = loadAccountingKitchenInventory;
 
 
 
@@ -19311,14 +19937,28 @@ window.sendAllMainLunch = async function () {
     return { startTs, endTs, startStr: s, endStr: e };
   }
   function toFixedOrEmpty(n, d=2){ const x=Number(n); return Number.isFinite(x)?x.toFixed(d):""; }
+  const numericCellPattern = /^-?\d+(\.\d+)?$/;
+  const currencyCellPattern = /^\s*\$-?\d/;
+  const percentCellPattern = /^-?\d+(\.\d+)?%$/;
+
   function fillTable(tid, rows){
     const tb = document.querySelector(`#${tid} tbody`);
     if (!tb) return;
     if (!rows?.length){
-      tb.innerHTML = `<tr><td colspan="999" style="text-align:center;opacity:.7;">No data</td></tr>`;
+      tb.innerHTML = `<tr class="analytics-empty-row"><td colspan="999">No data</td></tr>`;
       return;
     }
-    tb.innerHTML = rows.map(r => `<tr>${r.map(c => `<td>${escapeHtml(String(c ?? ""))}</td>`).join("")}</tr>`).join("");
+    tb.innerHTML = rows
+      .map(row => {
+        const cells = row.map(value => {
+          const text = String(value ?? "");
+          const isNumeric = currencyCellPattern.test(text) || percentCellPattern.test(text) || (numericCellPattern.test(text.trim()) && !/[A-Za-z]/.test(text));
+          const cls = isNumeric ? ' class="num"' : '';
+          return `<td${cls}>${escapeHtml(text)}</td>`;
+        }).join("");
+        return `<tr>${cells}</tr>`;
+      })
+      .join("");
   }
   function enumerateDates(startStr, endStr){ const out=[]; const d=new Date(startStr+"T00:00:00"); const e=new Date(endStr+"T00:00:00"); while(d<=e){ out.push(toYMD(d)); d.setDate(d.getDate()+1);} return out;}
   const monthName = (i)=> (["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][i]||"");
@@ -19384,7 +20024,7 @@ window.sendAllMainLunch = async function () {
       const prevSel = new Set(S.selectedCategories);
       catWrap.innerHTML = categories.map(c=>{
         const checked = prevSel.has(c) ? "checked" : "";
-        return `<label style="display:flex;gap:8px;align-items:center;margin-right:14px;">
+        return `<label>
                   <input type="checkbox" name="catChk" value="${escapeHtml(c)}" ${checked}>
                   <span>${escapeHtml(c)}</span>
                 </label>`;
@@ -19401,7 +20041,7 @@ window.sendAllMainLunch = async function () {
         const [no, desc] = key.split("__");
         const txt = `${no} ${desc}`.toLowerCase();
         const checked = prevSel.has(key) ? "checked" : "";
-        return `<label data-text="${escapeHtml(txt)}" style="display:block; margin:2px 0;">
+        return `<label data-text="${escapeHtml(txt)}">
                   <input type="checkbox" name="itemChk" value="${escapeHtml(key)}" ${checked}>
                   <span>${escapeHtml(no)} — ${escapeHtml(desc)}</span>
                 </label>`;
@@ -19412,17 +20052,62 @@ window.sendAllMainLunch = async function () {
     }
   }
 
+  function setMetricText(id, value, { digits = 1, suffix = "", prefix = "", formatter } = {}){
+    const el = document.getElementById(id);
+    if (!el) return;
+    let text = "—";
+    if (formatter) {
+      text = formatter(value);
+    } else if (Number.isFinite(value)) {
+      text = `${prefix}${value.toFixed(digits)}${suffix}`;
+    } else if (typeof value === "string" && value.trim().length > 0) {
+      text = value;
+    } else if (Number.isInteger(value) || Number.isFinite(value)) {
+      text = `${prefix}${value}${suffix}`;
+    }
+    el.textContent = text;
+  }
+
+  function setMetricInteger(id, value){
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (!Number.isFinite(value) || value <= 0) {
+      el.textContent = "—";
+    } else {
+      el.textContent = Number(value).toLocaleString("en-US");
+    }
+  }
+
+  function renderRankedList(id, items, format){
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (!items?.length){
+      el.innerHTML = `<li>No data</li>`;
+      return;
+    }
+    el.innerHTML = items.map(entry => `<li>${escapeHtml(format(entry))}</li>`).join("");
+  }
+
+  function average(values){
+    if (!Array.isArray(values) || values.length === 0) return NaN;
+    return values.reduce((sum, val) => sum + val, 0) / values.length;
+  }
+
   // -------------------- Active tab runner --------------------
   function getActiveTab(){
-    const btn = $$('#analytics-nav .an-tab').find(b => b.classList.contains('active'));
+    const btn = $$('#analytics-nav .analytics-tab').find(b => b.classList.contains('is-active') || b.getAttribute('aria-selected') === 'true');
     return btn?.dataset.analytics || "cogs";
   }
   async function runActiveTab(){
     const loading = document.getElementById("analyticsLoading");
-    loading && (loading.style.display="inline");
+    if (loading) loading.hidden = false;
 
     const { startTs, endTs, startStr, endStr } = getHawaiiRangeFromInputs("fStart","fEnd");
-    if (!startTs || !endTs) { alert("Select a valid start/end date."); loading&&(loading.style.display="none"); return; }
+    if (!startTs || !endTs) {
+      alert("Select a valid start/end date.");
+      if (loading) loading.hidden = true;
+      return;
+    }
 
     // mirror date range in the COGS side card
     document.getElementById("drFrom") && (document.getElementById("drFrom").textContent = startStr);
@@ -19444,7 +20129,7 @@ window.sendAllMainLunch = async function () {
         await runPanWeightAnalytics(startStr, endStr, startTs, endTs, venue, section);
       }
     } finally {
-      loading && (loading.style.display="none");
+      if (loading) loading.hidden = true;
     }
   }
 
@@ -19458,14 +20143,8 @@ window.sendAllMainLunch = async function () {
     const mode = S.timingOutlierMode || 'all';
     wrap.querySelectorAll('button[data-mode]').forEach(btn => {
       const isActive = (btn.dataset.mode === mode);
-      btn.classList.toggle('active', isActive);
-      if (isActive){
-        btn.style.backgroundColor = '#3a3d4a';
-        btn.style.color = '#fff';
-      } else {
-        btn.style.backgroundColor = '';
-        btn.style.color = '';
-      }
+      btn.classList.toggle('is-active', isActive);
+      btn.setAttribute('aria-pressed', String(isActive));
     });
   }
 
@@ -19762,9 +20441,13 @@ if (tEl) tEl.textContent = `$${total.toFixed(2)}`;
     const total = [...map.values()].reduce((a,b)=>a+b,0);
     const html = [...map.entries()]
       .sort((a,b)=> b[1]-a[1])
-      .map(([cat,sum])=> `<tr><td>${escapeHtml(cat)}</td><td style="text-align:right;">${fmtMoney(sum)}</td></tr>`)
-      .join("") + `<tr><td><strong>Total</strong></td><td style="text-align:right;"><strong>${fmtMoney(total)}</strong></td></tr>`;
-    box.innerHTML = html || `<tr><td colspan="2"><em>No data</em></td></tr>`;
+      .map(([cat,sum])=> `<tr><td>${escapeHtml(cat)}</td><td class="num">${escapeHtml(fmtMoney(sum))}</td></tr>`)
+      .join("");
+    if (html){
+      box.innerHTML = html + `<tr><td><strong>Total</strong></td><td class="num"><strong>${escapeHtml(fmtMoney(total))}</strong></td></tr>`;
+    } else {
+      box.innerHTML = `<tr class="analytics-empty-row"><td colspan="2">No data</td></tr>`;
+    }
   }
   function buildCategorySeries(rows){
     const labels = enumerateDates(S.start, S.end);
@@ -19870,9 +20553,9 @@ async function runTiming(startStr, endStr, startTs, endTs, venue, section){
     return null;
   };
 
-  // First pass: build enriched rows and collect categories/items for the sidebar
+  // First pass: collect raw rows and build category/item lists for sidebar filters
   const cats = new Set(), items = new Set();
-  const enriched = [];
+  const rawRows = [];
   snap.forEach(s=>{
     const d = s.data()||{};
     if (venue!=="All" && (d.venue||"")!==venue) return;
@@ -19882,19 +20565,20 @@ async function runTiming(startStr, endStr, startTs, endTs, venue, section){
     const r = chooseRec(d) || {};
     const category = normalizeCategory(r.category || d.category, d.station);
     const description = r.description || d.item || d.description || "";
-    const recipeNo = r.recipeNo || d.recipeNo || "";
-    const itemKey  = itemKeyFrom(recipeNo, description);
-
-    const row = { category, itemKey, item: description, recipe: recipeNo, venue: d.venue || "", raw: d };
-    if (!passesSidebarFilters(row)) return;
+   const recipeNo = r.recipeNo || d.recipeNo || "";
+   const itemKey  = itemKeyFrom(recipeNo, description);
 
     cats.add(category);
     items.add(itemKey);
-    enriched.push(row);
+    rawRows.push({ category, itemKey, item: description, recipe: recipeNo, venue: d.venue || "", raw: d });
   });
 
   // Rebuild the side lists (so the checkboxes reflect this tab’s data too)
-  rebuildFilterLists([...cats].sort(), [...items].sort((a,b)=>a.localeCompare(b)));
+  const sortedCats = [...cats].sort();
+  const sortedItems = [...items].sort((a,b)=>a.localeCompare(b));
+  rebuildFilterLists(sortedCats, sortedItems);
+
+  const enriched = rawRows.filter(passesSidebarFilters);
 
   // Bucket timing segments
   const buckets = new Map();
@@ -19904,6 +20588,15 @@ async function runTiming(startStr, endStr, startTs, endTs, venue, section){
       segments[seg].push(v);
     }
   };
+
+  const summary = {
+    orderReady: [],
+    readySent: [],
+    sentReceived: [],
+    total: [],
+    sampleCount: 0
+  };
+  const perItemStats = [];
 
   enriched.forEach(({item, recipe, venue, raw})=>{
     const key = `${item}||${recipe}||${venue}`;
@@ -19933,11 +20626,27 @@ async function runTiming(startStr, endStr, startTs, endTs, venue, section){
     const statsS2V = computeSegmentStats(segs.s2v, mode);
     const statsTot = computeSegmentStats(segs.tot, mode);
 
+    if (statsO2R.count > 0) summary.orderReady.push(statsO2R.average);
+    if (statsR2S.count > 0) summary.readySent.push(statsR2S.average);
+    if (statsS2V.count > 0) summary.sentReceived.push(statsS2V.average);
+    if (statsTot.count > 0) summary.total.push(statsTot.average);
+    summary.sampleCount += statsTot.count;
+
+    if (Number.isFinite(statsTot.average) && statsTot.count > 0){
+      perItemStats.push({
+        item: bucket.item,
+        recipe: bucket.recipe,
+        venue: bucket.venue,
+        avgTotal: statsTot.average,
+        samples: statsTot.count
+      });
+    }
+
     const filteredMax = Math.max(statsO2R.count, statsR2S.count, statsS2V.count, statsTot.count);
     const originalMax = Math.max(statsO2R.originalCount, statsR2S.originalCount, statsS2V.originalCount, statsTot.originalCount);
     const samplesLabel = (originalMax > 0 && originalMax !== filteredMax)
       ? `${filteredMax} / ${originalMax}`
-      : String(filteredMax);
+      : (filteredMax > 0 ? String(filteredMax) : "0");
 
     rows.push([
       bucket.item, bucket.recipe, bucket.venue,
@@ -19950,6 +20659,31 @@ async function runTiming(startStr, endStr, startTs, endTs, venue, section){
   }
   rows.sort((a,b)=> Number(b[6]) - Number(a[6]));
   fillTable("foodTimingTable", rows);
+
+  setMetricText("timingAvgTotal", average(summary.total), { digits: 1, suffix: " min" });
+  setMetricText("timingAvgOrderReady", average(summary.orderReady), { digits: 1, suffix: " min" });
+  setMetricText("timingAvgReadySent", average(summary.readySent), { digits: 1, suffix: " min" });
+  setMetricText("timingAvgSentReceived", average(summary.sentReceived), { digits: 1, suffix: " min" });
+  setMetricInteger("timingSampleCount", summary.sampleCount);
+
+  const fastest = perItemStats
+    .filter(entry => Number.isFinite(entry.avgTotal))
+    .sort((a, b) => a.avgTotal - b.avgTotal)
+    .slice(0, 5);
+
+  const slowest = perItemStats
+    .filter(entry => Number.isFinite(entry.avgTotal))
+    .sort((a, b) => b.avgTotal - a.avgTotal)
+    .slice(0, 5);
+
+  renderRankedList("timingFastestList", fastest, entry => {
+    const venue = entry.venue ? ` - ${entry.venue}` : "";
+    return `${entry.item}${venue} • ${entry.avgTotal.toFixed(1)} min (${entry.samples})`;
+  });
+  renderRankedList("timingSlowestList", slowest, entry => {
+    const venue = entry.venue ? ` - ${entry.venue}` : "";
+    return `${entry.item}${venue} • ${entry.avgTotal.toFixed(1)} min (${entry.samples})`;
+  });
 }
 
 
@@ -19962,30 +20696,59 @@ async function runTiming(startStr, endStr, startTs, endTs, venue, section){
   const { rows } = await fetchOrdersAndRecipesByDateRange({ startStr, endStr, venue, section });
 
   // 3) Keep both SENT and RECEIVED (see #3 fix), add itemKey for filtering
-  const sentRows = rows
+  const baseRows = rows
     .filter(r => (r.status==="sent" || r.status==="received") && (r.type==="addon" || r.type==="starting-par"))
-    .map(r => ({ ...r, itemKey: itemKeyFrom(r.recipeNo, r.description) }))
-    .filter(passesSidebarFilters);
+    .map(r => ({ ...r, itemKey: itemKeyFrom(r.recipeNo, r.description) }));
 
-  // Rebuild side lists from this tab’s data
-  const cats = [...new Set(sentRows.map(r=>r.category))].sort();
-  const items = [...new Set(sentRows.map(r=>r.itemKey))].sort((a,b)=>a.localeCompare(b));
+  const cats = [...new Set(baseRows.map(r=>r.category))].sort();
+  const items = [...new Set(baseRows.map(r=>r.itemKey))].sort((a,b)=>a.localeCompare(b));
   rebuildFilterLists(cats, items);
 
-  const guestsFor = (day, venue)=> Number(swByDay.get(day)?.[venue] || 0);
+  const sentRows = baseRows.filter(passesSidebarFilters);
 
-  const out = [], seen = new Set(), agg = new Map(); // item||recipe -> {sum,count}
+  const guestsFor = (day, ven)=> Number(swByDay.get(day)?.[ven] || 0);
+
+  const out = [];
+  const seen = new Set();
+  const agg = new Map(); // item||recipe -> {sum,count,item,recipe}
+  const venueTotals = new Map(); // venue -> {guests, qty}
+
+  let totalQuantity = 0;
+  let totalGuests = 0;
+  let recordCount = 0;
+
   for (const d of sentRows){
-    const g = guestsFor(d.date, d.venue);
-    const qpg = g > 0 ? (Number(d.qty||0) / g) : 0;
-    const key = [d.date, d.venue, d.recipeNo, d.description, d.qty, g].join("|");
+    const guests = guestsFor(d.date, d.venue);
+    const qty = Number(d.qty || 0);
+    const qpg = guests > 0 ? qty / guests : 0;
+    const key = [d.date, d.venue, d.recipeNo, d.description, qty, guests].join("|");
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push([d.date, d.venue, d.description, d.recipeNo, toFixedOrEmpty(d.qty,2), String(g), toFixedOrEmpty(qpg,4)]);
+    out.push([
+      d.date,
+      d.venue,
+      d.description,
+      d.recipeNo,
+      toFixedOrEmpty(qty,2),
+      String(guests),
+      toFixedOrEmpty(qpg,4)
+    ]);
+
+    totalQuantity += qty;
+    totalGuests += guests;
+    recordCount += 1;
+
+    const venueEntry = venueTotals.get(d.venue) || { venue: d.venue || "—", guests: 0, qty: 0 };
+    venueEntry.guests += guests;
+    venueEntry.qty += qty;
+    venueTotals.set(d.venue, venueEntry);
 
     const k2 = `${d.description}||${d.recipeNo}`;
     const cur = agg.get(k2) || { item:d.description, recipe:d.recipeNo, sum:0, count:0 };
-    if (g>0){ cur.sum += qpg; cur.count += 1; }
+    if (guests > 0){
+      cur.sum += qpg;
+      cur.count += 1;
+    }
     agg.set(k2, cur);
   }
 
@@ -19993,29 +20756,63 @@ async function runTiming(startStr, endStr, startTs, endTs, venue, section){
   fillTable("qtyPerGuestTable", out);
 
   const avgRows=[];
+  const perItemStats = [];
   for (const a of agg.values()){
     const avg = a.count ? a.sum/a.count : 0;
+    perItemStats.push({ item: a.item, recipe: a.recipe, avg, samples: a.count });
     avgRows.push([a.item, a.recipe, toFixedOrEmpty(avg,4), String(a.count)]);
   }
   avgRows.sort((a,b)=> Number(b[2]) - Number(a[2]));
   fillTable("qtyPerGuestAverages", avgRows);
+
+  const averagePerGuest = totalGuests > 0 ? totalQuantity / totalGuests : NaN;
+  setMetricInteger("qtyGuestTotal", totalGuests);
+  setMetricText("qtyTotalQuantity", totalQuantity, { digits: 2 });
+  setMetricText("qtyAveragePerGuest", averagePerGuest, { digits: 4 });
+  setMetricInteger("qtyRecordCount", recordCount);
+
+  const topItems = perItemStats
+    .filter(entry => entry.samples > 0 && Number.isFinite(entry.avg))
+    .sort((a, b) => b.avg - a.avg)
+    .slice(0, 5);
+
+  renderRankedList("qtyTopItems", topItems, entry => {
+    return `${entry.item} (${entry.recipe || "n/a"}) • ${entry.avg.toFixed(4)} (${entry.samples})`;
+  });
+
+  const venueBody = document.querySelector("#qtyGuestByVenue tbody");
+  if (venueBody){
+    const venueRows = [...venueTotals.values()]
+      .sort((a, b) => b.guests - a.guests)
+      .map(v => {
+        const avg = v.guests > 0 ? v.qty / v.guests : 0;
+        return `<tr>
+          <td>${escapeHtml(v.venue || "—")}</td>
+          <td class="num">${escapeHtml(Number(v.guests).toLocaleString("en-US"))}</td>
+          <td class="num">${escapeHtml(Number(v.qty).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }))}</td>
+          <td class="num">${escapeHtml(avg.toFixed(4))}</td>
+        </tr>`;
+      }).join("") || `<tr class="analytics-empty-row"><td colspan="4">No data</td></tr>`;
+    venueBody.innerHTML = venueRows;
+  }
 }
 
   // -------------------- Tab 4: Pan Weight & Price --------------------
  async function runPanWeightAnalytics(startStr, endStr, startTs, endTs, venue, section){
   const { rows } = await fetchOrdersAndRecipesByDateRange({ startStr, endStr, venue, section });
 
-  const baseRows = rows
+  const initialRows = rows
     .filter(r => (r.status === "sent" || r.status === "received"))
-    .filter(r => Number(r.pans || 0) > 0)
-    .filter(passesSidebarFilters);
+    .filter(r => Number(r.pans || 0) > 0);
 
-  const cats = [...new Set(baseRows.map(r => r.category))].sort();
-  const items = [...new Set(baseRows.map(r => r.itemKey))].sort((a,b)=>a.localeCompare(b));
+  const cats = [...new Set(initialRows.map(r => r.category))].sort();
+  const items = [...new Set(initialRows.map(r => r.itemKey))].sort((a,b)=>a.localeCompare(b));
   rebuildFilterLists(cats, items);
 
+  const filteredRows = initialRows.filter(passesSidebarFilters);
+
   const aggregated = new Map();
-  baseRows.forEach(row => {
+  filteredRows.forEach(row => {
     const pans = Number(row.pans || 0);
     const net = Number(row.netWeight ?? row.qty ?? 0);
     if (!(pans > 0) || !(net > 0)) return;
@@ -20048,9 +20845,8 @@ async function runTiming(startStr, endStr, startTs, endTs, venue, section){
     }
   });
 
-  const tableRows = [...aggregated.values()]
+  const entrySummaries = [...aggregated.values()]
     .filter(entry => entry.totalPans > 0 && entry.totalNet > 0)
-    .sort((a,b) => a.item.localeCompare(b.item))
     .map(entry => {
       const avgPerPan = entry.totalNet / entry.totalPans;
       const avgCostPerLb = entry.costWeightTotal > 0
@@ -20059,26 +20855,70 @@ async function runTiming(startStr, endStr, startTs, endTs, venue, section){
       const pricePerPan = avgPerPan * avgCostPerLb;
       const venueLabel = entry.venues.size ? [...entry.venues].sort().join(", ") : "—";
 
-      const avgWeightLabel = toFixedOrEmpty(avgPerPan, 2);
-      const totalPansLabel = toFixedOrEmpty(entry.totalPans, 2);
-      const totalNetLabel = toFixedOrEmpty(entry.totalNet, 2);
-      const costLabel = avgCostPerLb > 0 ? fmtMoney(avgCostPerLb) : "—";
-      const priceLabel = (avgCostPerLb > 0 && avgPerPan > 0) ? fmtMoney(pricePerPan) : "—";
+      return {
+        item: entry.item || "",
+        recipe: entry.recipe || "",
+        venues: venueLabel,
+        totalPans: entry.totalPans,
+        totalNet: entry.totalNet,
+        avgWeight: avgPerPan,
+        avgCost: avgCostPerLb,
+        pricePerPan,
+        samples: entry.samples
+      };
+    })
+    .sort((a,b) => a.item.localeCompare(b.item));
 
-      return [
-        entry.item || "",
-        entry.recipe || "",
-        venueLabel,
-        totalPansLabel,
-        totalNetLabel,
-        avgWeightLabel,
-        costLabel,
-        priceLabel,
-        String(entry.samples)
-      ];
-    });
+  const tableRows = entrySummaries.map(entry => {
+    const costLabel = entry.avgCost > 0 ? fmtMoney(entry.avgCost) : "—";
+    const priceLabel = (entry.avgCost > 0 && entry.avgWeight > 0) ? fmtMoney(entry.pricePerPan) : "—";
+    return [
+      entry.item,
+      entry.recipe,
+      entry.venues,
+      toFixedOrEmpty(entry.totalPans, 2),
+      toFixedOrEmpty(entry.totalNet, 2),
+      toFixedOrEmpty(entry.avgWeight, 2),
+      costLabel,
+      priceLabel,
+      String(entry.samples)
+    ];
+  });
 
   fillTable("panWeightTable", tableRows);
+
+  const totalPans = entrySummaries.reduce((sum, entry) => sum + entry.totalPans, 0);
+  const totalNet = entrySummaries.reduce((sum, entry) => sum + entry.totalNet, 0);
+  const totalCostWeight = entrySummaries.reduce((sum, entry) => sum + (entry.avgCost > 0 ? entry.avgCost * entry.totalNet : 0), 0);
+  const costWeightDivisor = entrySummaries.reduce((sum, entry) => sum + (entry.avgCost > 0 ? entry.totalNet : 0), 0);
+  const recordCount = entrySummaries.reduce((sum, entry) => sum + entry.samples, 0);
+
+  const averageWeight = totalPans > 0 ? totalNet / totalPans : NaN;
+  const averageCost = costWeightDivisor > 0 ? totalCostWeight / costWeightDivisor : NaN;
+
+  setMetricText("pwTotalPans", totalPans, { digits: 2 });
+  setMetricText("pwTotalNet", totalNet, { digits: 2, suffix: " lb" });
+  setMetricText("pwAverageWeight", averageWeight, { digits: 2, suffix: " lb" });
+  setMetricText("pwAverageCost", averageCost, { digits: 2, prefix: "$" });
+  setMetricInteger("pwRecordCount", recordCount);
+
+  const heaviest = entrySummaries
+    .filter(entry => Number.isFinite(entry.avgWeight))
+    .sort((a, b) => b.avgWeight - a.avgWeight)
+    .slice(0, 5);
+
+  renderRankedList("pwHeaviestList", heaviest, entry => {
+    return `${entry.item} (${entry.recipe || "n/a"}) • ${entry.avgWeight.toFixed(2)} lb`;
+  });
+
+  const mostExpensive = entrySummaries
+    .filter(entry => Number.isFinite(entry.pricePerPan) && entry.pricePerPan > 0)
+    .sort((a, b) => b.pricePerPan - a.pricePerPan)
+    .slice(0, 5);
+
+  renderRankedList("pwMostExpensiveList", mostExpensive, entry => {
+    return `${entry.item} (${entry.recipe || "n/a"}) • ${fmtMoney(entry.pricePerPan)}`;
+  });
 }
 
 

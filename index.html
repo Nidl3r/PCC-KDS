@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="app-build-id" content="2025.0015" />
+  <meta name="app-build-id" content="2025.0016" />
   <title>PCC KDS</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
@@ -1301,6 +1301,7 @@ Step 3: …"></textarea>
       <div class="accounting-subtabs" data-group="data" hidden>
         <button type="button" class="accounting-subtab" data-accounting-tab="analytics" onclick="showAccountingTab('analytics'); showAccountingDashboard();">Analytics</button>
         <button type="button" class="accounting-subtab" data-accounting-tab="ls-recipes" onclick="showAccountingTab('ls-recipes'); ensureAccountingLsRecipesUI();">LS Recipes</button>
+        <button type="button" class="accounting-subtab" data-accounting-tab="kitchen-inventory" onclick="showAccountingTab('kitchen-inventory');">Kitchen Inventory</button>
       </div>
       <div class="accounting-subtabs" data-group="items" hidden>
         <button type="button" class="accounting-subtab" data-accounting-tab="ingredients" onclick="showAccountingTab('ingredients')">Ingredients</button>
@@ -1517,210 +1518,475 @@ Step 3: …"></textarea>
       </div>
     </div>
 
+    <!-- Kitchen Inventory Section -->
+    <div id="kitchenInventoryTab" class="accounting-section accounting-section--table" data-sec="kitchen-inventory" style="display:none;">
+      <div class="accounting-shell">
+        <div class="accounting-controls" role="toolbar">
+          <div class="accounting-controls__info">
+            <h3 class="accounting-controls__title">Kitchen Inventory</h3>
+            <p class="accounting-controls__hint">Review current counts and historical snapshots.</p>
+          </div>
+          <div class="accounting-controls__actions">
+            <button type="button" id="kitchenInventoryRefreshBtn">Refresh</button>
+          </div>
+        </div>
+        <span id="kitchenInventoryLoading" class="accounting-loader" hidden>Loading…</span>
+        <div class="accounting-kitchen-inventory">
+          <section class="accounting-kitchen-inventory__current">
+            <h4>Today's Inventory</h4>
+            <div class="table-wrapper">
+              <table id="kitchenInventoryCurrentTable" class="accounting-table">
+                <thead>
+                  <tr>
+                    <th scope="col">
+                      <span class="ls-header">
+                        <span class="ls-header__label">No</span>
+                        <span class="ls-header__sort">
+                          <button type="button" class="inventory-sort-btn" data-inventory-table="current" data-column="no" data-direction="asc" aria-label="Sort No ascending">▲</button>
+                          <button type="button" class="inventory-sort-btn" data-inventory-table="current" data-column="no" data-direction="desc" aria-label="Sort No descending">▼</button>
+                        </span>
+                      </span>
+                    </th>
+                    <th scope="col">
+                      <span class="ls-header">
+                        <span class="ls-header__label">Description</span>
+                        <span class="ls-header__sort">
+                          <button type="button" class="inventory-sort-btn" data-inventory-table="current" data-column="description" data-direction="asc" aria-label="Sort Description ascending">▲</button>
+                          <button type="button" class="inventory-sort-btn" data-inventory-table="current" data-column="description" data-direction="desc" aria-label="Sort Description descending">▼</button>
+                        </span>
+                      </span>
+                    </th>
+                    <th scope="col">
+                      <span class="ls-header">
+                        <span class="ls-header__label">Quantity</span>
+                        <span class="ls-header__sort">
+                          <button type="button" class="inventory-sort-btn" data-inventory-table="current" data-column="quantity" data-direction="asc" aria-label="Sort Quantity ascending">▲</button>
+                          <button type="button" class="inventory-sort-btn" data-inventory-table="current" data-column="quantity" data-direction="desc" aria-label="Sort Quantity descending">▼</button>
+                        </span>
+                      </span>
+                    </th>
+                    <th scope="col">
+                      <span class="ls-header">
+                        <span class="ls-header__label">Base UOM</span>
+                        <span class="ls-header__sort">
+                          <button type="button" class="inventory-sort-btn" data-inventory-table="current" data-column="baseUOM" data-direction="asc" aria-label="Sort Base UOM ascending">▲</button>
+                          <button type="button" class="inventory-sort-btn" data-inventory-table="current" data-column="baseUOM" data-direction="desc" aria-label="Sort Base UOM descending">▼</button>
+                        </span>
+                      </span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody id="kitchenInventoryCurrentBody"></tbody>
+              </table>
+              <p id="kitchenInventoryCurrentEmpty" class="accounting-empty" hidden>No inventory loaded for today.</p>
+            </div>
+          </section>
+          <section class="accounting-kitchen-inventory__history">
+            <h4>Historical Inventory</h4>
+            <div class="table-wrapper">
+              <table id="kitchenInventoryHistoryTable" class="accounting-table">
+                <thead>
+                  <tr>
+                    <th scope="col">
+                      <span class="ls-header">
+                        <span class="ls-header__label">Date</span>
+                        <span class="ls-header__sort">
+                          <button type="button" class="inventory-sort-btn" data-inventory-table="history" data-column="date" data-direction="asc" aria-label="Sort Date ascending">▲</button>
+                          <button type="button" class="inventory-sort-btn" data-inventory-table="history" data-column="date" data-direction="desc" aria-label="Sort Date descending">▼</button>
+                        </span>
+                      </span>
+                    </th>
+                    <th scope="col">
+                      <span class="ls-header">
+                        <span class="ls-header__label">No</span>
+                        <span class="ls-header__sort">
+                          <button type="button" class="inventory-sort-btn" data-inventory-table="history" data-column="no" data-direction="asc" aria-label="Sort No ascending">▲</button>
+                          <button type="button" class="inventory-sort-btn" data-inventory-table="history" data-column="no" data-direction="desc" aria-label="Sort No descending">▼</button>
+                        </span>
+                      </span>
+                    </th>
+                    <th scope="col">
+                      <span class="ls-header">
+                        <span class="ls-header__label">Description</span>
+                        <span class="ls-header__sort">
+                          <button type="button" class="inventory-sort-btn" data-inventory-table="history" data-column="description" data-direction="asc" aria-label="Sort Description ascending">▲</button>
+                          <button type="button" class="inventory-sort-btn" data-inventory-table="history" data-column="description" data-direction="desc" aria-label="Sort Description descending">▼</button>
+                        </span>
+                      </span>
+                    </th>
+                    <th scope="col">
+                      <span class="ls-header">
+                        <span class="ls-header__label">Quantity</span>
+                        <span class="ls-header__sort">
+                          <button type="button" class="inventory-sort-btn" data-inventory-table="history" data-column="quantity" data-direction="asc" aria-label="Sort Quantity ascending">▲</button>
+                          <button type="button" class="inventory-sort-btn" data-inventory-table="history" data-column="quantity" data-direction="desc" aria-label="Sort Quantity descending">▼</button>
+                        </span>
+                      </span>
+                    </th>
+                    <th scope="col">
+                      <span class="ls-header">
+                        <span class="ls-header__label">Base UOM</span>
+                        <span class="ls-header__sort">
+                          <button type="button" class="inventory-sort-btn" data-inventory-table="history" data-column="baseUOM" data-direction="asc" aria-label="Sort Base UOM ascending">▲</button>
+                          <button type="button" class="inventory-sort-btn" data-inventory-table="history" data-column="baseUOM" data-direction="desc" aria-label="Sort Base UOM descending">▼</button>
+                        </span>
+                      </span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody id="kitchenInventoryHistoryBody"></tbody>
+              </table>
+              <p id="kitchenInventoryHistoryEmpty" class="accounting-empty" hidden>No historical snapshots found.</p>
+            </div>
+          </section>
+          <section class="accounting-kitchen-inventory__chart">
+            <h4>Inventory Trend</h4>
+            <div class="accounting-controls accounting-controls--inline">
+              <div class="accounting-controls__group">
+                <label for="kitchenInventoryStartDate" class="accounting-search-label">Start Date</label>
+                <input type="date" id="kitchenInventoryStartDate" />
+              </div>
+              <div class="accounting-controls__group">
+                <label for="kitchenInventoryEndDate" class="accounting-search-label">End Date</label>
+                <input type="date" id="kitchenInventoryEndDate" />
+              </div>
+              <div class="accounting-controls__group">
+                <label for="kitchenInventoryDescriptionSelect" class="accounting-search-label">Item Description</label>
+                <select id="kitchenInventoryDescriptionSelect">
+                  <option value="">Select an item…</option>
+                </select>
+              </div>
+            </div>
+            <div class="accounting-chart">
+              <canvas id="kitchenInventoryChart" height="240" aria-label="Inventory trend chart" role="img"></canvas>
+              <p id="kitchenInventoryChartEmpty" class="accounting-empty" hidden>No data available for the selected filters.</p>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+
     <!-- Analytics Section -->
 <div id="analyticsTab" class="accounting-section" data-sec="analytics" style="display:none;">
-  <section class="analytics" id="analyticsDashboard" style="margin-top:1rem;">
-
-    <!-- Filters (top row) -->
-    <div class="filters" style="display:flex; gap:12px; flex-wrap:wrap; align-items:end;">
-      <div>
-        <label for="fStart">Start</label><br/>
-        <input type="date" id="fStart">
+  <section class="analytics" id="analyticsDashboard">
+    <div class="analytics-filters">
+      <div class="analytics-filters__row">
+        <label class="analytics-field" for="fStart">
+          <span class="analytics-field__label">Start</span>
+          <input type="date" id="fStart" />
+        </label>
+        <label class="analytics-field" for="fEnd">
+          <span class="analytics-field__label">End</span>
+          <input type="date" id="fEnd" />
+        </label>
+        <label class="analytics-field" for="fVenue">
+          <span class="analytics-field__label">Venue</span>
+          <select id="fVenue">
+            <option value="All">All</option>
+            <option value="Aloha">Aloha</option>
+            <option value="Ohana">Ohana</option>
+            <option value="Gateway">Gateway</option>
+            <option value="Concessions">Concessions</option>
+            <option value="Main Kitchen">Main Kitchen</option>
+          </select>
+        </label>
+        <label class="analytics-field" for="fSection">
+          <span class="analytics-field__label">Section</span>
+          <select id="fSection">
+            <option value="All">All</option>
+          </select>
+        </label>
       </div>
-      <div>
-        <label for="fEnd">End</label><br/>
-        <input type="date" id="fEnd">
-      </div>
-      <div>
-        <label for="fVenue">Venue</label><br/>
-        <select id="fVenue">
-          <option value="All">All</option>
-          <option value="Aloha">Aloha</option>
-          <option value="Ohana">Ohana</option>
-          <option value="Gateway">Gateway</option>
-          <option value="Concessions">Concessions</option>
-          <option value="Main Kitchen">Main Kitchen</option>
-        </select>
-      </div>
-      <div>
-        <label for="fSection">Section</label><br/>
-        <select id="fSection">
-          <option value="All">All</option>
-        </select>
-      </div>
-
-      <button id="applyAnalyticsFilters">Apply Filters</button>
-      <span id="analyticsLoading" style="display:none;">⏳ loading…</span>
-
-      <div style="margin-left:auto; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
-        <div id="analytics-nav" style="display:flex; gap:6px;">
-          <button class="an-tab active" data-analytics="cogs">Food Item COGS</button>
-          <button class="an-tab" data-analytics="timing">Food Timing</button>
-          <button class="an-tab" data-analytics="qty-per-guest">Qty per Guest</button>
-          <button class="an-tab" data-analytics="pan-weight">Pan Weight</button>
+      <div class="analytics-filters__row analytics-filters__row--tabs">
+        <div class="analytics-tabs" id="analytics-nav" role="tablist" aria-label="Analytics tables">
+          <button type="button" class="analytics-tab is-active" data-analytics="cogs" role="tab" aria-selected="true">Food Item COGS</button>
+          <button type="button" class="analytics-tab" data-analytics="timing" role="tab" aria-selected="false">Food Timing</button>
+          <button type="button" class="analytics-tab" data-analytics="qty-per-guest" role="tab" aria-selected="false">Qty per Guest</button>
+          <button type="button" class="analytics-tab" data-analytics="pan-weight" role="tab" aria-selected="false">Pan Weight</button>
         </div>
-        <button type="button" id="copyAnalyticsTableBtn" class="ghost-btn" style="padding:6px 12px;">Copy Table</button>
-        <span id="copyAnalyticsStatus" role="status" aria-live="polite" style="display:none; font-size:0.85rem; color:#9ca3af;"></span>
+        <div class="analytics-filters__actions">
+          <button id="applyAnalyticsFilters" class="analytics-apply-btn" type="button">Apply Filters</button>
+          <span id="analyticsLoading" class="analytics-loading" aria-live="polite" hidden>Loading…</span>
+          <button type="button" id="copyAnalyticsTableBtn" class="analytics-copy-btn">Copy Visible Table</button>
+          <span id="copyAnalyticsStatus" class="analytics-copy-status" role="status" aria-live="polite"></span>
+        </div>
       </div>
     </div>
 
-    <!-- Main layout: table left, side panel right -->
-    <div style="display:grid; grid-template-columns: 2fr 1fr; gap:16px; margin-top:12px;">
+    <div class="analytics-layout">
+      <div class="analytics-main">
+        <section class="analytics-section analytics-panel is-active" data-analytics="cogs">
+          <header class="analytics-panel__header">
+            <h3 class="analytics-panel__title">Food Item COGS</h3>
+            <p class="analytics-panel__hint">Cost of goods sold by recipe and venue.</p>
+          </header>
+          <div class="analytics-table-wrap">
+            <table id="foodCogsTable" class="analytics-table analytics-table--striped">
+              <thead>
+                <tr>
+                  <th scope="col">Date</th>
+                  <th scope="col">Venue</th>
+                  <th scope="col">Item</th>
+                  <th scope="col">Recipe #</th>
+                  <th scope="col">Qty</th>
+                  <th scope="col">UOM</th>
+                  <th scope="col" class="num">Cost</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+              <tfoot>
+                <tr>
+                  <td colspan="6" class="num total-label">Total</td>
+                  <td id="analyticsTableTotal" class="num">$0.00</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </section>
 
-      <!-- LEFT: Tables -->
-      <div class="card" style="padding:12px; border:1px solid #333; border-radius:12px; overflow:auto;">
-
-        <!-- COGS TAB -->
-        <div class="analytics-section" data-analytics="cogs" style="display:block;">
-          <h3 style="margin:0 0 8px;">Food Item COGS</h3>
-          <table id="foodCogsTable" style="width:100%; border-collapse:collapse;">
-            <thead>
-              <tr style="text-align:left; border-bottom:1px solid #444;">
-                <th>Date</th>
-                <th>Venue</th>
-                <th>Item</th>
-                <th>Recipe #</th>
-                <th>Qty</th>
-                <th>UOM</th>
-                <th style="text-align:right;">Cost</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-            <tfoot>
-              <tr style="border-top:1px solid #444;">
-                <td colspan="6" style="text-align:right;"><strong>Total</strong></td>
-                <td id="analyticsTableTotal" style="text-align:right;">$0.00</td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-
-        <!-- TIMING TAB -->
-        <div class="analytics-section" data-analytics="timing" style="display:none;">
-          <div style="display:flex; align-items:center; justify-content:space-between; gap:12px; margin:0 0 8px;">
-            <h3 style="margin:0;">Food Timing (Add-ons)</h3>
-            <div id="timingOutlierControls" style="display:flex; gap:6px; align-items:center; font-size:12px;">
-              <span style="opacity:.7;">Outliers</span>
-              <button type="button" class="timing-outlier-btn active" data-mode="all">Keep All</button>
-              <button type="button" class="timing-outlier-btn" data-mode="std1">±1σ</button>
-              <button type="button" class="timing-outlier-btn" data-mode="std2">±2σ</button>
+        <section class="analytics-section analytics-panel" data-analytics="timing">
+          <header class="analytics-panel__header analytics-panel__header--split">
+            <div>
+              <h3 class="analytics-panel__title">Food Timing (Add-ons)</h3>
+              <p class="analytics-panel__hint">Track how long add-ons take from order to received.</p>
             </div>
-            <button type="button" id="copyTimingTableBtn" style="font-size:12px; padding:6px 10px; border-radius:8px; border:1px solid #555; background:#2b2d36; color:#f5f5f5;">Copy Table</button>
+            <div id="timingOutlierControls" class="analytics-outlier-controls" role="group" aria-label="Timing outlier filter">
+              <span>Outliers</span>
+              <button type="button" class="analytics-chip is-active" data-mode="all">Keep All</button>
+              <button type="button" class="analytics-chip" data-mode="std1">±1σ</button>
+              <button type="button" class="analytics-chip" data-mode="std2">±2σ</button>
+            </div>
+            <button type="button" id="copyTimingTableBtn" class="analytics-copy-btn analytics-copy-btn--ghost">Copy Timing Table</button>
+          </header>
+          <div class="analytics-table-wrap">
+            <table id="foodTimingTable" class="analytics-table analytics-table--striped">
+              <thead>
+                <tr>
+                  <th scope="col">Item</th>
+                  <th scope="col">Recipe #</th>
+                  <th scope="col">Venue</th>
+                  <th scope="col">Avg Order→Ready (min)</th>
+                  <th scope="col">Avg Ready→Sent (min)</th>
+                  <th scope="col">Avg Sent→Received (min)</th>
+                  <th scope="col">Avg Total (min)</th>
+                  <th scope="col">Samples</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
           </div>
-          <table id="foodTimingTable" style="width:100%; border-collapse:collapse;">
-            <thead>
-              <tr style="text-align:left; border-bottom:1px solid #444;">
-                <th>Item</th>
-                <th>Recipe #</th>
-                <th>Venue</th>
-                <th>Avg Order→Ready (min)</th>
-                <th>Avg Ready→Sent (min)</th>
-                <th>Avg Sent→Received (min)</th>
-                <th>Avg Total (min)</th>
-                <th>Samples</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
+        </section>
 
-        <!-- QTY / GUEST TAB -->
-        <div class="analytics-section" data-analytics="qty-per-guest" style="display:none;">
-          <h3 style="margin:0 0 8px;">Qty per Guest</h3>
-          <table id="qtyPerGuestTable" style="width:100%; border-collapse:collapse;">
-            <thead>
-              <tr style="text-align:left; border-bottom:1px solid #444;">
-                <th>Date</th>
-                <th>Venue</th>
-                <th>Item</th>
-                <th>Recipe #</th>
-                <th>Qty</th>
-                <th>Guests</th>
-                <th>Qty / Guest</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
+        <section class="analytics-section analytics-panel" data-analytics="qty-per-guest">
+          <header class="analytics-panel__header">
+            <h3 class="analytics-panel__title">Qty per Guest</h3>
+            <p class="analytics-panel__hint">Relate add-ons and starting pars to guest counts.</p>
+          </header>
+          <div class="analytics-table-wrap">
+            <table id="qtyPerGuestTable" class="analytics-table analytics-table--striped">
+              <thead>
+                <tr>
+                  <th scope="col">Date</th>
+                  <th scope="col">Venue</th>
+                  <th scope="col">Item</th>
+                  <th scope="col">Recipe #</th>
+                  <th scope="col">Qty</th>
+                  <th scope="col">Guests</th>
+                  <th scope="col">Qty / Guest</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div class="analytics-table-wrap analytics-table-wrap--compact">
+            <h4 class="analytics-subheading">Averages Across Range (by Item)</h4>
+            <table id="qtyPerGuestAverages" class="analytics-table analytics-table--dense">
+              <thead>
+                <tr>
+                  <th scope="col">Item</th>
+                  <th scope="col">Recipe #</th>
+                  <th scope="col">Avg Qty / Guest</th>
+                  <th scope="col">Samples</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
 
-          <h4 style="margin:16px 0 8px;">Averages Across Range (by Item)</h4>
-          <table id="qtyPerGuestAverages" style="width:100%; border-collapse:collapse;">
-            <thead>
-              <tr style="text-align:left; border-bottom:1px solid #444;">
-                <th>Item</th>
-                <th>Recipe #</th>
-                <th>Avg Qty / Guest</th>
-                <th>Samples</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-
-        <!-- PAN WEIGHT TAB -->
-        <div class="analytics-section" data-analytics="pan-weight" style="display:none;">
-          <h3 style="margin:0 0 8px;">Pan Weight &amp; Price</h3>
-          <table id="panWeightTable" style="width:100%; border-collapse:collapse;">
-            <thead>
-              <tr style="text-align:left; border-bottom:1px solid #444;">
-                <th>Recipe</th>
-                <th>Recipe #</th>
-                <th>Venues</th>
-                <th>Total Pans</th>
-                <th>Total Net Wt (lb)</th>
-                <th>Avg Wt / Pan (lb)</th>
-                <th>Cost / lb</th>
-                <th>Price / Pan</th>
-                <th>Records</th>
-              </tr>
-            </thead>
-            <tbody></tbody>
-          </table>
-        </div>
-
+        <section class="analytics-section analytics-panel" data-analytics="pan-weight">
+          <header class="analytics-panel__header">
+            <h3 class="analytics-panel__title">Pan Weight &amp; Price</h3>
+            <p class="analytics-panel__hint">Understand weight and cost trends per finished pan.</p>
+          </header>
+          <div class="analytics-table-wrap">
+            <table id="panWeightTable" class="analytics-table analytics-table--striped">
+              <thead>
+                <tr>
+                  <th scope="col">Recipe</th>
+                  <th scope="col">Recipe #</th>
+                  <th scope="col">Venues</th>
+                  <th scope="col">Total Pans</th>
+                  <th scope="col">Total Net Wt (lb)</th>
+                  <th scope="col">Avg Wt / Pan (lb)</th>
+                  <th scope="col">Cost / lb</th>
+                  <th scope="col">Price / Pan</th>
+                  <th scope="col">Records</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
       </div>
 
-      <!-- RIGHT: side cards (COGS tab only) -->
-      <div style="display:flex; flex-direction:column; gap:16px;">
-        <!-- Date Range -->
-        <div class="card side-cogs-only" style="padding:12px; border:1px solid #333; border-radius:12px;">
-          <h3 style="margin:0 0 8px;">Date Range</h3>
-          <div>From: <span id="drFrom"></span></div>
-          <div>To:&nbsp;&nbsp;&nbsp; <span id="drTo"></span></div>
-        </div>
-
-        <!-- Category breakdown -->
-        <div class="card side-cogs-only" style="padding:12px; border:1px solid #333; border-radius:12px;">
-          <h3 style="margin:0 0 8px;">Item Category Breakdown</h3>
-          <table id="categoryBreakdown" style="width:100%; border-collapse:collapse;">
-            <tbody><!-- JS fills rows: Category | Cost + Total row --></tbody>
-          </table>
-        </div>
-
-        <!-- Category multi-select -->
-        <div class="card side-cogs-only" style="padding:12px; border:1px solid #333; border-radius:12px;">
-          <h3 style="margin:0 0 8px;">Item Category</h3>
-          <div id="filterCatWrap" style="display:flex; flex-wrap:wrap; gap:10px;">
-            <!-- JS injects checkboxes -->
+      <aside class="analytics-side" aria-label="Analytics summary panels">
+        <div class="analytics-sidepanel is-active" data-analytics="cogs">
+          <div class="analytics-card">
+            <h4 class="analytics-card__title">Date Range</h4>
+            <dl class="analytics-metric-list analytics-metric-list--compact">
+              <div>
+                <dt>From</dt>
+                <dd id="drFrom">—</dd>
+              </div>
+              <div>
+                <dt>To</dt>
+                <dd id="drTo">—</dd>
+              </div>
+            </dl>
+          </div>
+          <div class="analytics-card">
+            <h4 class="analytics-card__title">Item Category Breakdown</h4>
+            <div class="analytics-mini-table-wrap">
+              <table id="categoryBreakdown" class="analytics-mini-table">
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="analytics-card">
+            <h4 class="analytics-card__title">Item Category</h4>
+            <div id="filterCatWrap" class="analytics-chip-grid"></div>
+          </div>
+          <div class="analytics-card">
+            <h4 class="analytics-card__title">Item Description</h4>
+            <input id="filterItemSearch" class="analytics-search" type="search" placeholder="Search items…" autocomplete="off" />
+            <div id="filterItemWrap" class="analytics-scroll-panel"></div>
+          </div>
+          <div class="analytics-card">
+            <h4 class="analytics-card__title">Cost per Category per Day</h4>
+            <canvas id="categoryLineChart" height="220" role="img" aria-label="Cost per category line chart"></canvas>
           </div>
         </div>
 
-        <!-- Item search/multi-select -->
-        <div class="card side-cogs-only" style="padding:12px; border:1px solid #333; border-radius:12px;">
-          <h3 style="margin:0 8px 8px 0;">Item Description</h3>
-          <input id="filterItemSearch" placeholder="Search items…" style="width:100%; margin-bottom:8px;">
-          <div id="filterItemWrap" style="max-height:180px; overflow:auto;">
-            <!-- JS injects checkboxes (recipeNo — description) -->
+        <div class="analytics-sidepanel" data-analytics="timing">
+          <div class="analytics-card">
+            <h4 class="analytics-card__title">Timing Overview</h4>
+            <dl class="analytics-metric-list">
+              <div>
+                <dt>Average Total Time</dt>
+                <dd id="timingAvgTotal">—</dd>
+              </div>
+              <div>
+                <dt>Average Order→Ready</dt>
+                <dd id="timingAvgOrderReady">—</dd>
+              </div>
+              <div>
+                <dt>Average Ready→Sent</dt>
+                <dd id="timingAvgReadySent">—</dd>
+              </div>
+              <div>
+                <dt>Average Sent→Received</dt>
+                <dd id="timingAvgSentReceived">—</dd>
+              </div>
+              <div>
+                <dt>Samples</dt>
+                <dd id="timingSampleCount">—</dd>
+              </div>
+            </dl>
+          </div>
+          <div class="analytics-card">
+            <h4 class="analytics-card__title">Fastest Items</h4>
+            <ol id="timingFastestList" class="analytics-ranked-list" aria-live="polite"></ol>
+          </div>
+          <div class="analytics-card">
+            <h4 class="analytics-card__title">Slowest Items</h4>
+            <ol id="timingSlowestList" class="analytics-ranked-list" aria-live="polite"></ol>
           </div>
         </div>
-      </div>
-    </div>
 
-    <!-- Chart (COGS tab only) -->
-    <div class="card side-cogs-only" style="padding:12px; border:1px solid #333; border-radius:12px; margin-top:16px;">
-      <h3 style="margin:0 0 8px;">Cost per Category per Day</h3>
-      <canvas id="categoryLineChart" height="220"></canvas>
-    </div>
+        <div class="analytics-sidepanel" data-analytics="qty-per-guest">
+          <div class="analytics-card">
+            <h4 class="analytics-card__title">Guest Summary</h4>
+            <dl class="analytics-metric-list">
+              <div>
+                <dt>Total Guests</dt>
+                <dd id="qtyGuestTotal">—</dd>
+              </div>
+              <div>
+                <dt>Total Quantity</dt>
+                <dd id="qtyTotalQuantity">—</dd>
+              </div>
+              <div>
+                <dt>Average Qty / Guest</dt>
+                <dd id="qtyAveragePerGuest">—</dd>
+              </div>
+              <div>
+                <dt>Records</dt>
+                <dd id="qtyRecordCount">—</dd>
+              </div>
+            </dl>
+          </div>
+          <div class="analytics-card">
+            <h4 class="analytics-card__title">Top Items (Qty / Guest)</h4>
+            <ol id="qtyTopItems" class="analytics-ranked-list" aria-live="polite"></ol>
+          </div>
+          <div class="analytics-card">
+            <h4 class="analytics-card__title">Guests by Venue</h4>
+            <div class="analytics-mini-table-wrap">
+              <table id="qtyGuestByVenue" class="analytics-mini-table">
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
 
+        <div class="analytics-sidepanel" data-analytics="pan-weight">
+          <div class="analytics-card">
+            <h4 class="analytics-card__title">Pan Weight Overview</h4>
+            <dl class="analytics-metric-list">
+              <div>
+                <dt>Total Pans</dt>
+                <dd id="pwTotalPans">—</dd>
+              </div>
+              <div>
+                <dt>Total Net Weight</dt>
+                <dd id="pwTotalNet">—</dd>
+              </div>
+              <div>
+                <dt>Average Weight / Pan</dt>
+                <dd id="pwAverageWeight">—</dd>
+              </div>
+              <div>
+                <dt>Average Cost / lb</dt>
+                <dd id="pwAverageCost">—</dd>
+              </div>
+              <div>
+                <dt>Records</dt>
+                <dd id="pwRecordCount">—</dd>
+              </div>
+            </dl>
+          </div>
+          <div class="analytics-card">
+            <h4 class="analytics-card__title">Heaviest Pans</h4>
+            <ol id="pwHeaviestList" class="analytics-ranked-list" aria-live="polite"></ol>
+          </div>
+          <div class="analytics-card">
+            <h4 class="analytics-card__title">Most Expensive Pans</h4>
+            <ol id="pwMostExpensiveList" class="analytics-ranked-list" aria-live="polite"></ol>
+          </div>
+        </div>
+      </aside>
+    </div>
   </section>
 </div>
 
@@ -1999,73 +2265,53 @@ Step 3: …"></textarea>
 <script>
 (function(){
   const nav = document.getElementById('analytics-nav');
-  const tabs = nav?.querySelectorAll('.an-tab') || [];
-  const sections = document.querySelectorAll('.analytics-section');
-  const cogsOnly = document.querySelectorAll('.side-cogs-only');
+  const tabs = Array.from(nav?.querySelectorAll('.analytics-tab') || []);
+  const panels = Array.from(document.querySelectorAll('.analytics-panel'));
+  const sidePanels = Array.from(document.querySelectorAll('.analytics-sidepanel'));
   const copyTableBtn = document.getElementById('copyAnalyticsTableBtn');
   const copyStatusEl = document.getElementById('copyAnalyticsStatus');
   let copyStatusTimer = null;
 
+  if (copyStatusEl) copyStatusEl.hidden = true;
+
   function show(tab){
-    sections.forEach(s => s.style.display = (s.dataset.analytics === tab) ? 'block' : 'none');
-    tabs.forEach(b => b.classList.toggle('active', b.dataset.analytics === tab));
-    const isCogs = tab === 'cogs';
-    cogsOnly.forEach(el => el.style.display = isCogs ? '' : 'none');
+    panels.forEach(panel => {
+      const isActive = panel.dataset.analytics === tab;
+      panel.classList.toggle('is-active', isActive);
+    });
+    sidePanels.forEach(panel => {
+      const isActive = panel.dataset.analytics === tab;
+      panel.classList.toggle('is-active', isActive);
+    });
+    tabs.forEach(btn => {
+      const isActive = btn.dataset.analytics === tab;
+      btn.classList.toggle('is-active', isActive);
+      btn.setAttribute('aria-selected', String(isActive));
+    });
   }
 
-  tabs.forEach(b => b.addEventListener('click', () => {
-    show(b.dataset.analytics);
+  tabs.forEach(btn => btn.addEventListener('click', () => {
+    show(btn.dataset.analytics);
     window.refreshAnalyticsTab?.().catch(err => console.error('Analytics refresh failed', err));
   }));
 
-  // Hook "Apply Filters" to run the correct loader (expects your JS functions to exist)
-  document.getElementById('applyAnalyticsFilters')?.addEventListener('click', async () => {
-    const start = document.getElementById('fStart')?.value;
-    const end   = document.getElementById('fEnd')?.value;
-    if (start) document.getElementById('drFrom').textContent = start;
-    if (end)   document.getElementById('drTo').textContent = end;
-
-    // Use your shared helper if present, else fall back
-    let startTs, endTs, startStr, endStr;
-    if (typeof getHawaiiRangeFromInputs === 'function') {
-      const r = getHawaiiRangeFromInputs('fStart','fEnd');
-      startTs = r.startTs; endTs = r.endTs; startStr = r.startStr; endStr = r.endStr;
-    } else {
-      startStr = start; endStr = end;
-    }
-
-    const active = [...tabs].find(t => t.classList.contains('active'))?.dataset.analytics || 'cogs';
-    try {
-      document.getElementById('analyticsLoading').style.display = '';
-      if (active === 'cogs' && typeof loadFoodItemCOGS === 'function') {
-        await loadFoodItemCOGS(startStr, endStr, startTs, endTs);
-      } else if (active === 'timing' && typeof loadFoodTiming === 'function') {
-        await loadFoodTiming(startStr, endStr, startTs, endTs);
-      } else if (active === 'qty-per-guest' && typeof loadQtyPerGuest === 'function') {
-        await loadQtyPerGuest(startStr, endStr, startTs, endTs);
-      } else if (active === 'pan-weight' && typeof loadPanWeightAnalytics === 'function') {
-        await loadPanWeightAnalytics(startStr, endStr, startTs, endTs);
-      }
-    } finally {
-      document.getElementById('analyticsLoading').style.display = 'none';
-    }
-  });
-
-  function showCopyStatus(message, isError){
+  function showCopyStatus(message, tone = 'info'){
     if (!copyStatusEl) return;
     copyStatusEl.textContent = message;
-    copyStatusEl.style.display = 'inline';
-    copyStatusEl.style.color = isError ? '#f87171' : '#9ca3af';
+    copyStatusEl.dataset.tone = tone;
+    copyStatusEl.hidden = false;
     if (copyStatusTimer) clearTimeout(copyStatusTimer);
     copyStatusTimer = setTimeout(() => {
-      copyStatusEl.style.display = 'none';
+      copyStatusEl.hidden = true;
       copyStatusEl.textContent = '';
+      copyStatusEl.removeAttribute('data-tone');
     }, 3000);
   }
 
-  function collectActiveTableData(section){
-    if (!section) return '';
-    const tables = Array.from(section.querySelectorAll('table')).filter(table => table.offsetParent !== null);
+  function collectActiveTableData(tabId){
+    const panel = document.querySelector(`.analytics-panel[data-analytics="${tabId}"].is-active`);
+    if (!panel) return '';
+    const tables = Array.from(panel.querySelectorAll('table')).filter(table => table.offsetParent !== null);
     if (!tables.length) return '';
 
     const sanitize = (value) => value.replace(/\s+/g, ' ').trim();
@@ -2082,30 +2328,24 @@ Step 3: …"></textarea>
   }
 
   copyTableBtn?.addEventListener('click', async () => {
-    const activeTab = [...tabs].find(t => t.classList.contains('active'))?.dataset.analytics || 'cogs';
-    const section = document.querySelector(`.analytics-section[data-analytics="${activeTab}"]`);
+    const activeTab = tabs.find(t => t.classList.contains('is-active'))?.dataset.analytics || 'cogs';
+    const text = collectActiveTableData(activeTab);
 
-    if (!section || section.style.display === 'none'){
-      showCopyStatus('No visible table to copy.', true);
+    if (!text){
+      showCopyStatus('Nothing to copy for this tab.', 'error');
       return;
     }
     if (!navigator?.clipboard?.writeText){
-      showCopyStatus('Clipboard not supported in this browser.', true);
-      return;
-    }
-
-    const text = collectActiveTableData(section);
-    if (!text){
-      showCopyStatus('Nothing to copy for this tab.', true);
+      showCopyStatus('Clipboard not supported in this browser.', 'error');
       return;
     }
 
     try {
       await navigator.clipboard.writeText(text);
-      showCopyStatus('Table copied to clipboard.', false);
+      showCopyStatus('Table copied to clipboard.', 'success');
     } catch (err){
       console.error('Failed to copy analytics table', err);
-      showCopyStatus('Unable to copy table.', true);
+      showCopyStatus('Unable to copy table.', 'error');
     }
   });
 
