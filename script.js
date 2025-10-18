@@ -4446,6 +4446,22 @@ function resolveRecipeDocRef(row) {
   return newRef;
 }
 
+function resolveLegacyRecipeDocRef(row) {
+  let docId = row.legacyId;
+  if (!docId) {
+    docId = normalizeRecipeKey(row.recipeNo, row._key);
+    if (docId) {
+      row.legacyId = docId;
+    }
+  }
+  if (docId) {
+    return legacyRecipeDoc(docId);
+  }
+  const newRef = doc(legacyRecipesCollection());
+  row.legacyId = newRef.id;
+  return newRef;
+}
+
 async function saveRecipeInfo(rowKey) {
   const state = getAccountingRecipesState();
   const row = state.byKey.get(rowKey);
@@ -4524,16 +4540,12 @@ async function saveRecipePars(rowKey, options = {}) {
     }
   });
 
-  const docRef = resolveRecipeDocRef(row);
+  const docRef = resolveLegacyRecipeDocRef(row);
   const payload = {
     recipeNo: row.recipeNo,
     updatedAt: serverTimestamp(),
     pars: { [venue]: sanitized }
   };
-
-  if (row.source !== "cookingrecipes") {
-    payload.migratedAt = serverTimestamp();
-  }
 
   const removalSet = row.parsRemovedByVenue?.[venue];
   const removedKeys = removalSet instanceof Set
@@ -4556,7 +4568,6 @@ async function saveRecipePars(rowKey, options = {}) {
         row.parsRemovedByVenue[venue] = new Set();
       }
     }
-    row.source = "cookingrecipes";
     row.parsDirtyByVenue[venue] = false;
     if (!options.skipFilter) {
       applyAccountingRecipesFilter();
