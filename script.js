@@ -114,6 +114,22 @@ const CURRENT_BUILD_ID = (() => {
 })();
 window.APP_CURRENT_BUILD = CURRENT_BUILD_ID;
 
+const sidebarVersionEl = document.getElementById("sidebarVersion");
+
+function renderSidebarVersionLabel(version) {
+  if (!sidebarVersionEl) return;
+  const cleanVersion = typeof version === "string" ? version.trim() : "";
+  if (!cleanVersion) {
+    sidebarVersionEl.textContent = "";
+    sidebarVersionEl.setAttribute("aria-hidden", "true");
+    return;
+  }
+  sidebarVersionEl.textContent = `Version ${cleanVersion}`;
+  sidebarVersionEl.removeAttribute("aria-hidden");
+}
+
+renderSidebarVersionLabel(CURRENT_BUILD_ID);
+
 // Small helpers so we don't sprinkle string literals everywhere
 const recipesCollection = () => collection(db, RECIPES_COLL);
 const legacyRecipesCollection = () => collection(db, LEGACY_RECIPES_COLL);
@@ -217,6 +233,7 @@ function startAppVersionWatcher() {
       current = remote; // adopt first value during local dev so we don't thrash reloads
       window.APP_CURRENT_BUILD = current;
       hasRealBuild = true;
+      renderSidebarVersionLabel(current);
       return;
     }
 
@@ -228,6 +245,7 @@ function startAppVersionWatcher() {
     window.APP_NEXT_BUILD = remote;
     window.APP_CURRENT_BUILD = remote;
     current = remote;
+    renderSidebarVersionLabel(remote);
 
     const delayValue = Number(data.autoReloadDelayMs);
     const delay = Number.isFinite(delayValue) ? delayValue : 2000;

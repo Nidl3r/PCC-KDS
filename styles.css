@@ -348,6 +348,12 @@ body:not(.is-offline) .screen button[data-offline-aware="1"]::after {
   letter-spacing: 0.02em;
 }
 
+.sidebar-version {
+  margin: 4px 0 12px;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
 .sidebar-toggle {
   background: rgba(148, 163, 184, 0.18);
   color: var(--text);
@@ -483,6 +489,10 @@ body:not(.is-offline) .screen button[data-offline-aware="1"]::after {
 }
 
 .sidebar.collapsed .sidebar-title {
+  display: none;
+}
+
+.sidebar.collapsed .sidebar-version {
   display: none;
 }
 
